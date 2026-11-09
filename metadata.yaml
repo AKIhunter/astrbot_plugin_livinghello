@@ -12,7 +12,7 @@ help: >-
   文字试跑和生图会产生相应API用量。
 author: WorkBuddy
 repo: https://github.com/AKIhunter/astrbot_plugin_livinghello
-version: 2.7.0
+version: 2.7.1
 astrbot_version: ">=4.29.1"
 social_link: https://github.com/AKIhunter
 tags:

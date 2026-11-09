@@ -27,6 +27,7 @@ try:  # 作为插件包加载时走相对导入
     from .guard_reply_delivery import ReplyDelivery
     from .guard_reply_delivery import number
     from .guard_reply_health import ReplyHealth
+    from .guard_reply_fallback import ReplyFallback
     from .guard_fragments import FragmentWait
     from .guard_expression import Expression, congling_for, takeover
     from .guard_classifier_outage import (
@@ -55,6 +56,7 @@ except ImportError:  # 单文件调试兜底
     from guard_reply_delivery import ReplyDelivery
     from guard_reply_delivery import number
     from guard_reply_health import ReplyHealth
+    from guard_reply_fallback import ReplyFallback
     from guard_fragments import FragmentWait
     from guard_expression import Expression, congling_for, takeover
     from guard_classifier_outage import (
@@ -142,6 +144,11 @@ class Main(Star):
         if not hasattr(self, "reply_health"):
             self.reply_health = ReplyHealth(self)
         return self.reply_health
+
+    def _reply_fallback(self):
+        if not hasattr(self, "reply_fallback"):
+            self.reply_fallback = ReplyFallback(self)
+        return self.reply_fallback
 
     def _policy(self):
         if not hasattr(self, "message_policy"):
@@ -868,6 +875,7 @@ class Main(Star):
     async def trace_agent_begin(self, event, run_context):
         service = self._trace(event)
         self._reply_health().watch(event, expected=True)
+        self._reply_fallback().bind_current(event, run_context)
         try:
             provider = await self.context.get_using_provider_async(umo=event.unified_msg_origin)
             self._reply_health().provider(event, provider)
@@ -1048,6 +1056,9 @@ class Main(Star):
         await self._delivery().prepare(event)
 
     async def terminate(self):
+        fallback = getattr(self, "reply_fallback", None)
+        if fallback is not None:
+            await fallback.close()
         reply_health = getattr(self, "reply_health", None)
         if reply_health is not None:
             await reply_health.close()
@@ -1206,7 +1217,8 @@ class Main(Star):
         req: ProviderRequest,
     ) -> None:
         self._trace(event)
-        self._reply_health().watch(event, expected=True)
+        # 闸门尚未放行时，正常静默不应被当成主模型失败。
+        self._reply_health().watch(event)
         touch(event, "decision")
         emit(event, "llm_request", "success")
         if not await self._delivery().prepare(event):
@@ -2016,9 +2028,12 @@ class Main(Star):
 
         if NO_REPLY_TOKEN in text:
             self._clear_llm_response(response)
+            event.set_extra("_livinghello_intentional_silence", "no_reply")
             if is_proactive and self._gate_mode() == "enforce":
                 self._record_delivery_block(event, "no_reply")
                 self._record_participation(0, threshold, False, "no_reply")
+            else:
+                event.set_extra("_at_guard_delivery_blocked", "no_reply")
             self.logger.debug("Suppressed a proactive NO_REPLY decision.")
             return
 
@@ -2035,6 +2050,11 @@ class Main(Star):
         except ImportError:
             from guard_image_budget import fit_images
         await fit_images(req)
+        # 所有请求钩子跑完才认定放行；停止/私聊未过滤的请求不接入兜底。
+        stopped = getattr(event, "is_stopped", lambda: getattr(event, "stopped", False))()
+        if not stopped and self._applies_to_event(event):
+            event.set_extra("_livinghello_reply_approved", True)
+            self._reply_health().watch(event, expected=True)
 
     @filter.on_decorating_result(priority=-maxsize)
     async def recheck_before_send(self, event: AstrMessageEvent):
@@ -2211,8 +2231,12 @@ class Main(Star):
             "preparation_seconds": preparation,
             "typing_seconds": min(max(0, age - preparation), float(event.get_extra(
                 "_at_guard_typing_seconds", 0) or 0)),
+            "retry_seconds": min(age, max(0, float(event.get_extra(
+                "_livinghello_retry_seconds", 0) or 0))),
+            # 仅扣除本功能实测的失败请求/退避；成功生成仍受原有效期保护。
             "effective_seconds": max(0, age - preparation - float(event.get_extra(
-                "_at_guard_typing_seconds", 0) or 0)),
+                "_at_guard_typing_seconds", 0) or 0) - min(age, max(0, float(
+                    event.get_extra("_livinghello_retry_seconds", 0) or 0)))),
         }
 
     def _stale_reason(self, event: AstrMessageEvent, group_key: str) -> str:

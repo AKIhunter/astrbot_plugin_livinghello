@@ -382,6 +382,30 @@ try {
     await context.close();
   });
 
+  await caseRun("兜底开关默认关闭，管理员QQ与开关独立保存并回读", async () => {
+    const { context, page } = await open({}, "?outage=disabled");
+    await ready(page);
+    await page.getByRole("tab", { name: "回复与私聊" }).click();
+    const fallback = page.locator("#field-reply_fallback_enabled");
+    const admins = page.locator("#field-outage_notify_admin_qq");
+    assert.equal(await fallback.isChecked(), false);
+    await fallback.check();
+    await admins.fill("9001, 9002");
+    await page.locator("#saveBarSave").click();
+    await page.locator("#saveMsg").filter({ hasText: "回复参数已保存" }).waitFor();
+    assert.equal(await fallback.isChecked(), true);
+    assert.equal(await page.locator("#field-classifier_outage_recovery_enabled").isChecked(), false);
+    const saved = await page.evaluate(() => window.__fixture.state.config);
+    assert.equal(saved.reply_fallback_enabled, true);
+    assert.deepEqual(saved.outage_notify_admin_qq, ["9001", "9002"]);
+    await fallback.uncheck();
+    await page.locator("#saveBarSave").click();
+    await page.locator("#saveMsg").filter({ hasText: "回复参数已保存" }).waitFor();
+    assert.equal(await page.evaluate(() => window.__fixture.state.config.reply_fallback_enabled), false);
+    assert.equal(await page.evaluate(() => window.__fixture.modelCalls), 0);
+    await context.close();
+  });
+
   await caseRun("生产页面未包含 fixture，测试全程无外联、控制台与页面错误", async () => {
     const source = await readFile(new URL("../../pages/guard/index.html", import.meta.url), "utf8");
     assert.doesNotMatch(source, /fixture-bridge|__fixture/);

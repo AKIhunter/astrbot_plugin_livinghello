@@ -42,6 +42,8 @@
   }
 
   const config = {
+    reply_fallback_enabled: false,
+    outage_notify_admin_qq: [],
     classifier_outage_recovery_enabled: outageState !== "disabled",
     participation_confidence_threshold: 50,
     classifier_provider_id: "fixture-provider",
@@ -345,6 +347,12 @@
       if (path === "console/native-profile") return ok({ saved: true, config_id: "default" });
       if (path === "console/config") {
         Object.assign(config, payload);
+        // 模拟真实后端_coerce的QQ列表规范化；前端list输入按字符串提交。
+        if (Object.hasOwn(payload, "outage_notify_admin_qq")) {
+          const raw = payload.outage_notify_admin_qq;
+          config.outage_notify_admin_qq = Array.isArray(raw)
+            ? raw : raw.split(/[\s,，;；]+/).filter(Boolean);
+        }
         if (Object.hasOwn(payload, "classifier_outage_recovery_enabled")) {
           outageState = payload.classifier_outage_recovery_enabled ? "healthy" : "disabled";
         }

@@ -2,6 +2,8 @@
 
 面向使用者与维护者：查参数、默认值及保存范围。插件默认值以 [_conf_schema.json](../_conf_schema.json) 为唯一来源；原生字段来自 [guard_native_settings.py](../guard_native_settings.py)、[guard_native_reply.py](../guard_native_reply.py)，独立生图默认值来自 [guard_image_settings.py](../guard_image_settings.py) 的 `DEFAULTS`。已核对源码：2026-11-06；字段变化时同步更新并运行校验。
 
+主模型失败后的重试、管理员提醒和停止条件见[主模型失败兜底](reply_fallback.md)。该开关默认关闭，与文字判定断线恢复独立。
+
 ## 配置保存在哪里
 
 | 配置域 | 权威保存位置 | 生效范围 |
@@ -43,6 +45,7 @@
 | `classifier_provider_id` | `""` | 判定用的小模型 |
 | `classifier_timeout_seconds` | `3.5` | 判定超时（秒） |
 | `classifier_outage_recovery_enabled` | `false` | 文字判定断线恢复 |
+| `reply_fallback_enabled` | `false` | 兜底回复（主模型失败重试） |
 | `outage_notify_admin_qq` | `[]` | 异常提醒管理员QQ |
 | `outage_notify_interval_minutes` | `10` | 异常提醒最小间隔（分钟） |
 | `reply_health_timeout_seconds` | `900` | 回复闭环超时（秒） |

@@ -1435,11 +1435,15 @@
     { key: "apply_to_private", label: "过滤私聊", type: "bool" },
   ];
   const OUTAGE_FIELDS = [
+    { key: "reply_fallback_enabled", label: "兜底回复", type: "bool" },
+    { key: "outage_notify_admin_qq", label: "异常提醒管理员 QQ", type: "list", placeholder: "留空使用全局管理员" },
     { key: "classifier_outage_recovery_enabled", label: "启用断线恢复", type: "bool" },
   ];
 
   // 标题问号和搜索手册共享同一份文案，避免新参数只更新其中一处。
   const FIELD_HELP = {
+    reply_fallback_enabled: { desc: "默认关闭。已通过闸门的主模型调用失败后最多重试5次；耗尽私聊管理员，等1分钟再尝试一次，仍失败便停止。", ex: "只重发失败的模型请求，保留工具结果。撤回、权限、上下文失效或已输出片段时停止；失败请求及等待耗时不占普通回复有效期。" },
+    outage_notify_admin_qq: { desc: "填写有效QQ号码，留空使用AstrBot全局管理员。仅发送QQ私聊，提醒共用持久限频额度。", ex: "多个QQ用逗号分隔；兜底回复不需要同时打开文字判定断线恢复。" },
     participation_confidence_threshold: { desc: "参与适合度至少达到这个分数才有机会放行；还需理解话题，并且没有静默否决。", ex: "设 50：理解清楚且适合度 75 可放行；对方说「别继续了」仍静默。设 0 也不会取消静默否决。" },
     classifier_provider_id: { desc: "负责先判断是否接话的文字小模型，不负责写回复。留空会跟随会话主模型。", ex: "选择「Qwen/Qwen3-8B（锁定上游）」：日常文字判断固定用它。" },
     classifier_timeout_seconds: { desc: "只限制一次文字判定的等待时间，超时则静默。", ex: "设 3.5 秒：文字模型超过 3.5 秒还没返回，本次不主动回复。" },

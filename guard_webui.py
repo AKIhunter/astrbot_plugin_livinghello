@@ -79,6 +79,7 @@ NUMERIC_FIELDS: dict[str, tuple[str, float, float]] = {
     "duplicate_window_seconds": ("int", 0, 3600),
 }
 BOOL_FIELDS = {
+    "reply_fallback_enabled",
     "outage_watch_classifier", "outage_watch_vision",
     "outage_watch_understand_image", "outage_watch_understand_voice",
     "outage_watch_main_model", "outage_watch_tts", "outage_watch_image_gen",
@@ -712,7 +713,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     schema = _load_schema_subset()
     providers = await _providers(plugin)
     return {
-        "version": "2.7.0",
+        "version": "2.7.1",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
         "config": {key: _current(plugin, key, schema.get(key, {}).get("default")) for key in EDITABLE},

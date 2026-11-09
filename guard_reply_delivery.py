@@ -316,6 +316,8 @@ class ReplyDelivery:
                     belongs = bool(plan and getattr(message, "_at_guard_delivery_token", None)
                                    is plan["token"])
                     if not belongs:
+                        if incoming:
+                            event.set_extra("_livinghello_any_send_attempted", True)
                         try:
                             sent = await original(message, *args, **kwargs)
                         except BaseException as exc:
@@ -341,6 +343,7 @@ class ReplyDelivery:
                     pending_ids = {id(c) for c in pending}
                     chain = [c for c in incoming if isinstance(c, (Reply, At)) or id(c) in pending_ids]
                     plan["attempted"].update({id(c): c for c in pending})
+                    event.set_extra("_livinghello_any_send_attempted", True)
                     expression = getattr(self, "expression", None)
                     checker = event.get_extra("_at_guard_send_check")
                     reason = checker() if callable(checker) else ""

@@ -44,3 +44,5 @@
 | fragments.md、reply-topic-flow.md、expression-takeover.md、congling-compat.md | [流程说明](architecture.md)；操作见[使用指南](usage.md) |
 | console-records.md、maintenance.md | [开发与维护](development.md) |
 | migration-manifest.json | [history/migration-manifest.json](history/migration-manifest.json) |
+
+- [主模型失败兜底](reply_fallback.md)：开关、重试预算、提醒及取消边界。

@@ -55,9 +55,13 @@ def safe_excerpt(value, limit=160):
     """提醒只带当前消息摘录，凭据、地址、文件路径和大编码先脱敏。"""
     text = str(value or "")
     text = re.sub(r"-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*", "[私钥已隐藏]", text)
+    # JSON/单引号键的闭引号也属于键；先吞完整的带引号值，避免空格/转义值漏出。
+    text = re.sub(
+        r"""(?ix)(?<![\w])["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|
+        token|password|密码|secret|authorization|bili_jct|sessdata)["']?
+        \s*[=:：]\s*(?:"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|[^\s,，;；}\]]+)""",
+        "[凭据已隐藏]", text)
     text = re.sub(r"(?i)\b(?:bearer\s+\S+|(?:sk-|sessdata=)[^\s,，;；]+)", "[凭据已隐藏]", text)
-    text = re.sub(r"(?i)(?:api[_-]?key|token|password|密码|secret|authorization|bili_jct)"
-                  r"\s*[=:：]\s*[^\s,，;；]+", "[凭据已隐藏]", text)
     text = re.sub(r"(?:https?://|data:)[^\s]+", "[地址已隐藏]", text)
     text = re.sub(r"(?:/(?:Users|home|root|opt|var|tmp|etc)/|[A-Za-z]:\\)[^\s]+",
                   "[路径已隐藏]", text)
@@ -353,7 +357,10 @@ class ReplyHealth:
     def model_done(self, event, response):
         row = self.watch(event, expected=True)
         if row:
-            row["model_done"] = response is not None
+            row["model_done"] = response is not None and getattr(response, "role", "") != "err"
+            if response is not None and getattr(response, "role", "") == "err":
+                row["fault"] = ("main_model", error_category(
+                    getattr(response, "completion_text", "")))
 
     def classifier_failed(self, event, category):
         row = self.watch(event)
@@ -401,12 +408,14 @@ class ReplyHealth:
             watchdog.cancel()
         blocked = str(event.get_extra("_at_guard_delivery_blocked") or "")
         policy = event.get_extra("_livinghello_message_policy") or {}
-        intentional = blocked in INTENTIONAL or (policy and not policy.get("reply_allowed", True))
+        intentional = (blocked in INTENTIONAL or event.get_extra("_livinghello_intentional_silence")
+                       or (policy and not policy.get("reply_allowed", True)))
         plan = event.get_extra("_at_guard_delivery_plan") or {}
         success = (row["model_done"] and row["sent"] > 0 and not row["failed"]
                    and not plan.get("failed") and not pipeline_error and not timed_out)
         trace = event.get_extra("_livinghello_trace")
-        if intentional or (not row["expected"] and not row["fault"]):
+        if intentional or (not row["expected"] and not row["fault"]
+                           and not pipeline_error and not timed_out):
             if trace and intentional:
                 trace.finish(event, "silent" if policy and not policy.get("reply_allowed", True)
                              else "cancelled", blocked or policy.get("reason", "intentional_silence"))
@@ -491,8 +500,12 @@ class ReplyHealth:
         # 异常原文可能包含凭据，不向聊天转发。
         return await self.notify(event=event, platform_id=platform_id, message=message)
 
-    async def notify(self, *, event=None, platform_id="", at=None, message=None):
-        if self.closed or not self.enabled:
+    async def notify(self, *, event=None, platform_id="", at=None, message=None,
+                     fallback=False):
+        # 主回复兜底开关独立于文字判定断线恢复，仍共用持久限频与QQ私聊边界。
+        enabled = self.enabled or (fallback and self.plugin.config.get(
+            "reply_fallback_enabled", False) is True)
+        if self.closed or not enabled:
             return 0
         admins = self.admins()
         if not admins:
@@ -547,7 +560,8 @@ class ReplyHealth:
             chain = MessageChain()
             chain.chain = [Plain(text)]
             try:
-                result = await self.plugin.context.send_message(route, chain)
+                result = await asyncio.wait_for(
+                    self.plugin.context.send_message(route, chain), timeout=10)
                 count += int(send_accepted(result))
             except Exception:
                 pass  # 未知发送保持本轮已认领，禁止自动重发。
