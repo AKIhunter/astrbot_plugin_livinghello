@@ -42,7 +42,8 @@ class StrictVisionProvider:
             kwargs["system_prompt"], None, model=kwargs.get("model"),
         )
         payload["max_tokens"] = kwargs.get("max_tokens", 900)
-        return await self.provider._query(payload, None, request_max_retries=1)
+        return await self.provider._query(
+            payload, None, request_max_retries=kwargs.get("request_max_retries", 1))
 
 
 def image_target(provider, label=""):

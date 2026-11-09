@@ -71,9 +71,9 @@ class PreparationTest(unittest.TestCase):
         self.guard.context_revision["1001"] = 1
         self.assertEqual(self.reason(), "context_changed")
 
-    def test_generation_hook_clears_stale_response_after_preparation(self):
+    def test_generation_hook_keeps_generated_group_reply_but_blocks_expiry(self):
         self.event.set_extra("congling:wake_prepare_seconds", 45)
-        for age, revision, expected in ((80, 0, "message_expired"), (60, 1, "context_changed")):
+        for age, revision, expected in ((80, 0, "message_expired"), (60, 1, None)):
             with self.subTest(expected=expected):
                 self.event.extra.pop("_at_guard_delivery_blocked", None)
                 self.guard.context_revision["1001"] = revision
@@ -81,7 +81,7 @@ class PreparationTest(unittest.TestCase):
                                            tools_call_args=[], tools_call_name=[])
                 with patch("main.time.monotonic", return_value=100 + age):
                     asyncio.run(self.guard.suppress_no_reply_and_track(self.event, response))
-                self.assertEqual(response.completion_text, "")
+                self.assertEqual(response.completion_text, "" if expected else "旧回复")
                 self.assertEqual(self.event.get_extra("_at_guard_delivery_blocked"), expected)
 
     def test_final_send_recheck_keeps_prepared_reply_and_cancels_new_context(self):

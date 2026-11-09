@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import sys
 import math
 import re
 import time
@@ -14,8 +15,10 @@ from dataclasses import dataclass
 from astrbot.api.message_components import At, Plain, Reply
 try:
     from .guard_request_trace import emit, TRACE_KEY
+    from .guard_reply_health import KEY as HEALTH_KEY, send_accepted
 except ImportError:
     from guard_request_trace import emit, TRACE_KEY
+    from guard_reply_health import KEY as HEALTH_KEY, send_accepted
 
 OWNER_KEY = "_at_guard_reply_owner"
 RECALLED_KEY = "_at_guard_source_recalled"
@@ -141,6 +144,8 @@ class ReplyDelivery:
     async def pause(self, event, seconds):
         if self.closed:
             raise asyncio.CancelledError
+        if not self.policy_allows(event):
+            return False
         if self.recalled(event):
             self.block(event)
             return False
@@ -159,10 +164,28 @@ class ReplyDelivery:
                 await asyncio.sleep(seconds)
         if self.closed:
             raise asyncio.CancelledError
+        if not self.policy_allows(event):
+            return False
         if self.recalled(event):
             self.block(event)
             return False
         return True
+
+    @staticmethod
+    def policy_allows(event):
+        checker = event.get_extra("_livinghello_policy_send_check")
+        reason = checker() if callable(checker) else ""
+        if not reason:
+            return True
+        event.set_extra("_at_guard_delivery_blocked", reason)
+        result = event.get_result()
+        if result is not None:
+            result.chain = []
+            if hasattr(result, "async_stream"):
+                result.async_stream = None
+        event.stop_event()
+        emit(event, "delivery", "cancelled", reason=reason)
+        return False
 
     async def prepare(self, event):
         if self.notice(event):
@@ -271,6 +294,23 @@ class ReplyDelivery:
                 async with lock:
                     if not await self.pause(event, 0):
                         return
+                    health = event.get_extra(HEALTH_KEY)
+                    if health:
+                        # 宿主 except 分支可能直接发送自定义错误提示，须在这里阻止群发。
+                        caller_frame = sys._getframe(1)
+                        caller = caller_frame.f_code.co_filename.replace("\\", "/")
+                        native_error = (sys.exc_info()[1] if caller.endswith(
+                            "/agent_sub_stages/internal.py") else None)
+                        if native_error is not None:
+                            runner = caller_frame.f_locals.get("agent_runner")
+                            failed_provider = getattr(runner, "provider", None)
+                            if failed_provider is not None:
+                                health["service"].provider(event, failed_provider)
+                                health["provider_evidence"] = "native_error_runner"
+                        del caller_frame
+                        if await health["service"].suppress_native_error(
+                                event, message, native_exception=native_error):
+                            return
                     plan = event.get_extra("_at_guard_delivery_plan")
                     incoming = getattr(message, "chain", []) or []
                     belongs = bool(plan and getattr(message, "_at_guard_delivery_token", None)
@@ -279,8 +319,14 @@ class ReplyDelivery:
                         try:
                             sent = await original(message, *args, **kwargs)
                         except BaseException as exc:
+                            self.health_sent(event, message, False)
                             self.trace_failure(event, exc)
                             raise
+                        if not send_accepted(sent):
+                            self.health_sent(event, message, False)
+                            self.trace_failure(event, RuntimeError("negative_send_receipt"))
+                            return sent
+                        self.health_sent(event, message, True)
                         self.trace_sent(event, incoming, "direct")
                         if not plan:
                             await self.note_sent(event, incoming)
@@ -324,8 +370,15 @@ class ReplyDelivery:
                         sent = await original(self.derive(message, chain), *args, **kwargs)
                     except BaseException as exc:
                         plan["failed"] = True
+                        self.health_sent(event, message, False)
                         self.trace_failure(event, exc)
                         raise
+                    if not send_accepted(sent):
+                        plan["failed"] = True
+                        self.health_sent(event, message, False)
+                        self.trace_failure(event, RuntimeError("negative_send_receipt"))
+                        return sent
+                    self.health_sent(event, message, True)
                     self.trace_sent(event, chain, "reply_packet")
                     if any(not isinstance(c, (Reply, At)) and type(c).__name__ != "Record"
                            for c in chain):
@@ -361,6 +414,9 @@ class ReplyDelivery:
                     if template is None or not chain:
                         return
                     full = self.derive(template, chain)
+                    health_row = event.get_extra(HEALTH_KEY)
+                    if health_row and health_row["model_done"]:
+                        full._livinghello_reply_token = health_row["token"]
                     if event.get_extra(OWNER_KEY) == "at_guard":
                         expression = getattr(self, "expression", None)
                         if expression:
@@ -373,6 +429,8 @@ class ReplyDelivery:
                             plan = event.get_extra("_at_guard_delivery_plan")
                         if plan:
                             full._at_guard_delivery_token = plan["token"]
+                    if health_row and health_row["model_done"]:
+                        health_row["service"].arm(event, full, streaming=True)
                     segments = getattr(self, "segments", None)
                     packets = segments.stream_packets(event, full) if segments else [full]
                     for packet in packets:
@@ -381,6 +439,12 @@ class ReplyDelivery:
                     self.tasks.discard(task)
             event.send_streaming = buffered_stream
         return True
+
+    @staticmethod
+    def health_sent(event, message, accepted):
+        row = event.get_extra(HEALTH_KEY)
+        if row:
+            row["service"].sent(event, message, accepted)
 
     async def note_sent(self, event, chain):
         if not chain:

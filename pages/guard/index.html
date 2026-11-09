@@ -2011,6 +2011,18 @@
     parse_error:"输出格式不完整",no_vision_provider:"视觉模型不可用",
     main_no_vision:"主模型不支持图片",budget:"总预算用完",vision_budget:"视觉预算用完",
     deadline:"整条判定超时",fallback_same_model:"兜底与失败模型相同"};
+  const REPLY_ERROR_LABEL = {quota_exhausted:"余额或额度不足",timeout:"模型请求超时",
+    connection_error:"上游连接失败",http_429:"上游限流",http_5xx:"上游服务异常",
+    authentication_error:"上游认证或权限异常",model_execution_error:"模型执行异常",
+    model_reply_missing:"未取得最终模型回复",final_message_missing:"最终回复未确认发送",
+    send_unknown:"发送失败或结果未确认",completion_timeout:"回复流程超时"};
+  const REPLY_LAYER_LABEL = {main_model:"主对话模型",delivery:"回复发送",
+    classifier:"判断模型",preparation:"消息准备",pipeline:"回复流程"};
+  function replyErrorNote(row) {
+    const fault=row.reply_error || {};
+    return (REPLY_LAYER_LABEL[fault.layer] || "回复流程")+" · "+
+      (REPLY_ERROR_LABEL[fault.category] || fault.category || "未记录原因");
+  }
   const decodeChatText = value => String(value || "").replace(/&quot;|&#39;|&lt;|&gt;|&amp;/g,
     code=>({"&quot;":'"',"&#39;":"'","&lt;":"<","&gt;":">","&amp;":"&"})[code]);
 
@@ -2072,6 +2084,7 @@
 
   function readingNote(row) {
     const d=decisionData(row);
+    if(row.reply_error) return "回复异常："+replyErrorNote(row);
     if(row.src==="delivery") return REASON_LABEL[row.reason] || "发送前取消了旧回复";
     if(row.src==="bypass") return "直接回复 · " + (REASON_LABEL[row.reason] || row.reason);
     if(row.src==="rule") return "规则过滤：" + (REASON_LABEL[row.reason] || row.reason);
@@ -2081,6 +2094,7 @@
   }
 
   function textDecisionSummary(row) {
+    if(row.reply_error) return "异常 · "+replyErrorNote(row);
     const attempts=Array.isArray(row.attempts)?row.attempts.filter(a=>a.stage==="text"):[];
     if(!attempts.length) {
       if(["rule","bypass","delivery"].includes(row.src)) {
@@ -2222,8 +2236,8 @@
       return;
     }
     body.innerHTML = rows.map((d) => {
-      const cls = d.action === "reply" ? "reply" : "silence";
-      const text = d.action === "reply" ? "放行" : "静默";
+      const cls = d.reply_error || d.action === "error" ? "error" : d.action === "reply" ? "reply" : "silence";
+      const text = d.reply_error || d.action === "error" ? "异常" : d.action === "reply" ? "放行" : "静默";
       const index=all.indexOf(d);
       const identity=sessionIdentity(d);
       const conversationTitle=identity.id
@@ -2439,8 +2453,22 @@
     summary.className="decision-summary";
     const result=document.createElement("p");const resultLabel=document.createElement("b");
     resultLabel.textContent="判断结果：";
-    result.append(resultLabel,document.createTextNode(row.action==="reply"?"放行":"静默"));
+    result.append(resultLabel,document.createTextNode(
+      row.reply_error || row.action==="error" ? "异常" : row.action==="reply"?"放行":"静默"));
     summary.appendChild(result);
+    if(row.reply_error) {
+      const fault=document.createElement("p");fault.textContent=replyErrorNote(row);
+      const original=document.createElement("p");
+      original.textContent="原判定："+(row.decision_action==="reply"?"放行":
+        row.decision_action==="silent"?"静默":"未采集");
+      summary.append(fault,original);
+      if(row.reply_error.model) {
+        const model=document.createElement("p");
+        model.textContent=(row.reply_error.provider_evidence==="native_error_runner"
+          ? "报错时模型：" : "本轮起始模型：")+row.reply_error.model;
+        summary.appendChild(model);
+      }
+    }
     if(row.mode==="shadow") {
       const observed=document.createElement("p");observed.className="chat-meta";
       observed.textContent="观察模式：此判断结论仅记录，未执行参与拦截。";

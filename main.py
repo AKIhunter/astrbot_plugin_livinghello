@@ -20,11 +20,13 @@ from astrbot.core.agent.message import TextPart
 from astrbot.core.platform.message_type import MessageType
 
 try:  # 作为插件包加载时走相对导入
+    from .guard_message_policy import MessagePolicy, event_source
     from .guard_engine import Decision, GateEngine, POLICY_VERSION
     from .guard_image_cache import ImageObservationCache
     from .guard_media import image_target
     from .guard_reply_delivery import ReplyDelivery
     from .guard_reply_delivery import number
+    from .guard_reply_health import ReplyHealth
     from .guard_fragments import FragmentWait
     from .guard_expression import Expression, congling_for, takeover
     from .guard_classifier_outage import (
@@ -46,11 +48,13 @@ try:  # 作为插件包加载时走相对导入
     from .guard_evidence import EvidenceMemory
     from .guard_request_trace import RequestTrace, emit, touch
 except ImportError:  # 单文件调试兜底
+    from guard_message_policy import MessagePolicy, event_source
     from guard_engine import Decision, GateEngine, POLICY_VERSION
     from guard_image_cache import ImageObservationCache
     from guard_media import image_target
     from guard_reply_delivery import ReplyDelivery
     from guard_reply_delivery import number
+    from guard_reply_health import ReplyHealth
     from guard_fragments import FragmentWait
     from guard_expression import Expression, congling_for, takeover
     from guard_classifier_outage import (
@@ -133,6 +137,50 @@ class Main(Star):
             self.segments = ReplySegments(self)
         self.reply_delivery.segments = self.segments
         return self.reply_delivery
+
+    def _reply_health(self):
+        if not hasattr(self, "reply_health"):
+            self.reply_health = ReplyHealth(self)
+        return self.reply_health
+
+    def _policy(self):
+        if not hasattr(self, "message_policy"):
+            self.message_policy = MessagePolicy(self.config)
+        self.message_policy.refresh(self.config)
+        return self.message_policy
+
+    def _policy_source_readable(self, source, sender_id=None, group_id=None):
+        checked = dict(source)
+        if sender_id is not None:
+            checked["sender_id"] = str(sender_id or "")
+        if group_id is not None:
+            checked["group_id"] = str(group_id or "")
+            checked["session_kind"] = "group" if group_id else "private"
+        return self._policy().check(**checked)["read_allowed"]
+
+    def _event_policy(self, event):
+        policy = self._policy()
+        source = event_source(event)
+        result = policy.check(**source)
+        if result["read_allowed"] and policy.active:
+            targets = self._mention_targets(event)
+            explicit = str(event.get_self_id()) in targets or (
+                not targets and self._starts_with_bot_name(event.message_str or ""))
+            explicit = explicit or bool(event.get_extra("_at_guard_fragment_explicit"))
+            result = policy.check(**source, explicit_call=explicit)
+        event.set_extra("_livinghello_message_policy", result)
+        return result
+
+    def _policy_send_reason(self, event):
+        if self._delivery().recalled(event):
+            return "message_recalled"
+        result = self._event_policy(event)
+        if not result["reply_allowed"]:
+            return result["reason"]
+        prepared = event.get_extra("_livinghello_material_revision")
+        if prepared is not None and prepared != result["revision"]:
+            return "policy_changed"
+        return ""
 
     def _understanding(self):
         if not hasattr(self, "understanding"):
@@ -819,12 +867,19 @@ class Main(Star):
     @filter.on_agent_begin()
     async def trace_agent_begin(self, event, run_context):
         service = self._trace(event)
+        self._reply_health().watch(event, expected=True)
+        try:
+            provider = await self.context.get_using_provider_async(umo=event.unified_msg_origin)
+            self._reply_health().provider(event, provider)
+        except Exception:
+            pass
         touch(event, "main_model")
         event.set_extra("_livinghello_model_span", service.start(event, "main_model"))
 
     @filter.on_agent_done()
     async def trace_agent_done(self, event, run_context, response):
         service = self._trace(event)
+        self._reply_health().model_done(event, response)
         touch(event, "agent_done")
         service.end(event, event.get_extra("_livinghello_model_span"),
                     "success" if response is not None else "uncollected",
@@ -872,6 +927,7 @@ class Main(Star):
         """在任何等待之前登记原消息；不改正文/组件，让从绫逐条归档。"""
         if ReplyDelivery.raw(event).get("post_type") != "notice":
             self._trace(event)
+            self._reply_health().watch(event)
         touch(event, "receive")
         if event.get_extra("_at_guard_fragment_ticket") is not None:
             return
@@ -986,9 +1042,20 @@ class Main(Star):
         if event.get_message_type() not in {MessageType.GROUP_MESSAGE, MessageType.FRIEND_MESSAGE}:
             return
         touch(event, "recall")
+        policy = self._event_policy(event)
+        event.set_extra("_livinghello_material_revision", policy["revision"])
+        event.set_extra("_livinghello_policy_send_check", lambda: self._policy_send_reason(event))
         await self._delivery().prepare(event)
 
     async def terminate(self):
+        reply_health = getattr(self, "reply_health", None)
+        if reply_health is not None:
+            await reply_health.close()
+        fault_tasks = list(getattr(self, "_model_fault_tasks", set()))
+        for task in fault_tasks:
+            task.cancel()
+        if fault_tasks:
+            await asyncio.gather(*fault_tasks, return_exceptions=True)
         await self._close_classifier_probe_task()
         image_generation = getattr(self, "image_generation", None)
         if image_generation is not None:
@@ -1139,6 +1206,7 @@ class Main(Star):
         req: ProviderRequest,
     ) -> None:
         self._trace(event)
+        self._reply_health().watch(event, expected=True)
         touch(event, "decision")
         emit(event, "llm_request", "success")
         if not await self._delivery().prepare(event):
@@ -1934,6 +2002,10 @@ class Main(Star):
 
         if response is None:
             return
+        text = (response.completion_text or "").strip()
+        if text and NO_REPLY_TOKEN not in text:
+            # 发送复核前登记生成完成，不能先按后来插话清空合法答案。
+            event.set_extra("_livinghello_response_ready", True)
 
         if self._judged_event(event) and self._gate_mode() == "enforce":
             stale_reason = self._stale_reason(event, group_key)
@@ -1942,7 +2014,6 @@ class Main(Star):
                 self._record_delivery_block(event, stale_reason)
                 return
 
-        text = (response.completion_text or "").strip()
         if NO_REPLY_TOKEN in text:
             self._clear_llm_response(response)
             if is_proactive and self._gate_mode() == "enforce":
@@ -1956,6 +2027,15 @@ class Main(Star):
 
         # 生成成功不代表发送成功。发言、冷却与去重移到after_message_sent记录。
 
+    @filter.on_llm_request(priority=-maxsize)
+    async def fit_final_request_images(self, event: AstrMessageEvent, req: ProviderRequest):
+        """在其他插件装配完输入后，只压缩本次发送副本。"""
+        try:
+            from .guard_image_budget import fit_images
+        except ImportError:
+            from guard_image_budget import fit_images
+        await fit_images(req)
+
     @filter.on_decorating_result(priority=-maxsize)
     async def recheck_before_send(self, event: AstrMessageEvent):
         touch(event, "decorate")
@@ -1966,7 +2046,10 @@ class Main(Star):
                 self.proactive_inflight_until.pop(self._group_key(event), None)
             return
         result = event.get_result()
+        if result is not None and await self._reply_health().suppress_native_error(event, result):
+            return
         if result is not None and hasattr(result, "is_llm_result"):
+            self._reply_health().arm(event, result)
             self.segments.prepare(event, result)
             await self.expression.decorate(event, result)
             emit(event, "expression", "success" if takeover(self.config) else "disabled",
@@ -2002,6 +2085,10 @@ class Main(Star):
     @filter.after_message_sent()
     async def track_sent_message(self, event: AstrMessageEvent):
         touch(event, "send")
+        if event.get_extra("_livinghello_reply_health") and not event.get_extra(
+                "_at_guard_send_patched", False):
+            self._reply_health().sent(event, event.get_result(), True)
+        await self._reply_health().finish(event)
         if not event.get_extra("_at_guard_send_patched", False):
             result = event.get_result()
             if getattr(result, "chain", None):
@@ -2112,6 +2199,13 @@ class Main(Star):
                         preparation = value
         except (TypeError, ValueError, OverflowError):
             pass
+        # 图片理解是准备耗时；不应耗尽正文回复的有效期。
+        try:
+            understood = float(event.get_extra("_at_guard_understand_seconds", 0) or 0)
+            if math.isfinite(understood) and understood > 0:
+                preparation += min(understood, age)
+        except (TypeError, ValueError, OverflowError):
+            pass
         return {
             "elapsed_seconds": age,
             "preparation_seconds": preparation,
@@ -2132,7 +2226,11 @@ class Main(Star):
         ):
             return "message_expired"
         revision = event.get_extra("_at_guard_judged_revision")
-        if revision is not None and revision != self.context_revision.get(group_key, 0):
+        advanced = revision is not None and revision != self.context_revision.get(group_key, 0)
+        health = event.get_extra("_livinghello_reply_health") or {}
+        generated = health.get("model_done") or event.get_extra("_livinghello_response_ready")
+        # 生成前继续阻止旧上下文；群聊已生成的合法回复不因后来有人插话而取消。
+        if advanced and (event.get_message_type() != MessageType.GROUP_MESSAGE or not generated):
             return "context_changed"
         return ""
 

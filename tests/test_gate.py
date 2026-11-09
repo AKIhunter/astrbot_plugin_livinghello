@@ -32,6 +32,9 @@ class FakeEvent:
     def get_extra(self, key, default=None):
         return self.extra.get(key, default)
 
+    def set_extra(self, key, value):
+        self.extra[key] = value
+
     def get_group_id(self):
         return "test"
 

@@ -246,6 +246,29 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
         self.event.set_extra("_at_guard_judged_revision", -1)
         self.assertEqual(self.guard._stale_reason(self.event, "1001"), "context_changed")
 
+    async def test_generated_group_reply_survives_new_message_but_expiry_does_not(self):
+        self.event.set_extra("_at_guard_judged_revision", -1)
+        self.event.set_extra("_livinghello_response_ready", True)
+        self.assertEqual(self.guard._stale_reason(self.event, "1001"), "")
+        self.event.set_extra("_at_guard_recorded_at", time.monotonic() - 80)
+        self.guard.config["gate_reply_max_age_seconds"] = 30
+        self.assertEqual(self.guard._stale_reason(self.event, "1001"), "message_expired")
+
+    async def test_valid_response_marks_generation_before_freshness_recheck(self):
+        self.guard.config["gate_mode"] = "enforce"
+        self.event.set_extra("_at_guard_proactive", True)
+        self.event.set_extra("_at_guard_judged_revision", -1)
+        response = SimpleNamespace(completion_text="这是一条已经生成的完整回答")
+        await self.guard.suppress_no_reply_and_track(self.event, response)
+        self.assertEqual(response.completion_text, "这是一条已经生成的完整回答")
+        self.assertTrue(self.event.get_extra("_livinghello_response_ready"))
+
+    async def test_generated_private_reply_keeps_strict_context_protection(self):
+        self.event._group = ""
+        self.event.set_extra("_at_guard_judged_revision", -1)
+        self.event.set_extra("_livinghello_response_ready", True)
+        self.assertEqual(self.guard._stale_reason(self.event, ""), "context_changed")
+
     async def test_recall_only_protects_direct_send_without_owner(self):
         self.guard.config["reply_recall_group"] = True
         await self.delivery.prepare(self.event)

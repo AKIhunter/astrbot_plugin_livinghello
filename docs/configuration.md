@@ -43,6 +43,17 @@
 | `classifier_provider_id` | `""` | 判定用的小模型 |
 | `classifier_timeout_seconds` | `3.5` | 判定超时（秒） |
 | `classifier_outage_recovery_enabled` | `false` | 文字判定断线恢复 |
+| `outage_notify_admin_qq` | `[]` | 异常提醒管理员QQ |
+| `outage_notify_interval_minutes` | `10` | 异常提醒最小间隔（分钟） |
+| `reply_health_timeout_seconds` | `900` | 回复闭环超时（秒） |
+| `outage_watch_classifier` | `true` | 判断模型异常提醒 |
+| `outage_watch_vision` | `true` | 判定看图模型异常提醒 |
+| `outage_watch_understand_image` | `true` | 图片理解模型异常提醒 |
+| `outage_watch_understand_voice` | `true` | 语音理解模型异常提醒 |
+| `outage_watch_main_model` | `true` | 主模型异常提醒 |
+| `outage_watch_tts` | `false` | 语音回复模型异常提醒 |
+| `outage_watch_image_gen` | `true` | 生图模型异常提醒 |
+| `understand_hard_timeout_seconds` | `20` | 输入理解总超时（秒） |
 | `vision_provider_id` | `""` | 需要看图时的多模态小模型 |
 | `gate_image_cache_ttl_seconds` | `300` | 图片观察缓存时间（秒） |
 | `vision_timeout_seconds` | `6` | 多模态判定超时（秒） |
@@ -75,7 +86,7 @@
 
 总判定预算与视觉共享预算按调用次数计数，包含复判及兜底。例如文字一次、看图一次、主模型兜底一次，会消耗 3 次总预算和 2 次视觉共享预算。设置 `0` 只关闭该项限制。
 
-文字/视觉时限约束单层，整条判定时限含记忆检索；碎片等待和主回复不属于该判定总时限。自主回复机会有效期从收消息到发送计时，配套开启时仅扣除当前事件有效的从绫准备耗时。模拟打字等待另行处理，新消息与已触发取消仍有效。
+文字/视觉时限约束单层，整条判定时限含记忆检索；碎片等待和主回复不属于该判定总时限。自主回复机会有效期从收消息到发送计时，扣除本事件的图片理解耗时；配套开启时还扣除有效的从绫准备耗时。模拟打字等待另行处理。生成前的新消息可取消旧上下文；群聊已生成的合法回复保留，撤回与过期仍可取消，私聊仍严格检查上下文版本。
 
 ### 0的含义
 
@@ -92,6 +103,8 @@
 ### 模型选择
 
 判定小模型留空跟随会话当前模型；指定项失效可能回退会话模型，应查看日志。视觉候选按已知型号和宿主能力声明筛选，不代表所有 API 均经联网实测。判定可使用已注册路由 provider；上游标签的解析由插件及路由提供者约定，主模型回退列表用逐项下拉添加，按列表顺序回退，不允许重复。
+
+官方 `api.deepseek.com` 的 Flash 与 V4 Pro 在可读名称中标明思考配置：`默认思考`、`思考`、`不思考`，禁用思考且 ID 以 `-quiet` 结尾时显示 `quiet 不思考`。以实际 `custom_extra_body.thinking.type` 为准；Provider ID、请求模型和已保存配置不变，第三方提供者与未知型号不推断官方默认模式。
 
 `vision_provider_id` 用于参与判定，`understand_image_provider_id` 用于独立内容理解。原生配置中已移除图片理解桥，旧宿主字段保留但不再由本页编辑。当前事件启用从绫感知时优先沿用其解析，避免重复独立理解。
 

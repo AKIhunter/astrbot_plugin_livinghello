@@ -437,7 +437,18 @@ class DecisionLog:
 
     def recent(self, limit: int = 60, query: str = "", category: str = "") -> list[dict[str, Any]]:
         q = str(query or "").strip().casefold()[:120]
-        items = reversed(self.ring)
+        # 仅异常闭环折叠同请求的旧记录；正常旁路/取消仍各自可追溯。
+        seen = set()
+        latest = []
+        for item in reversed(self.ring):
+            rid = item.get("request_id")
+            valid = isinstance(rid, str) and re.fullmatch(r"[0-9a-f]{32}", rid)
+            if valid and rid in seen:
+                continue
+            if valid and item.get("action") == "error" and item.get("reply_error"):
+                seen.add(rid)
+            latest.append(item)
+        items = iter(latest)
         if category:
             items = (item for item in items if decision_identity(item)["category"] == category)
         if q:
@@ -449,6 +460,22 @@ class DecisionLog:
             if len(result) >= max(1, min(int(limit), self.ring.maxlen)):
                 break
         return result
+
+    def reply_failure(self, identity: dict, fault: dict, fallback: dict) -> dict:
+        """追加结果，不覆盖原判断证据，也不重复计入判断统计。"""
+        rid = identity.get("request_id")
+        original = next((row for row in reversed(self.ring)
+                         if rid and row.get("request_id") == rid), None)
+        entry = dict(original or fallback)
+        entry.setdefault("decision_ts", entry.get("ts"))
+        entry.setdefault("decision_action", entry.get("action"))
+        entry.setdefault("decision_src", entry.get("src"))
+        entry.setdefault("decision_reason", entry.get("reason"))
+        entry.update(identity)
+        entry.update(ts=int(fault["at"]), action="error", src="error",
+                     reason=fault["category"], reply_error=dict(fault))
+        self.add(entry)
+        return entry
 
 
 class GateEngine:

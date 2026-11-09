@@ -387,7 +387,7 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         await guard._understanding().attach(event, req)
 
         prompt = req.extra_user_content_parts[0].text
-        self.assertIn("本轮未能识别，请勿猜测画面或来源", prompt)
+        self.assertIn("未能读取，勿猜测内容", prompt)
         self.assertNotIn(url, prompt)
 
     async def test_owned_image_in_earlier_fragment_is_still_understood(self):

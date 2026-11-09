@@ -17,6 +17,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlsplit
 
 from astrbot.api import logger
 from astrbot.api.star import Context
@@ -57,6 +58,8 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "_conf_schema.json"
 
 # key -> (类型, 下限, 上限)。字符串型没有范围，单独处理。
 NUMERIC_FIELDS: dict[str, tuple[str, float, float]] = {
+    "outage_notify_interval_minutes": ("int", 1, 1440),
+    "reply_health_timeout_seconds": ("int", 60, 7200),
     "participation_confidence_threshold": ("int", 0, 100),
     "classifier_timeout_seconds": ("float", 0.5, 8.0),
     "vision_timeout_seconds": ("float", 0.5, 12),
@@ -76,6 +79,9 @@ NUMERIC_FIELDS: dict[str, tuple[str, float, float]] = {
     "duplicate_window_seconds": ("int", 0, 3600),
 }
 BOOL_FIELDS = {
+    "outage_watch_classifier", "outage_watch_vision",
+    "outage_watch_understand_image", "outage_watch_understand_voice",
+    "outage_watch_main_model", "outage_watch_tts", "outage_watch_image_gen",
     "apply_to_private", "gate_main_fallback_enabled", "gate_congling_prepare_compat",
     "fragment_wait_private", "reply_quote_enabled", "reply_mention_enabled",
     "classifier_outage_recovery_enabled",
@@ -88,7 +94,7 @@ STRING_FIELDS = {
     "empty_mention_reply",
     "empty_mention_persona_prompt",
 }
-LIST_FIELDS = {"bot_names"}
+LIST_FIELDS = {"bot_names", "outage_notify_admin_qq"}
 # 新表达/理解配置直接从宿主schema派生白名单和数值范围，避免UI与后端漏项。
 _expression_schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8-sig"))
 for _key, _field in _expression_schema.items():
@@ -153,6 +159,36 @@ def _current(plugin: Any, key: str, default: Any = None) -> Any:
     return default if value is None else value
 
 
+def _native_model_display(config: dict[str, Any], model: str, display: str) -> str:
+    """仅修饰官方 DeepSeek 的显示名，不改 provider id 或请求模型。"""
+    if not model.lower().startswith("deepseek-"):
+        return display
+    try:
+        host = urlsplit(str(config.get("api_base") or "")).hostname
+    except ValueError:
+        return display
+    if host != "api.deepseek.com":
+        return display
+    # 真正的 thinking 配置优先，不能凭 quiet 名字推断请求模式。
+    extra = config.get("custom_extra_body", {})
+    if not isinstance(extra, dict):
+        return display
+    thinking = extra.get("thinking", {})
+    if not isinstance(thinking, dict):
+        return display
+    mode = str(thinking.get("type") or "").lower()
+    if mode == "disabled":
+        quiet = str(config.get("id") or "").endswith("-quiet")
+        suffix = "quiet 不思考" if quiet else "不思考"
+    elif mode == "enabled":
+        suffix = "思考"
+    elif not thinking and model.lower() in {"deepseek-flash", "deepseek-v4-pro"}:
+        suffix = "默认思考"
+    else:
+        return display
+    return f"{display or model}（{suffix}）"
+
+
 async def _providers(plugin: Any) -> list[dict[str, Any]]:
     """列出可选的判定模型。
 
@@ -204,6 +240,8 @@ async def _providers(plugin: Any) -> list[dict[str, Any]]:
                 model = str(provider.get_model() or "")
             except Exception:
                 model = str(config.get("model", "") or "")
+            if not connection and provider_type != "multi_api_router":
+                display_name = _native_model_display(config, model, display_name)
 
             kind = "provider"
             names: list[str] = []
@@ -663,6 +701,8 @@ def _outage_status(
             len(latest.affected_sessions) if latest is not None else 0
         ),
         "backfill": backfill,
+        "reply_health": plugin._reply_health().snapshot()
+        if callable(getattr(plugin, "_reply_health", None)) else {},
     }
 
 
@@ -736,6 +776,12 @@ def _load_schema_subset() -> dict[str, Any]:
 
 
 def _coerce(key: str, value: Any) -> Any:
+    if key == "outage_notify_admin_qq":
+        parts = value if isinstance(value, (list, tuple)) else re.split(r"[\s,，;；]+", str(value or ""))
+        ids = list(dict.fromkeys(str(item).strip() for item in parts if str(item).strip()))
+        if len(ids) > 20 or any(not re.fullmatch(r"[1-9][0-9]{0,19}", item) for item in ids):
+            raise ValueError("管理员QQ须为正整数号码，最多20个")
+        return ids
     if key in LIST_FIELDS:
         if isinstance(value, (list, tuple)):
             parts = [str(item) for item in value]

@@ -209,7 +209,7 @@ class ContextTest(unittest.TestCase):
         self.assertEqual(self.event.get_extra("_at_guard_decision")["reason"], "context_changed")
         self.assertEqual(instance.engine.stats["allowed"], 0)
 
-    def test_message_arriving_during_generation_clears_response(self):
+    def test_message_arriving_during_generation_preserves_finished_group_response(self):
         self.event.set_extra("_at_guard_proactive", True)
         self.event.set_extra("_at_guard_recorded_at", time.monotonic())
         self.event.set_extra("_at_guard_judged_revision", 0)
@@ -217,8 +217,8 @@ class ContextTest(unittest.TestCase):
         response = SimpleNamespace(completion_text="过时回复", result_chain=None,
                                    tools_call_args=[], tools_call_name=[])
         asyncio.run(self.instance.suppress_no_reply_and_track(self.event, response))
-        self.assertEqual(response.completion_text, "")
-        self.assertEqual(self.event.get_extra("_at_guard_delivery_blocked"), "context_changed")
+        self.assertEqual(response.completion_text, "过时回复")
+        self.assertIsNone(self.event.get_extra("_at_guard_delivery_blocked"))
 
     def test_final_decoration_recheck_blocks_a_late_message(self):
         self.event.set_extra("_at_guard_proactive", True)

@@ -344,7 +344,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         await b.send(b.result)
         self.assertTrue(b.sent)
 
-    async def test_native_at_keeps_response_context_and_no_reply_checks(self):
+    async def test_native_at_keeps_generated_reply_and_no_reply_checks(self):
         for reason in ("context_changed", "no_reply"):
             with self.subTest(reason=reason):
                 event = await self.incoming(FragmentEvent(
@@ -356,7 +356,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
                 response = SimpleNamespace(completion_text=(
                     "旧回复" if reason == "context_changed" else "[[ASTRBOT_NO_REPLY]]"))
                 await self.guard.suppress_no_reply_and_track(event, response)
-                self.assertEqual(response.completion_text, "")
+                self.assertEqual(response.completion_text, "旧回复" if reason == "context_changed" else "")
                 self.assertEqual(self.provider.prompts, [])
 
     async def test_name_call_waits_and_can_be_silenced_by_complete_intent(self):
@@ -497,15 +497,15 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("末尾关键要求", self.provider.prompts[0])
         self.assertIn("末尾关键要求", req.extra_user_content_parts[0].text)
 
-    async def test_new_context_after_judgment_cancels_explicit_generated_reply(self):
+    async def test_new_context_after_judgment_keeps_explicit_generated_reply(self):
         event = await self.incoming(FragmentEvent("恰比，看看这个问题"))
         await self.finish(event)
         await self.judge(event)
         self.guard._record_incoming(FragmentEvent("后续新内容", mid="2"), "1001")
         response = SimpleNamespace(completion_text="过时的回答")
         await self.guard.suppress_no_reply_and_track(event, response)
-        self.assertEqual(response.completion_text, "")
-        self.assertEqual(event.extra["_at_guard_delivery_blocked"], "context_changed")
+        self.assertEqual(response.completion_text, "过时的回答")
+        self.assertIsNone(event.get_extra("_at_guard_delivery_blocked"))
 
     async def test_earlier_source_recall_blocks_complete_batch_before_generation(self):
         self.guard.config.update(reply_recall_group=True, reply_recall_private=True)
@@ -555,7 +555,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(b.extra["_at_guard_fragment_ticket"].batch.deadline, 5)
         self.assertIs(a.extra["_at_guard_fragment_ticket"].batch, b.extra["_at_guard_fragment_ticket"].batch)
 
-    async def test_arrival_cancels_old_reply_before_new_message_processing(self):
+    async def test_arrival_keeps_generated_reply_before_new_message_processing(self):
         self.guard.config.update(reply_recall_group=True)
         event = await self.incoming(FragmentEvent("恰比，旧问题"))
         await self.finish(event)
@@ -565,8 +565,8 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         await self.guard.prepare_reply_delivery(new)
         response = SimpleNamespace(completion_text="旧回答")
         await self.guard.suppress_no_reply_and_track(event, response)
-        self.assertEqual(response.completion_text, "")
-        self.assertEqual(event.extra["_at_guard_delivery_blocked"], "context_changed")
+        self.assertEqual(response.completion_text, "旧回答")
+        self.assertIsNone(event.get_extra("_at_guard_delivery_blocked"))
 
     async def test_reload_stops_pending_pipeline_without_reply(self):
         event = await self.incoming(FragmentEvent("恰比，问题"))
