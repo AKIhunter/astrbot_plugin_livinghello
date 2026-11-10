@@ -68,11 +68,11 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "_conf_schema.json"
 NUMERIC_FIELDS: dict[str, tuple[str, float, float]] = {
     "outage_notify_interval_minutes": ("int", 1, 1440),
     "participation_confidence_threshold": ("int", 0, 100),
-    "classifier_timeout_seconds": ("float", 0.5, 8.0),
-    "vision_timeout_seconds": ("float", 0.5, 12),
+    "classifier_timeout_seconds": ("float", 1, 15),
+    "vision_timeout_seconds": ("float", 1, 20),
     "gate_image_cache_ttl_seconds": ("int", 0, 1800),
-    "gate_main_fallback_timeout_seconds": ("float", 0.5, 12),
-    "gate_total_timeout_seconds": ("float", 1, 25),
+    "gate_main_fallback_timeout_seconds": ("float", 1, 20),
+    "gate_total_timeout_seconds": ("float", 1, 60),
     # 判定上游轮转与分级冷却（前缀派生管不到，需显式登记）。
     "gate_upstream_try_timeout_seconds": ("float", 0.5, 8.0),
     "classifier_short_cooldown_seconds": ("int", 30, 1800),
@@ -113,6 +113,7 @@ BOOL_FIELDS = {
 STRING_FIELDS = {
     "gate_mode",
     "classifier_provider_id",
+    "vision_shared_provider_id",
     "vision_provider_id",
     "empty_mention_mode",
     "empty_mention_reply",
@@ -144,7 +145,8 @@ EDITABLE = set(NUMERIC_FIELDS) | BOOL_FIELDS | STRING_FIELDS | LIST_FIELDS
 POLICY_FIELDS = {
     "gate_mode", "classifier_provider_id", "classifier_timeout_seconds",
     "participation_confidence_threshold", "gate_min_length",
-    "vision_provider_id", "gate_main_fallback_enabled", "gate_main_fallback_timeout_seconds",
+    "vision_shared_provider_id", "vision_provider_id",
+    "gate_main_fallback_enabled", "gate_main_fallback_timeout_seconds",
     "vision_timeout_seconds", "gate_image_cache_ttl_seconds",
     "gate_context_messages", "gate_context_max_age_seconds",
     "gate_memory_timeout_seconds", "participation_context_messages",
@@ -208,6 +210,10 @@ def _current(plugin: Any, key: str, default: Any = None) -> Any:
 # state 每 15 秒轮询一次，不通缓存就等于每 15 秒打一遍全部上游，
 # 既拖慢页面又白烧上游配额。模型列表变化很少，缓存 10 分钟足够。
 PROVIDERS_CACHE_TTL_SECONDS = 600.0
+
+# 路由侧把上游标成 image_to_text/multimodal，等于显式声明“能接收图片”。
+# 名字正则只是启发式，会漏掉 qwen3.8-max、gpt-6 这类命名；路由连接优先采信这份声明。
+VISION_ROUTER_API_TYPES = frozenset({"image_to_text", "multimodal"})
 
 
 def _provider_catalog_revision(plugin: Any) -> str | None:
@@ -400,6 +406,11 @@ async def _build_providers(plugin: Any) -> list[dict[str, Any]]:
                 vision_supported = True
             except Exception:
                 vision_supported = False
+            # api_type 是路由插件的显式声明，比名字正则可靠；只对路由连接生效，
+            # 宿主原生 provider 的 connection 为空，仍走原有判定。
+            if not vision_supported and connection and str(
+                    connection.get("api_type") or "").lower() in VISION_ROUTER_API_TYPES:
+                vision_supported = True
             if entry is None:
                 items[provider_id] = {
                     "id": provider_id,
@@ -1060,7 +1071,8 @@ async def handle_config(plugin: Any):
     ):
         return _failure("当前断线恢复流程尚未结束，不能直接关闭", 409)
 
-    model_fields = ("classifier_provider_id", "vision_provider_id", "understand_image_provider_id",
+    model_fields = ("classifier_provider_id", "vision_shared_provider_id",
+                    "vision_provider_id", "understand_image_provider_id",
                     "understand_voice_provider_id")
     # 普通参数和清空模型选择无需读取目录；非空模型仍必须经过可用性校验。
     providers = await _providers(plugin) if any(updates.get(key) for key in model_fields) else []
@@ -1069,7 +1081,8 @@ async def handle_config(plugin: Any):
         provider_id = updates.get(key)
         if provider_id and provider_id not in known:
             return _failure(f"模型 {provider_id} 不在可用列表中")
-        if key in {"vision_provider_id", "understand_image_provider_id"} and provider_id and not any(
+        if key in {"vision_shared_provider_id", "vision_provider_id",
+                   "understand_image_provider_id"} and provider_id and not any(
             item["id"] == provider_id and item.get("supports_images") for item in providers
         ):
             return _failure(f"模型 {provider_id} 无法确认支持图片，请选择视觉模型")
@@ -1483,7 +1496,7 @@ def _write_schema_options(plugin: Any, options: list[str], vision_options: list[
         if not isinstance(schema, dict):
             logger.warning("[智能过滤] 未找到插件配置 schema，判定模型下拉未注入")
             return
-        for key in ("classifier_provider_id", "vision_provider_id"):
+        for key in ("classifier_provider_id", "vision_shared_provider_id", "vision_provider_id"):
             field = schema.get(key)
             if isinstance(field, dict):
                 field["options"] = [""] + (options if key == "classifier_provider_id" else (vision_options or []))
