@@ -20,7 +20,7 @@ from astrbot.core.agent.message import TextPart
 from astrbot.core.platform.message_type import MessageType
 
 try:  # 作为插件包加载时走相对导入
-    from .guard_message_policy import MessagePolicy, event_source
+    from .guard_message_policy import MessagePolicy, event_source, HISTORY_CONTRACT
     from .guard_engine import Decision, GateEngine, POLICY_VERSION
     from .guard_image_cache import ImageObservationCache
     from .guard_media import image_target
@@ -28,8 +28,11 @@ try:  # 作为插件包加载时走相对导入
     from .guard_reply_delivery import number
     from .guard_reply_health import ReplyHealth
     from .guard_reply_fallback import ReplyFallback
+    from .guard_reasoning_retry import ReasoningRetry
     from .guard_fragments import FragmentWait
     from .guard_expression import Expression, congling_for, takeover
+    from .guard_livingemotion import availability_reason, is_state_line, state_lines
+    from .guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
     from .guard_classifier_outage import (
         BackfillStatus,
         COOLDOWN_SECONDS,
@@ -49,7 +52,7 @@ try:  # 作为插件包加载时走相对导入
     from .guard_evidence import EvidenceMemory
     from .guard_request_trace import RequestTrace, emit, touch
 except ImportError:  # 单文件调试兜底
-    from guard_message_policy import MessagePolicy, event_source
+    from guard_message_policy import MessagePolicy, event_source, HISTORY_CONTRACT
     from guard_engine import Decision, GateEngine, POLICY_VERSION
     from guard_image_cache import ImageObservationCache
     from guard_media import image_target
@@ -57,8 +60,11 @@ except ImportError:  # 单文件调试兜底
     from guard_reply_delivery import number
     from guard_reply_health import ReplyHealth
     from guard_reply_fallback import ReplyFallback
+    from guard_reasoning_retry import ReasoningRetry
     from guard_fragments import FragmentWait
     from guard_expression import Expression, congling_for, takeover
+    from guard_livingemotion import availability_reason, is_state_line, state_lines
+    from guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
     from guard_classifier_outage import (
         BackfillStatus,
         COOLDOWN_SECONDS,
@@ -81,7 +87,7 @@ except ImportError:  # 单文件调试兜底
 
 NO_REPLY_TOKEN = "[[ASTRBOT_NO_REPLY]]"
 MEANINGFUL_TEXT_RE = re.compile(r"[\w\u4e00-\u9fff]")
-PLUGIN_NAME = "astrbot_plugin_at_guard"
+PLUGIN_NAME = "astrbot_plugin_LivingHello"
 BOT_LINE_PREFIX = "[我]: "
 CONGLING_RECOVERY_CONTRACT = "congling.classifier-recovery.v1"
 
@@ -90,12 +96,15 @@ class Main(Star):
     def __init__(self, context: Context, config: dict | None = None):
         super().__init__(context)
         self.config = config if config is not None else {}
+        self.message_policy = MessagePolicy(self.config)
         self.recent_messages: dict[str, deque[tuple[float, str]]] = defaultdict(
             lambda: deque(maxlen=30)
         )
         self.replied_fingerprints: dict[tuple[str, str], float] = {}
         self.last_proactive_reply: dict[str, float] = {}
         self.proactive_inflight_until: dict[str, float] = {}
+        # 每个群上次发垫场句的时间（monotonic），用于冷却，避免刷屏。
+        self.early_ack_at: dict[str, float] = {}
         try:
             self.data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME))
             self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +131,199 @@ class Main(Star):
         self.segments = ReplySegments(self)
         self.request_trace = RequestTrace(self, self.data_dir)
 
+    def _reply_fallback(self):
+        if not hasattr(self, "reply_fallback"):
+            self.reply_fallback = ReplyFallback(self)
+        return self.reply_fallback
+
+    def _policy(self):
+        if not hasattr(self, "message_policy"):
+            self.message_policy = MessagePolicy(self.config)
+        old = self.message_policy.revision
+        self.message_policy.refresh(self.config)
+        if old != self.message_policy.revision:
+            self._invalidate_message_policy_materials()
+        return self.message_policy
+
+    def _invalidate_message_policy_materials(self):
+        # 旧摘要/图片和已认领的碎片可能含后来屏蔽的作者；保守取消待发批次。
+        for name in ("recent_messages", "recent_images", "last_bot_line", "last_bot_line_at"):
+            cache = getattr(self, name, None)
+            if cache is not None:
+                cache.clear()
+        cache = getattr(self, "image_cache", None)
+        if cache is not None:
+            self.image_cache = ImageObservationCache()
+        queue = getattr(self, "fragment_wait", None)
+        if queue is not None:
+            for batch in queue.batches.values():
+                batch.blocked = True
+                batch.changed.set()
+            queue.batches.clear()
+
+    def publish_message_policy(self, validation):
+        policy = self._policy()
+        old = policy.revision
+        policy.publish(validation)
+        if old != policy.revision:
+            self._invalidate_message_policy_materials()
+
+    def get_message_policy_snapshot(self):
+        return self._policy().snapshot()
+
+    def get_function_coupling(self):
+        return coupling_snapshot(self.context, self.config)
+
+    @filter.on_llm_request(priority=10500)
+    async def listen_livingemotion(self, event: AstrMessageEvent, req: ProviderRequest):
+        touch(event, "livingemotion")
+        enabled = coupling_enabled(self.context, self.config, "livingemotion")
+        clean_request(req, emotion=enabled, memory=True)
+        lines = await state_lines(self.context, event, req, config=self.config) if enabled else []
+        emit(event, "livingemotion", "completed" if lines else "skipped",
+             enabled=enabled, source="LivingEmotion", count=len(lines))
+
+    @filter.on_llm_request(priority=10450)
+    async def listen_livingmemory(self, event: AstrMessageEvent, req: ProviderRequest):
+        touch(event, "livingmemory")
+        enabled = coupling_enabled(self.context, self.config, "livingmemory")
+        clean_request(req, emotion=True, memory=enabled)
+        emit(event, "livingmemory", "completed" if enabled else "skipped",
+             enabled=enabled, source="LivingMemory", reason="connected" if enabled else "disabled_or_missing")
+
+    def check_message_policy(self, **source):
+        return self._policy().check(**source)
+
+    def message_policy_companion(self):
+        result = {"active": False, "supported": True, "contract": HISTORY_CONTRACT}
+        getter = getattr(self.context, "get_registered_star", None)
+        if not callable(getter):
+            return result
+        for name in ("astrbot_plugin_congling", "congling"):
+            metadata = getter(name)
+            if metadata is not None and getattr(metadata, "activated", False):
+                instance = getattr(metadata, "star_cls", None)
+                result["active"] = True
+                result["supported"] = getattr(instance, "MESSAGE_POLICY_CONTRACT", "") == HISTORY_CONTRACT
+                break
+        return result
+
+    def _policy_explicit(self, event):
+        if ReplyDelivery.raw(event).get("post_type") == "notice":
+            return False
+        source = event_source(event)
+        self_id = str(getattr(event, "get_self_id", lambda: "")())
+        if source["sender_id"] == self_id:
+            return False
+        targets = self._mention_targets(event)
+        explicit = self_id in targets or (not targets and self._starts_with_bot_name(event.message_str or ""))
+        if explicit:
+            return True
+        ticket = event.get_extra("_at_guard_fragment_ticket")
+        finished = getattr(ticket, "batch", None)
+        if (finished and finished.explicit and finished.finished and not finished.blocked
+                and finished.latest is ticket and event.get_extra("_at_guard_fragments")
+                and finished.key == (source["session_id"], source["sender_id"])):
+            return True
+        # 只继承仍在安静期、未取消的同一用户批次，不信任历史中的@或宿主wake标记。
+        queue = getattr(self, "fragment_wait", None)
+        batch = queue.batches.get((source["session_id"], source["sender_id"])) if queue else None
+        return bool(batch and batch.explicit and not batch.blocked and not batch.finished
+                    and batch.deadline > queue.clock()
+                    and not any(self._delivery().recalled(item.event) for item in batch.items))
+
+    def _event_policy(self, event):
+        policy = self._policy()
+        source = event_source(event)
+        # 先核对黑名单，再读顶层正文判断唤醒，避免黑名单正文进入插件处理。
+        result = policy.check(**source)
+        if result["read_allowed"]:
+            explicit = self._policy_explicit(event) if policy.active else False
+            result = policy.check(**source, explicit_call=explicit)
+            event.set_extra("_livinghello_policy_explicit", explicit)
+        event.set_extra("_livinghello_message_policy", result)
+        return result
+
+    def _policy_send_reason(self, event):
+        result = self._event_policy(event)
+        if not result["reply_allowed"]:
+            return result["reason"]
+        prepared = event.get_extra("_livinghello_material_revision")
+        if prepared is not None and prepared != result["revision"]:
+            return "policy_changed"
+        return ""
+
+    def allow_proactive_reply(self, *, platform="", session_kind="", sender_id="",
+                              group_id="") -> dict:
+        """主动发言前的静态门闸，供其他插件调用。
+
+        只判平台与黑/白/灰名单，不读取本次对话状态，也不消耗判定预算。
+        read_allowed=False 表示连读都不该读；reply_allowed=False 表示只读不发。
+        """
+        try:
+            return self._policy().check(
+                platform=str(platform or ""), session_kind=str(session_kind or ""),
+                sender_id=str(sender_id or ""), group_id=str(group_id or ""),
+                purpose="proactive")
+        except Exception:
+            return {"read_allowed": False, "reply_allowed": False,
+                    "reason": "gate_unavailable"}
+
+    def _block_message_policy(self, event, reason):
+        # 名单层就把消息拦了，也必须留下「哪一条」，
+        # 否则详情里只能看到一个 gray_silent，看不出影响了哪句话。
+        try:
+            self._trace().judged_input(event, self._judged_snapshot(event))
+        except Exception:
+            pass
+        result = event.get_result() if callable(getattr(event, "get_result", None)) else None
+        if result is not None:
+            result.chain = []
+            if hasattr(result, "async_stream"):
+                result.async_stream = None
+        event.set_extra("_at_guard_delivery_blocked", reason)
+        event.stop_event()
+
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 40)
+    async def check_incoming_message_policy(self, event: AstrMessageEvent):
+        if self._delivery().notice(event):
+            return
+        result = self._event_policy(event)
+        if not result["read_allowed"]:
+            self._policy().counters[result["reason"]] += 1
+            self._block_message_policy(event, result["reason"])
+            return
+        event.set_extra("_livinghello_policy_readonly", not result["reply_allowed"])
+        event.set_extra("_livinghello_material_revision", result["revision"])
+        event.set_extra("_livinghello_policy_send_check", lambda: self._policy_send_reason(event))
+        self._reply_health().watch(event)
+        self._delivery().patch(event)
+
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize - 105)
+    async def stop_readonly_message_policy(self, event: AstrMessageEvent):
+        result = self._event_policy(event)
+        if not result["reply_allowed"]:
+            # 从绫基础归档已完成；这里只记录规则静默，不伪造参与分数。
+            if result["read_allowed"]:
+                emit(event, "message_policy", "skipped", reason=result["reason"], calls=0)
+                self._trace().finish(event, "silent", result["reason"])
+            self._block_message_policy(event, result["reason"])
+
+    @filter.on_llm_request(priority=maxsize + 40)
+    async def check_request_message_policy(self, event: AstrMessageEvent, req: ProviderRequest):
+        result = self._event_policy(event)
+        if not result["reply_allowed"]:
+            self._block_message_policy(event, result["reason"])
+            return
+        if event.get_extra("_livinghello_material_revision") is None:
+            event.set_extra("_livinghello_material_revision", result["revision"])
+        if self._policy_send_reason(event):
+            self._block_message_policy(event, "policy_changed")
+            return
+        event.set_extra("_livinghello_policy_send_check", lambda: self._policy_send_reason(event))
+        self._reply_health().watch(event)
+        self._delivery().patch(event)
+
     def _trace(self, event=None):
         if not hasattr(self, "request_trace"):
             self.request_trace = RequestTrace(self, getattr(self, "data_dir", None))
@@ -145,49 +347,10 @@ class Main(Star):
             self.reply_health = ReplyHealth(self)
         return self.reply_health
 
-    def _reply_fallback(self):
-        if not hasattr(self, "reply_fallback"):
-            self.reply_fallback = ReplyFallback(self)
-        return self.reply_fallback
-
-    def _policy(self):
-        if not hasattr(self, "message_policy"):
-            self.message_policy = MessagePolicy(self.config)
-        self.message_policy.refresh(self.config)
-        return self.message_policy
-
-    def _policy_source_readable(self, source, sender_id=None, group_id=None):
-        checked = dict(source)
-        if sender_id is not None:
-            checked["sender_id"] = str(sender_id or "")
-        if group_id is not None:
-            checked["group_id"] = str(group_id or "")
-            checked["session_kind"] = "group" if group_id else "private"
-        return self._policy().check(**checked)["read_allowed"]
-
-    def _event_policy(self, event):
-        policy = self._policy()
-        source = event_source(event)
-        result = policy.check(**source)
-        if result["read_allowed"] and policy.active:
-            targets = self._mention_targets(event)
-            explicit = str(event.get_self_id()) in targets or (
-                not targets and self._starts_with_bot_name(event.message_str or ""))
-            explicit = explicit or bool(event.get_extra("_at_guard_fragment_explicit"))
-            result = policy.check(**source, explicit_call=explicit)
-        event.set_extra("_livinghello_message_policy", result)
-        return result
-
-    def _policy_send_reason(self, event):
-        if self._delivery().recalled(event):
-            return "message_recalled"
-        result = self._event_policy(event)
-        if not result["reply_allowed"]:
-            return result["reason"]
-        prepared = event.get_extra("_livinghello_material_revision")
-        if prepared is not None and prepared != result["revision"]:
-            return "policy_changed"
-        return ""
+    def _reasoning_retry(self):
+        if not hasattr(self, "reasoning_retry"):
+            self.reasoning_retry = ReasoningRetry(self)
+        return self.reasoning_retry
 
     def _understanding(self):
         if not hasattr(self, "understanding"):
@@ -634,6 +797,40 @@ class Main(Star):
                 "[LivingHello] 补读重试调度失败，持久状态将在重载后继续。"
             )
 
+    def _needs_attention_retry_seconds(self) -> float:
+        """NEEDS_ATTENTION 的重探间隔；0 表示不重探（旧行为）。"""
+        try:
+            raw = float(self.config.get("classifier_needs_attention_retry_seconds", 300) or 0)
+        except (TypeError, ValueError):
+            return 300.0
+        if not math.isfinite(raw):
+            return 300.0
+        return max(0.0, min(3600.0, raw))
+
+    def _outage_self_heal_seconds(self) -> float:
+        """故障挂多久之后放行判断，避免一个上游拖死所有会话；0 表示不启用。"""
+        try:
+            raw = float(self.config.get("classifier_outage_self_heal_seconds", 1800) or 0)
+        except (TypeError, ValueError):
+            return 1800.0
+        if not math.isfinite(raw):
+            return 1800.0
+        return max(0.0, min(86400.0, raw))
+
+    def _outage_self_heal_ready(self, outage) -> bool:
+        """事件已经挂了太久、且确实没有再恢复的迹象时，返回 True。"""
+        limit = self._outage_self_heal_seconds()
+        event = outage.current_event
+        if limit <= 0 or event is None:
+            return False
+        if outage.state is not OutageState.NEEDS_ATTENTION:
+            return False
+        try:
+            started = float(event.started_at)
+        except (TypeError, ValueError):
+            return False
+        return (float(outage.clock()) - started) >= limit
+
     async def _classifier_probe_worker(
         self, event_id: str, *, immediate: bool
     ) -> None:
@@ -653,7 +850,17 @@ class Main(Star):
                         continue
                 elif outage.state is OutageState.NEEDS_ATTENTION:
                     if not immediate:
-                        return
+                        # 真故障也要自己爬起来：按间隔重探，否则事件永久挂住，
+                        # 整个实例的所有会话都会一直静默。
+                        retry_after = self._needs_attention_retry_seconds()
+                        if retry_after <= 0:
+                            return
+                        updated = float(getattr(event, "updated_at", 0) or 0)
+                        now = float(outage.clock())
+                        delay = updated + retry_after - now
+                        if delay > 0:
+                            await asyncio.sleep(min(delay, retry_after))
+                            continue
                 elif outage.state is not OutageState.PROBING:
                     return
 
@@ -683,6 +890,7 @@ class Main(Star):
                         provider_label, force=True, at=float(outage.clock())
                     )
                     try:
+                        probe_started = time.time()
                         failure = await self.engine.probe_classifier(
                             self._resolve_classifier_probe_provider
                         )
@@ -705,6 +913,7 @@ class Main(Star):
                 now = float(outage.clock())
                 if failure is None:
                     work = outage.complete_probe_success(token, at=now)
+                    await self._reply_health().classifier_recovered(probe_started)
                     self.logger.info(
                         "[LivingHello] 文字判定健康探测成功，故障窗口已冻结。"
                     )
@@ -797,6 +1006,13 @@ class Main(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 10)
     async def parse_reply_input(self, event: AstrMessageEvent):
         """独立模式完整展开；配套时仅预解析LivingHello自己负责的图片。"""
+        result = self._event_policy(event)
+        if not result["read_allowed"]:
+            return
+        if not result["reply_allowed"]:
+            if event.get_extra("_at_guard_recorded_at") is None:
+                self._record_incoming(event, self._group_key(event))
+            return
         touch(event, "input_parse")
         if (takeover(self.config) and not ReplyDelivery.raw(event).get("post_type") == "notice"
                 and not self._delivery().recalled(event)):
@@ -822,11 +1038,25 @@ class Main(Star):
 
     @filter.on_llm_request(priority=-maxsize)
     async def attach_reply_contract(self, event: AstrMessageEvent, req: ProviderRequest):
+        clean_request(req,
+                      emotion=coupling_enabled(self.context, self.config, "livingemotion"),
+                      memory=coupling_enabled(self.context, self.config, "livingmemory"))
         self._trace(event)
+        self._reply_health().watch(event)
         touch(event, "contracts")
+        # 主模型只回思考时，用同一份请求补答；这里只暂存，不修改请求。
+        event.set_extra("_livinghello_provider_request", req)
         self._delivery()
         self._image_generation().attach(event, req)
         self.segments.attach(event, req)
+        if self._applies_to_event(event) and not self._policy_send_reason(event):
+            if not hasattr(self, "image_history"):
+                try:
+                    from .guard_image_history import ImageHistory
+                except ImportError:
+                    from guard_image_history import ImageHistory
+                self.image_history = ImageHistory(self)
+            self.image_history.attach(event, req)
         if not hasattr(self, "evidence"):
             self.evidence = EvidenceMemory(self)
         self.evidence.attach(event, req)
@@ -842,12 +1072,61 @@ class Main(Star):
             )).mark_as_temp())
             event.set_extra("_at_guard_topic_contract", True)
 
+        # 图片预算：base64 原图能把上下文撑到几十万 token，必须在最后一次请求前排掉。
+        # 放在这里是因为此时 at_guard、分片、image_history、其他插件的图片都已追加完。
+        if not event.get_extra("_livinghello_image_budget_done"):
+            event.set_extra("_livinghello_image_budget_done", True)
+            try:
+                try:
+                    from .guard_image_budget import fit_images
+                except ImportError:
+                    from guard_image_budget import fit_images
+                count_before = len(getattr(req, "image_urls", None) or [])
+                dropped, before, after = await fit_images(req)
+                if dropped or before != after:
+                    self.logger.info(
+                        "[LivingHello] 图片预算 %.2fMB→%.2fMB，%d张→%d张（丢弃%d张）",
+                        before / 1048576, after / 1048576,
+                        count_before, len(getattr(req, "image_urls", None) or []),
+                        dropped,
+                    )
+            except Exception as exc:
+                # 预算失败不能挡住回复，但要在日志里留痕。
+                self.logger.warning("[LivingHello] 图片预算处理失败: %r", exc)
+
+        # 历史 assistant 消息里残留的 thinking 段会持续诱导模型继续输出思考，
+        # 在最后一次请求前按 OpenAI messages 格式清掉。
+        if not event.get_extra("_at_guard_thinking_contexts_done"):
+            event.set_extra("_at_guard_thinking_contexts_done", True)
+            try:
+                try:
+                    from .guard_thinking_filter import strip_thinking_contexts
+                except ImportError:
+                    from guard_thinking_filter import strip_thinking_contexts
+                cleaned = strip_thinking_contexts(getattr(req, "contexts", None))
+                if cleaned:
+                    self.logger.info(
+                        "[LivingHello] 历史 thinking 清理 %d 条", cleaned)
+            except Exception as exc:
+                self.logger.warning(
+                    "[LivingHello] 历史 thinking 清理失败: %r", exc)
+
+        # 复用线上最终装配钩子，避免新增重复监听或覆盖图片/思考清理。
+        await self.fit_final_request_images(event, req)
+
     @filter.on_llm_tool_respond()
     async def remember_tool_evidence(self, event, tool, tool_args, tool_result):
         service = self._trace(event)
         touch(event, "tool_end")
         spans = event.get_extra("_livinghello_tool_spans", {})
         span = spans.pop((id(tool), id(tool_args)), None)
+        starts = event.get_extra("_livinghello_tool_started", {}) or {}
+        started_at = starts.pop((id(tool), id(tool_args)), None)
+        event.set_extra("_livinghello_tool_started", starts)
+        if started_at is not None:
+            spent = max(0.0, time.monotonic() - float(started_at))
+            total = float(event.get_extra("_at_guard_tool_seconds", 0) or 0)
+            event.set_extra("_at_guard_tool_seconds", total + spent)
         # MCP isError只用于受控结果类别，不保存参数、工具正文或模型思考。
         service.end(event, span, "uncollected" if tool_result is None else
                     "failed" if getattr(tool_result, "isError", False) else "success",
@@ -869,6 +1148,10 @@ class Main(Star):
         if len(spans) < service.MAX_EVENTS:
             spans[(id(tool), id(tool_args))] = span
         event.set_extra("_livinghello_tool_spans", spans)
+        # 工具耗时不计入回复有效期：这里只记起点，结束时累加。
+        starts = event.get_extra("_livinghello_tool_started", {}) or {}
+        starts[(id(tool), id(tool_args))] = time.monotonic()
+        event.set_extra("_livinghello_tool_started", starts)
         service.increment(event, "tool_calls")
 
     @filter.on_agent_begin()
@@ -876,6 +1159,7 @@ class Main(Star):
         service = self._trace(event)
         self._reply_health().watch(event, expected=True)
         self._reply_fallback().bind_current(event, run_context)
+        # 宿主已选择本轮provider；只取名称，后备切换的最终归属仍以宿主日志为准。
         try:
             provider = await self.context.get_using_provider_async(umo=event.unified_msg_origin)
             self._reply_health().provider(event, provider)
@@ -883,10 +1167,16 @@ class Main(Star):
             pass
         touch(event, "main_model")
         event.set_extra("_livinghello_model_span", service.start(event, "main_model"))
+        # 注意：不在这里武装垫场句。此刻还没判定「要不要回、有没有被闸门拦」，
+        # 早起算会导致不需要回复的场景也发一句，正是群里刷屏的来源。
+        # 真正的武装点在「判定放行、开始生成」之后（见 _arm_early_ack 的调用处）。
 
     @filter.on_agent_done()
     async def trace_agent_done(self, event, run_context, response):
+        self._cancel_early_ack(event)
         service = self._trace(event)
+        # 只回思考不回正文时先补一次，再按补答后的响应判定送达。
+        await self._reasoning_retry().recover(event, run_context, response)
         self._reply_health().model_done(event, response)
         touch(event, "agent_done")
         service.end(event, event.get_extra("_livinghello_model_span"),
@@ -912,6 +1202,150 @@ class Main(Star):
             else:
                 emit(event, "tools", "uncollected", reason="tool_listener_unverified")
 
+    def _early_ack_seconds(self) -> float:
+        """主模型超过多久还没出结果就先垫一句；0 表示关闭。"""
+        try:
+            raw = float(self.config.get("reply_early_ack_seconds", 8) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(raw):
+            return 0.0
+        return max(0.0, min(60.0, raw))
+
+    def _early_ack_text(self) -> str:
+        raw = self.config.get("reply_early_ack_texts")
+        if isinstance(raw, (list, tuple)):
+            items = [str(item).strip() for item in raw if str(item).strip()]
+        else:
+            items = [part.strip() for part in str(raw or "").split("|") if part.strip()]
+        if not items:
+            items = ["稍等，我想一下。", "我看一下，马上说。"]
+        # 按分钟轮换，不随机：同一分钟内结果稳定，便于复现和观察。
+        return items[int(time.time() // 60) % len(items)]
+
+    def _early_ack_cooldown_seconds(self) -> float:
+        """同一个群两次垫场的最小间隔；0 表示不限制（不建议）。"""
+        try:
+            raw = float(self.config.get("reply_early_ack_cooldown_seconds", 600) or 0)
+        except (TypeError, ValueError):
+            return 600.0
+        if not math.isfinite(raw):
+            return 600.0
+        return max(0.0, min(7200.0, raw))
+
+    def _arm_early_ack(self, event: AstrMessageEvent) -> None:
+        """判定放行、即将生成时才武装看门狗：卡住且一直没结果才垫一句。
+
+        必须同时满足：
+        - 这一轮确实要回（已判定 reply，且没被策略/闸门拦下）
+        - 这个群在冷却期内没垫过（默认 10 分钟一句）
+        """
+        seconds = self._early_ack_seconds()
+        if seconds <= 0:
+            return
+        if event.get_extra("_livinghello_early_ack"):
+            return
+        if not self._applies_to_event(event):
+            return
+        # 旁路（灰名单显式呼叫 / @唤醒 / 私聊直通）不经过判定，没有判定标记，
+        # 但它同样是「确定要回」，主模型慢的时候一样需要这一句。
+        if not self._judged_event(event) and not event.get_extra("_at_guard_bypass_reply"):
+            return
+        if event.get_extra("_at_guard_delivery_blocked"):
+            return
+        try:
+            action = str((event.get_extra("_at_guard_decision") or {}).get("action") or "")
+        except Exception:
+            action = ""
+        if action and action != "reply":
+            return
+        group_key = self._group_key(event)
+        cooldown = self._early_ack_cooldown_seconds()
+        if cooldown > 0:
+            last = float(self.early_ack_at.get(group_key, 0.0) or 0.0)
+            if last and time.monotonic() - last < cooldown:
+                emit(event, "early_ack", "skipped", reason="group_cooldown")
+                return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._early_ack_worker(event, seconds))
+        event.set_extra("_livinghello_early_ack", task)
+
+    def _cancel_early_ack(self, event: AstrMessageEvent) -> None:
+        task = event.get_extra("_livinghello_early_ack")
+        event.set_extra("_livinghello_early_ack", None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _early_ack_worker(self, event: AstrMessageEvent, seconds: float) -> None:
+        try:
+            await asyncio.sleep(seconds)
+        except asyncio.CancelledError:
+            return
+        if event.get_extra("_livinghello_agent_done"):
+            return
+        if event.get_extra("_livinghello_early_ack_sent"):
+            return
+        # 到点再复核一次：这段时间里可能已经被闸门拦下或已经有了结果。
+        if event.get_extra("_at_guard_delivery_blocked"):
+            emit(event, "early_ack", "skipped", reason="blocked_before_send")
+            return
+        if self._stale_reason(event, self._group_key(event)):
+            emit(event, "early_ack", "skipped", reason="stale_before_send")
+            return
+        event.set_extra("_livinghello_early_ack_sent", True)
+        try:
+            self.early_ack_at[self._group_key(event)] = time.monotonic()
+        except Exception:
+            pass
+        text = self._early_ack_text()
+        route = str(getattr(event, "unified_msg_origin", "") or "")
+        if not route:
+            return
+        try:
+            chain = MessageChain()
+            chain.chain = [Plain(text)]
+            await self.context.send_message(route, chain)
+            # 和正常回复一样收尾：垫场句也是「我说过的话」，要进流水并结算 revision，
+            # 否则回环那条消息会让主回复在发送前被判 context_changed（整条作废）。
+            self._settle_own_bubble(event, text)
+            emit(event, "early_ack", "success", text=text[:40])
+        except Exception as exc:  # noqa: BLE001 - 垫场失败不影响正式回复
+            emit(event, "early_ack", "failed", reason=type(exc).__name__)
+            self.logger.debug("[LivingHello] 垫场句发送失败: %r", exc)
+
+    def _settle_own_bubble(self, event: AstrMessageEvent, text: str) -> None:
+        """垫场句发出后，按正常回复的口径结算「自己说了一句话」。
+
+        1. 记进 last_bot_line，让主模型知道刚垫过一句，避免重复开场。
+        2. 发送确认后同时增加实际 revision 与本请求的自家增量；
+           不预支尚未到达的回环，否则没有回环时也会误判上下文变化。
+        别人这期间插的话保留在实际 revision 中，失败重试仍能识别。
+        """
+        try:
+            group_key = self._group_key(event)
+            now = time.monotonic()
+            spoken = " ".join(text.split())[:300]
+            self.last_bot_line[group_key] = spoken
+            self.last_bot_line_at[group_key] = now
+            self.recent_messages[group_key].append(
+                (now, f"{BOT_LINE_PREFIX}{spoken}"))
+        except Exception:
+            pass
+        try:
+            before = int(event.get_extra("_at_guard_early_ack_bumps", 0) or 0)
+            group_key = self._group_key(event)
+            revision = self.context_revision.get(group_key, 0)
+            self.context_revision[group_key] = revision + 1
+            event.set_extra("_at_guard_early_ack_bumps", before + 1)
+            emit(event, "context_revision", "success", source="own_ack",
+                 before=revision, after=revision + 1,
+                 judged=event.get_extra("_at_guard_judged_revision"), count=before + 1)
+        except (TypeError, ValueError):
+            pass
+
     def _fragment_queue(self):
         if not hasattr(self, "fragment_wait"):
             self.fragment_wait = FragmentWait()
@@ -933,9 +1367,19 @@ class Main(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 30)
     async def observe_message_fragments(self, event: AstrMessageEvent):
         """在任何等待之前登记原消息；不改正文/组件，让从绫逐条归档。"""
+        result = self._event_policy(event)
+        if not result["read_allowed"]:
+            return
+        if not result["reply_allowed"]:
+            # 灰名单只读：trace 在这里就建了，顺手落下「是哪条消息」。
+            self._trace(event)
+            try:
+                self._trace().judged_input(event, self._judged_snapshot(event))
+            except Exception:
+                pass
+            return
         if ReplyDelivery.raw(event).get("post_type") != "notice":
             self._trace(event)
-            self._reply_health().watch(event)
         touch(event, "receive")
         if event.get_extra("_at_guard_fragment_ticket") is not None:
             return
@@ -948,6 +1392,8 @@ class Main(Star):
         explicit = str(event.get_self_id()) in targets or bool(
             getattr(event, "is_at_or_wake_command", False)
         ) or (not targets and self._starts_with_bot_name(event.message_str or ""))
+        if self._policy().active:
+            explicit = self._policy_explicit(event)
         snapshot = {
             **self._message_meta(event),
             "text": event.message_str or "",
@@ -1050,9 +1496,6 @@ class Main(Star):
         if event.get_message_type() not in {MessageType.GROUP_MESSAGE, MessageType.FRIEND_MESSAGE}:
             return
         touch(event, "recall")
-        policy = self._event_policy(event)
-        event.set_extra("_livinghello_material_revision", policy["revision"])
-        event.set_extra("_livinghello_policy_send_check", lambda: self._policy_send_reason(event))
         await self._delivery().prepare(event)
 
     async def terminate(self):
@@ -1062,11 +1505,6 @@ class Main(Star):
         reply_health = getattr(self, "reply_health", None)
         if reply_health is not None:
             await reply_health.close()
-        fault_tasks = list(getattr(self, "_model_fault_tasks", set()))
-        for task in fault_tasks:
-            task.cancel()
-        if fault_tasks:
-            await asyncio.gather(*fault_tasks, return_exceptions=True)
         await self._close_classifier_probe_task()
         image_generation = getattr(self, "image_generation", None)
         if image_generation is not None:
@@ -1179,9 +1617,14 @@ class Main(Star):
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=maxsize)
     async def apply_hard_group_rules(self, event: AstrMessageEvent):
         """Record context, handle empty self mentions, and recognize bot names."""
+        policy = self._event_policy(event)
+        if not policy["read_allowed"]:
+            return
         group_key = self._group_key(event)
         if event.get_extra("_at_guard_recorded_at") is None:
             self._record_incoming(event, group_key)
+        if not policy["reply_allowed"]:
+            return
 
         targets = self._mention_targets(event)
         self_id = str(event.get_self_id())
@@ -1216,6 +1659,13 @@ class Main(Star):
         event: AstrMessageEvent,
         req: ProviderRequest,
     ) -> None:
+        policy = self._event_policy(event)
+        if not policy["reply_allowed"] or self._policy_send_reason(event):
+            self._block_message_policy(event, policy["reason"] if not policy["reply_allowed"] else "policy_changed")
+            return
+        if event.get_extra("_livinghello_material_revision") is None:
+            event.set_extra("_livinghello_material_revision", policy["revision"])
+        event.set_extra("_livinghello_policy_send_check", lambda: self._policy_send_reason(event))
         self._trace(event)
         # 闸门尚未放行时，正常静默不应被当成主模型失败。
         self._reply_health().watch(event)
@@ -1231,6 +1681,14 @@ class Main(Star):
             event.stop_event()
             return
         self._attach_fragments(event, req)
+        emotion_block = await self._livingemotion_block_reason(event)
+        if emotion_block:
+            self._trace().finish(event, "silent", emotion_block)
+            event.stop_event()
+            return
+        if policy["requires_explicit"]:
+            self._record_bypass(event, "gray_explicit")
+            return
         if not self._applies_to_event(event):
             if event.get_message_type() == MessageType.FRIEND_MESSAGE:
                 self._record_bypass(event, "private_off")
@@ -1303,10 +1761,9 @@ class Main(Star):
             observation_rules.append("cooldown")
 
         if not explicit and now < self.proactive_inflight_until.get(group_key, 0.0):
-            if mode == "enforce":
-                self._trace().finish(event, "silent", "inflight")
-                event.stop_event()
-                return
+            # 同一群已经有一轮在处理：不丢弃这句话，照样送去判定。
+            # 只把「刚参与过」作为提示交给判定模型，让它在阈值上更谨慎；
+            # 真正防止连着刷屏的是 cooldown 与阈值，不是把消息直接吞掉。
             observation_rules.append("inflight")
 
         if self._handle_classifier_outage_cooling(
@@ -1319,7 +1776,9 @@ class Main(Star):
             event.set_extra("_at_guard_fragment_judged", True)
         else:
             if mode == "enforce":
-                self.proactive_inflight_until[group_key] = now + 30.0
+                # 缩短到 8 秒：只覆盖「同一条消息的多次触发」，
+                # 而不是把接下来半分钟的群聊全部锁死。
+                self.proactive_inflight_until[group_key] = now + 8.0
             event.set_extra("_at_guard_proactive", True)
         event.set_extra("_at_guard_group_key", group_key)
         event.set_extra("_at_guard_fingerprint", fingerprint)
@@ -1341,7 +1800,11 @@ class Main(Star):
                 for row in fragments
             ]
             message_meta["explicit_call"] = explicit
-        message_meta["has_images"] = bool(image_snapshot)
+        # 只把「本轮消息 / 连续分片」的图算作当前带图。image_snapshot 里混着
+        # 别人几十秒前发的旧图（source="recent"），用 bool() 会把“会话最近
+        # 有图”误标成“当前消息带图”，让判定以为模型看到了像素。
+        message_meta["has_images"] = any(
+            item.get("source") != "recent" for item in image_snapshot)
         message_meta["recent_images_available"] = any(
             item["source"] == "recent" for item in image_snapshot)
 
@@ -1357,9 +1820,15 @@ class Main(Star):
         } for image in image_snapshot]
 
         async def judge():
+            _judge_started = time.monotonic()
             span = self._trace().start(event, "decision")
             event.set_extra("_at_guard_memory_timings", {})
             cached = cache.lookup(scope, namespace, image_snapshot, self.engine.image_cache_ttl())
+            if not cached:
+                # 本轮理解阶段（understand_reply_input）已经看过这几张图，只是摘要
+                # 留在 event 上、没进观察缓存。判定不该在「没看到像素」的前提下
+                # 说 context_missing，这里直接复用本轮观察。
+                cached = self._understanding_image_summaries(event)
             result = await self.engine.decide(
                 group_key=group_key, current_text=self._fragment_text(event),
                 context_lines=context_lines, bot_line=self._fresh_bot_line(group_key),
@@ -1373,6 +1842,14 @@ class Main(Star):
             )
             result.timings.update(event.get_extra("_at_guard_memory_timings", {}) or {})
             result.timings.update(event.get_extra("_at_guard_input_timings", {}) or {})
+            # 判定耗时属于「准备」，不计入回复有效期（否则看图+判定就把回复判过期）。
+            try:
+                _spent = max(0.0, time.monotonic() - _judge_started)
+                _prev = float(event.get_extra("_at_guard_judge_seconds", 0) or 0)
+                event.set_extra("_at_guard_judge_seconds", _prev + _spent)
+            except (TypeError, ValueError, OverflowError):
+                pass
+            self._trace().judged_input(event, self._judged_snapshot(event))
             self._trace().end(event, span, "failed" if result.source == "error" else "success",
                               reason=result.reason)
             self._trace().metrics(event, result.timings)
@@ -1380,7 +1857,10 @@ class Main(Star):
                 emit(event, "decision_attempt", "success" if attempt.get("status") == "ok" else "failed",
                      model=attempt.get("model", ""), role=attempt.get("stage", ""),
                      ms=attempt.get("ms"), calls=1 if attempt.get("called") else 0,
-                     reason=attempt.get("status", ""))
+                     reason=attempt.get("status", ""),
+                     parse_reason=attempt.get("parse_reason"),
+                     parse_format=attempt.get("parse_format"),
+                     format_retry=attempt.get("format_retry", False))
             if result.source == "model" and result.stage in {"vision", "main_fallback"}:
                 cache.store(scope, namespace, image_snapshot, result.image_summaries,
                             result.model, self.engine.image_cache_ttl())
@@ -1402,9 +1882,20 @@ class Main(Star):
             self._redact_classifier_failure_decision(decision)
         # 模型看到的是调用前的快照；调用期间新到的群消息使该结果过时。
         event.set_extra("_at_guard_judged_revision", revision)
+        if decision.action == "reply" or mode == "shadow":
+            emotion_block = await self._livingemotion_block_reason(event)
+            if emotion_block:
+                self.proactive_inflight_until.pop(group_key, None)
+                self._trace().finish(event, "silent", emotion_block)
+                event.stop_event()
+                return
         stale_reason = self._stale_reason(event, group_key)
         if stale_reason and decision.action == "reply":
             decision = replace(decision, action="silence", reason=stale_reason)
+        elif decision.action == "reply" and self._context_advanced(event, group_key):
+            # 判定期间群友又说话了：结论不变，照发；只标记一下供详情查看。
+            event.set_extra("_at_guard_context_advanced", True)
+            emit(event, "decision", "success", reason="context_advanced_but_kept")
         if (decision.action == "reply" and decision.image_count
                 and decision.image_handoff != "summary"):
             resolver = getattr(self.context, "get_using_provider_async", None)
@@ -1413,11 +1904,19 @@ class Main(Star):
                     reply_provider = await asyncio.wait_for(resolver(event.unified_msg_origin), 2)
                     image_target(reply_provider)
                 except Exception:
-                    # 摘要不足又无法确认回复模型支持原图，宁可静默也不能让它猜图。
-                    decision = replace(decision, action="silence", reason="reply_no_vision")
+                    # 拿得到摘要就退回摘要交接，只有摘要也没有时才整条静默：
+                    # 否则一张被打了 needs_original 的图，会把判定已放行的消息全部作废。
+                    if decision.image_summaries:
+                        decision = replace(decision, image_handoff="summary")
+                    else:
+                        decision = replace(
+                            decision, action="silence", reason="reply_no_vision"
+                        )
             stale_reason = self._stale_reason(event, group_key)
             if stale_reason and decision.action == "reply":
                 decision = replace(decision, action="silence", reason=stale_reason)
+            elif decision.action == "reply" and self._context_advanced(event, group_key):
+                event.set_extra("_at_guard_context_advanced", True)
         if mode == "shadow":
             decision.chat_data = dict(decision.chat_data or {})
             decision.chat_data["observation_mode"] = True
@@ -1489,6 +1988,9 @@ class Main(Star):
 
         # 补查的记忆原样交给主模型，避免闸门查了一遍、生成时又猜背景。
         if decision.action == "reply":
+            # 到这里才确定「真要回」，也才允许在卡住时垫一句。
+            # 被闸门拦下的场景压根走不到这里，自然不会多发一句。
+            self._arm_early_ack(event)
             req.extra_user_content_parts.append(TextPart(
                 text="你已获准参与当前话题。以下为判定时同一会话的原始流水，"
                      "按交流对象和时间顺序接话，优先回答当前用户的具体问题。"
@@ -1501,12 +2003,14 @@ class Main(Star):
                                    "current_message": {"text": self._fragment_text(event), **message_meta}},
                                   ensure_ascii=False)
                      + "\n</at_guard_topic>").mark_as_temp())
-        if decision.memory_lines and not congling_for(self.context, event):
+        memory_lines = [line for line in (decision.memory_lines or []) if not is_state_line(line)]
+        if memory_lines and coupling_enabled(self.context, self.config, "livingmemory"):
             req.extra_user_content_parts.append(
                 TextPart(text="<at_guard_memory untrusted=\"true\">\n"
-                         + json.dumps(list(decision.memory_lines), ensure_ascii=False)
+                         + json.dumps(memory_lines, ensure_ascii=False)
                          + "\n</at_guard_memory>").mark_as_temp()
             )
+            event.set_extra("_livinghello_memory_reused", True)
         req.extra_user_content_parts.append(
             TextPart(text=(
                 ("这是同一用户明确呼叫后的完整输入，请按整批内容确认是否仍需要回应。"
@@ -1566,6 +2070,13 @@ class Main(Star):
         outage = self._outage()
         if not outage.blocks_normal_calls:
             return False
+        if self._outage_self_heal_ready(outage):
+            # 挂了太久仍然没有任何恢复迹象：放行判断，别让所有会话一起陪葬。
+            self.logger.warning(
+                "[LivingHello] 判定模型故障已持续过久，本次放行判断（自愈）。"
+            )
+            event.set_extra("_at_guard_outage_degraded", True)
+            return False
         reason = (
             "classifier_needs_attention"
             if outage.state is OutageState.NEEDS_ATTENTION
@@ -1621,6 +2132,9 @@ class Main(Star):
         reason: str,
     ) -> None:
         meta = self._message_meta(event)
+        # 判定被短路（冷却/待处理）时也要留下是哪条消息，
+        # 否则详情里只剩一个状态码，看不出影响了哪一条。
+        self._trace().judged_input(event, self._judged_snapshot(event))
         self.engine.log.add({
             "ts": int(time.time()),
             "gid": str(group_key),
@@ -1649,6 +2163,10 @@ class Main(Star):
         decision: Decision,
         mode: str,
     ):
+        if decision.source == "error" and decision.stage != "text":
+            row = self._reply_health().watch(event)
+            if row:
+                row["fault"] = ("preparation", "preparation_failed")
         if decision.source != "error" or decision.stage != "text":
             return None
         failure = classify_classifier_failure(
@@ -1657,6 +2175,8 @@ class Main(Star):
         outage = self._outage()
         if failure is None or not outage.enabled:
             return None
+        # 小模型失败也等最终闭环再提醒：shadow/后备最终发出时无需报断线。
+        self._reply_health().classifier_failed(event, failure.category)
 
         created = False
         if outage.current_event is None and outage.state is OutageState.HEALTHY:
@@ -1698,12 +2218,6 @@ class Main(Star):
                     reason="cooldown_started",
                     platform_id=platform_id,
                 )
-            await self._notify_classifier_admins(
-                NotificationPhase.INTERRUPTED,
-                platform_id=platform_id,
-                cycle=0,
-                at=time.time(),
-            )
         return failure
 
     @staticmethod
@@ -1835,50 +2349,13 @@ class Main(Star):
         counts: dict[str, int] | None = None,
         at: float | None = None,
     ) -> int:
-        outage = self._outage()
-        if outage.current_event is None:
+        # 恢复只更新页面和补读状态，不另发一次 @。所有失败层共用一个额度。
+        if phase is NotificationPhase.RECOVERED or self._outage().current_event is None:
             return 0
-        admins = self._astrbot_admin_ids()
-        if not admins:
-            self.logger.warning(
-                "[LivingHello] 未配置 AstrBot admins_id，判定状态仅写入日志和状态。"
-            )
-            return 0
-        platform_id = str(platform_id or "").strip()
-        if (
-            not platform_id
-            or ":" in platform_id
-            or "://" in platform_id
-            or any(ord(character) < 32 for character in platform_id)
-        ):
-            self.logger.warning(
-                "[LivingHello] 无可用私聊平台，管理员通知仅保留状态。"
-            )
-            return 0
-        text = self._classifier_notification_text(phase, counts=counts)
-        if not text:
-            return 0
-        sent_count = 0
-        now = time.time() if at is None else float(at)
-        for admin_id in admins:
-            if not outage.reserve_notification(
-                phase, admin_id, cycle=cycle, at=now
-            ):
-                continue
-            try:
-                sent = await self.context.send_message(
-                    f"{platform_id}:FriendMessage:{admin_id}",
-                    MessageChain().message(text),
-                )
-                if sent is False:
-                    raise RuntimeError("platform unavailable")
-            except Exception:
-                self.logger.warning(
-                    "[LivingHello] 管理员私聊通知发送结果未知，已停止本周期重试。"
-                )
-            else:
-                sent_count += 1
-        return sent_count
+        return await self._reply_health().failure(
+            "classifier", self._outage().current_event.error_category,
+            platform_id=platform_id, at=at,
+        )
 
     async def notify_classifier_outage_continued(
         self,
@@ -1928,6 +2405,20 @@ class Main(Star):
         if not provider_id:
             return None
         return image_target(self.context.get_provider_by_id(provider_id), label)
+
+    def _understanding_image_summaries(self, event) -> list:
+        """把本轮理解阶段看过的图摘要交给判定复用；整体摘要只作画面证据。"""
+        for source in (event.get_extra("_at_guard_fragment_sources") or (event,)):
+            observation = source.get_extra("_at_guard_understanding")
+            summary = getattr(observation, "vision_summary", "") if observation is not None else ""
+            text = " ".join(str(summary).split())[:400]
+            if text:
+                # 不是逐图摘要，所以标 needs_original：主模型仍会拿到原图，
+                # 判定阶段则有了画面证据，不至于把「图在眼前」判成上下文缺失。
+                return [{"image": 1, "summary": text,
+                         "uncertainty": "本轮多图整体观察，非逐图摘要",
+                         "needs_original": True}]
+        return []
 
     def _image_observation_cache(self):
         if not hasattr(self, "image_cache"):
@@ -1988,6 +2479,14 @@ class Main(Star):
     ) -> None:
         touch(event, "response")
         emit(event, "response", "success" if response is not None else "uncollected")
+        # 中转偶尔把思考漏进正文；把上游自己声明的 reasoning 留一份，
+        # 发送前用差分裁掉逐字重合的部分（不依赖任何标签）。
+        try:
+            _reasoning = getattr(response, "reasoning_content", None)
+            if _reasoning:
+                event.set_extra("_at_guard_reasoning_text", str(_reasoning))
+        except Exception:
+            pass
         if self._delivery().recalled(event):
             if response is not None:
                 self._clear_llm_response(response)
@@ -2014,10 +2513,6 @@ class Main(Star):
 
         if response is None:
             return
-        text = (response.completion_text or "").strip()
-        if text and NO_REPLY_TOKEN not in text:
-            # 发送复核前登记生成完成，不能先按后来插话清空合法答案。
-            event.set_extra("_livinghello_response_ready", True)
 
         if self._judged_event(event) and self._gate_mode() == "enforce":
             stale_reason = self._stale_reason(event, group_key)
@@ -2025,7 +2520,11 @@ class Main(Star):
                 self._clear_llm_response(response)
                 self._record_delivery_block(event, stale_reason)
                 return
+            if self._context_advanced(event, group_key):
+                # 生成期间群友又说话了：已经判定过要回，就照发。
+                event.set_extra("_at_guard_context_advanced", True)
 
+        text = (response.completion_text or "").strip()
         if NO_REPLY_TOKEN in text:
             self._clear_llm_response(response)
             event.set_extra("_livinghello_intentional_silence", "no_reply")
@@ -2042,14 +2541,14 @@ class Main(Star):
 
         # 生成成功不代表发送成功。发言、冷却与去重移到after_message_sent记录。
 
-    @filter.on_llm_request(priority=-maxsize)
     async def fit_final_request_images(self, event: AstrMessageEvent, req: ProviderRequest):
         """在其他插件装配完输入后，只压缩本次发送副本。"""
         try:
             from .guard_image_budget import fit_images
         except ImportError:
             from guard_image_budget import fit_images
-        await fit_images(req)
+        if not event.get_extra("_livinghello_image_budget_done"):
+            await fit_images(req)
         # 所有请求钩子跑完才认定放行；停止/私聊未过滤的请求不接入兜底。
         stopped = getattr(event, "is_stopped", lambda: getattr(event, "stopped", False))()
         if not stopped and self._applies_to_event(event):
@@ -2058,6 +2557,10 @@ class Main(Star):
 
     @filter.on_decorating_result(priority=-maxsize)
     async def recheck_before_send(self, event: AstrMessageEvent):
+        reason = self._policy_send_reason(event)
+        if reason:
+            self._block_message_policy(event, reason)
+            return
         touch(event, "decorate")
         delivery = self._delivery()
         if delivery.recalled(event):
@@ -2069,12 +2572,27 @@ class Main(Star):
         if result is not None and await self._reply_health().suppress_native_error(event, result):
             return
         if result is not None and hasattr(result, "is_llm_result"):
-            self._reply_health().arm(event, result)
+            # 差分裁剪必须在分段之前：分段后思考会被切成多条气泡，
+            # 每条单独比对都够不到重合阈值。
+            try:
+                _reasoning = event.get_extra("_at_guard_reasoning_text") or ""
+                if _reasoning and getattr(result, "chain", None):
+                    try:
+                        from .guard_thinking_filter import strip_reasoning_chain
+                    except ImportError:
+                        from guard_thinking_filter import strip_reasoning_chain
+                    _hit, _removed = strip_reasoning_chain(result.chain, _reasoning)
+                    if _hit:
+                        emit(event, "thinking_filter", "success",
+                             source="reasoning_diff", removed=_removed)
+            except Exception as exc:
+                self.logger.warning("[LivingHello] reasoning 差分失败: %r", exc)
             self.segments.prepare(event, result)
             await self.expression.decorate(event, result)
             emit(event, "expression", "success" if takeover(self.config) else "disabled",
                  count=len(result.chain or []))
             delivery.arm(event, result)
+            self._reply_health().arm(event, result)
         # 每条气泡仍需复核原有的新消息撤销/有效期保护。
         if self._judged_event(event) and self._gate_mode() == "enforce":
             event.set_extra("_at_guard_send_check", lambda: self._stale_reason(
@@ -2084,7 +2602,19 @@ class Main(Star):
         if not self._judged_event(event):
             return
         group_key = self._group_key(event)
+        if self._context_advanced(event, group_key):
+            event.set_extra("_at_guard_context_advanced", True)
         reason = event.get_extra("_at_guard_delivery_blocked") or self._stale_reason(event, group_key)
+        self.logger.warning(
+            "[LH-probe] recheck reason=%r blocked=%r judged_rev=%r cur_rev=%r "
+            "timing=%r chain=%d",
+            reason,
+            event.get_extra("_at_guard_delivery_blocked"),
+            event.get_extra("_at_guard_judged_revision"),
+            self.context_revision.get(group_key, 0),
+            self._reply_timing(event),
+            len(getattr(event.get_result(), "chain", None) or []),
+        )
         if reason:
             result = event.get_result()
             if result is not None:
@@ -2105,10 +2635,6 @@ class Main(Star):
     @filter.after_message_sent()
     async def track_sent_message(self, event: AstrMessageEvent):
         touch(event, "send")
-        if event.get_extra("_livinghello_reply_health") and not event.get_extra(
-                "_at_guard_send_patched", False):
-            self._reply_health().sent(event, event.get_result(), True)
-        await self._reply_health().finish(event)
         if not event.get_extra("_at_guard_send_patched", False):
             result = event.get_result()
             if getattr(result, "chain", None):
@@ -2116,7 +2642,7 @@ class Main(Star):
                 service.increment(event, "sent_packets")
                 emit(event, "send", "success", source="host_after_send",
                      types=[type(c).__name__ for c in result.chain])
-        if event.get_extra("_livinghello_agent_done") and not event.get_extra("_at_guard_delivery_blocked"):
+        if not event.get_extra("_livinghello_reply_health") and event.get_extra("_livinghello_agent_done") and not event.get_extra("_at_guard_delivery_blocked"):
             plan = event.get_extra("_at_guard_delivery_plan") or {}
             if (not event.get_extra("_at_guard_send_patched") or event.get_extra(
                     "_livinghello_final_packet_sent")) and not plan.get("failed"):
@@ -2186,8 +2712,13 @@ class Main(Star):
             return
         event.set_extra("_livinghello_bypass_recorded", True)
         meta = self._message_meta(event)
-        meta["explicit_call"] = reason in {"at_call", "wake"}
+        meta["explicit_call"] = reason in {"at_call", "wake", "gray_explicit"}
         meta["text"] = (event.message_str or "").strip()[:800]
+        # 旁路（@直通/私聊/@唤醒）也要留下判定对象，详情里才有据可查。
+        self._trace().judged_input(event, meta)
+        # 直通同样要生成回复，主模型慢时也要能给一句垫场。
+        event.set_extra("_at_guard_bypass_reply", True)
+        self._arm_early_ack(event)
         observation_rules = list(event.get_extra("_at_guard_observation_rules", []) or [])
         chat_data = {"recent_messages_old_to_new": [], "current_message": meta}
         if self._gate_mode() == "shadow":
@@ -2200,7 +2731,8 @@ class Main(Star):
                if key in {"session_id", "session_type", "group_id", "private_qq"}},
             **self._trace(event).identity(event),
             "mode": self._gate_mode(), "src": "bypass", "action": "reply", "reason": reason,
-            "score": 0, "th": self.engine.threshold(), "gen_skipped": False,
+            "score": None if reason == "gray_explicit" else 0,
+            "th": self.engine.threshold(), "gen_skipped": False,
             "chat_data": chat_data,
         })
         emit(event, "decision", "skipped", calls=0, reason=reason)
@@ -2210,8 +2742,12 @@ class Main(Star):
         age = max(0.0, time.monotonic() - float(started)) if started is not None else 0.0
         preparation = 0.0
         try:
-            if self.config.get("gate_congling_prepare_compat", True) is True:
-                raw = event.get_extra("congling:wake_prepare_seconds")
+            if (self.config.get("integrate_livingemotion_catchup", True) is True
+                    and self.config.get("gate_congling_prepare_compat", True) is True):
+                # 爬楼已由 livingemotion 提供；旧 congling 字段仅作兼容兜底。
+                raw = event.get_extra("livingemotion:wake_prepare_seconds")
+                if raw is None:
+                    raw = event.get_extra("congling:wake_prepare_seconds")
                 if not isinstance(raw, bool):
                     value = float(raw or 0)
                     # 不接受超过事件实际年龄的计时；错误值不能把生成期限无限推后。
@@ -2219,27 +2755,56 @@ class Main(Star):
                         preparation = value
         except (TypeError, ValueError, OverflowError):
             pass
-        # 图片理解是准备耗时；不应耗尽正文回复的有效期。
+        # 判定与输入理解（看图/转写/记忆检索）属于「准备」：它们只决定要不要回、
+        # 以及看懂附件，不是正文答非所问的来源，必须从有效期里扣掉，否则
+        # 一次正常的看图 + 判定 + 记忆检索就会把回复判过期。
+        prepared = 0.0
+        for key in ("_at_guard_judge_seconds", "_at_guard_understand_seconds",
+                    "_at_guard_memory_seconds"):
+            try:
+                value = float(event.get_extra(key, 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(value) and value > 0:
+                prepared += value
+        preparation += min(prepared, max(0.0, age))
+        # 工具耗时（生图、检索、MCP 调用）不是答非所问的来源，一律从有效期扣除。
+        tool_seconds = 0.0
         try:
-            understood = float(event.get_extra("_at_guard_understand_seconds", 0) or 0)
-            if math.isfinite(understood) and understood > 0:
-                preparation += min(understood, age)
+            raw_tool = float(event.get_extra("_at_guard_tool_seconds", 0) or 0)
+            if math.isfinite(raw_tool) and 0 <= raw_tool <= age:
+                tool_seconds = raw_tool
         except (TypeError, ValueError, OverflowError):
-            pass
+            tool_seconds = 0.0
+        typing_seconds = min(max(0, age - preparation - tool_seconds), float(
+            event.get_extra("_at_guard_typing_seconds", 0) or 0))
         return {
             "elapsed_seconds": age,
             "preparation_seconds": preparation,
-            "typing_seconds": min(max(0, age - preparation), float(event.get_extra(
-                "_at_guard_typing_seconds", 0) or 0)),
+            "tool_seconds": tool_seconds,
+            "typing_seconds": typing_seconds,
             "retry_seconds": min(age, max(0, float(event.get_extra(
                 "_livinghello_retry_seconds", 0) or 0))),
-            # 仅扣除本功能实测的失败请求/退避；成功生成仍受原有效期保护。
-            "effective_seconds": max(0, age - preparation - float(event.get_extra(
-                "_at_guard_typing_seconds", 0) or 0) - min(age, max(0, float(
-                    event.get_extra("_livinghello_retry_seconds", 0) or 0)))),
+            # 保留线上工具/打字耗时扣除，并只追加实测失败请求与等待耗时。
+            "effective_seconds": max(0, age - preparation - tool_seconds - typing_seconds
+                - min(age, max(0, float(event.get_extra("_livinghello_retry_seconds", 0) or 0)))),
         }
 
+    def _context_advanced(self, event: AstrMessageEvent, group_key: str) -> bool:
+        """判定之后群里是否又有人说话（排除自家气泡）。"""
+        revision = event.get_extra("_at_guard_judged_revision")
+        if revision is None:
+            return False
+        # 自己发出的垫场句会推高 revision，那不是「别人插话」，补回去再比。
+        bumps = int(event.get_extra("_at_guard_early_ack_bumps", 0) or 0)
+        return revision + bumps != self.context_revision.get(group_key, 0)
+
     def _stale_reason(self, event: AstrMessageEvent, group_key: str) -> str:
+        """只返回「必须拦下」的原因：消息已撤回、或正文已经明显过期。
+
+        群里后来有人说话不算「必须拦」——那只是上下文刷新，
+        这一轮的判断结论仍然成立，照常发出即可；新消息由下一轮判定重新理解。
+        """
         if self._delivery().recalled(event):
             return "message_recalled"
         started = event.get_extra("_at_guard_recorded_at")
@@ -2249,13 +2814,6 @@ class Main(Star):
             and self._reply_timing(event)["effective_seconds"] > self.engine.reply_max_age()
         ):
             return "message_expired"
-        revision = event.get_extra("_at_guard_judged_revision")
-        advanced = revision is not None and revision != self.context_revision.get(group_key, 0)
-        health = event.get_extra("_livinghello_reply_health") or {}
-        generated = health.get("model_done") or event.get_extra("_livinghello_response_ready")
-        # 生成前继续阻止旧上下文；群聊已生成的合法回复不因后来有人插话而取消。
-        if advanced and (event.get_message_type() != MessageType.GROUP_MESSAGE or not generated):
-            return "context_changed"
         return ""
 
     def _fresh_bot_line(self, group_key: str) -> str:
@@ -2263,6 +2821,14 @@ class Main(Star):
         if stamp is None or not self.engine.context_age_allowed(time.monotonic() - stamp):
             return ""
         return self.last_bot_line.get(group_key, "")
+
+    def _judged_snapshot(self, event: AstrMessageEvent) -> dict:
+        """判定快照：消息元数据 + 正文，供详情展示「判定的是哪一条」。"""
+        data = dict(self._message_meta(event))
+        data["text"] = (getattr(event, "message_str", "") or "").strip()[:800]
+        if not data["text"] and data.get("unread_media"):
+            data["text"] = "[媒体消息，内容未解析]"
+        return data
 
     def _message_meta(self, event: AstrMessageEvent) -> dict:
         def read(name, default=""):
@@ -2273,11 +2839,21 @@ class Main(Star):
         getter = getattr(event, "get_messages", None)
         for component in getter() if callable(getter) else []:
             if isinstance(component, Reply):
+                if not self._policy_source_readable(event_source(event), component.sender_id,
+                                                    getattr(component, "group_id", None)):
+                    continue
+                if self._policy().black_active:
+                    # 结构外的扁平引用可能混有嵌套作者；流水只记录已核验原作者的顶层文字。
+                    quote_text = "\n".join(
+                        str(getattr(item, "text", "")) for item in (component.chain or [])[:10]
+                        if isinstance(item, Plain))[:300] or "[引用内容未展开]"
+                else:
+                    quote_text = str(component.message_str or component.text or "")[:300]
                 replies.append({
                     "message_id": str(component.id),
                     "sender_id": str(component.sender_id or ""),
                     "sender_name": str(component.sender_nickname or "")[:50],
-                    "text": str(component.message_str or component.text or "")[:300],
+                    "text": quote_text,
                     "sent_at": component.time or None,
                     "unread_media": [
                         type(item).__name__ for item in (component.chain or [])[:10]
@@ -2289,6 +2865,9 @@ class Main(Star):
         stamp = event.get_extra("_at_guard_recorded_at")
         group_id = read("get_group_id")
         return {
+            "platform": event_source(event)["platform"],
+            "message_policy_revision": self._policy().revision,
+            "explicit_call": event.get_extra("_livinghello_policy_explicit", False),
             "session_id": str(getattr(event, "unified_msg_origin", "") or ""),
             "session_type": "group" if group_id else "private",
             "group_id": group_id,
@@ -2304,6 +2883,9 @@ class Main(Star):
         }
 
     def _record_incoming(self, event: AstrMessageEvent, group_key: str):
+        policy = self._event_policy(event)
+        if not policy["read_allowed"]:
+            return
         self._trace(event)
         now = event.get_extra("_at_guard_received_at", time.monotonic())
         event.set_extra("_at_guard_recorded_at", now)
@@ -2314,11 +2896,16 @@ class Main(Star):
         self.recent_messages[group_key].append((now, json.dumps(data, ensure_ascii=False)))
         if not hasattr(self, "recent_images"):
             self.recent_images = defaultdict(lambda: deque(maxlen=30))
-        self.recent_images[group_key].append((now, self._event_images(event)))
-        self.context_revision[group_key] += 1
+        self.recent_images[group_key].append((now, self._event_images(event) if policy["reply_allowed"] else []))
+        # 自家回复已经在发送确认时结算；回环不能再次计作别人插话。
+        sender_id, self_id = str(event.get_sender_id() or ""), str(event.get_self_id() or "")
+        if not (sender_id and self_id and sender_id == self_id):
+            self.context_revision[group_key] += 1
 
     def _event_images(self, event):
         """只从平台Image组件取图片；不扫描用户文字里的URL，也不记录URL到流水。"""
+        if self._policy().active and not self._event_policy(event)["reply_allowed"]:
+            return []
         getter = getattr(event, "get_messages", None)
         sender = getattr(event, "get_sender_id", lambda: "")()
         found = []
@@ -2343,12 +2930,24 @@ class Main(Star):
             add(component, "current", sender)
         for component in components[:30]:
             if isinstance(component, Reply):
+                if not self._policy_source_readable(event_source(event), component.sender_id,
+                                                    getattr(component, "group_id", None)):
+                    continue
                 age = max(0, time.time() - float(component.time)) if component.time else 0
                 if not self.engine.context_age_allowed(age):
                     continue
                 for item in (component.chain or [])[:10]:
                     add(item, "reply", component.sender_id, component.id, age)
         return found
+
+    def _policy_source_readable(self, source, sender_id=None, group_id=None):
+        checked = dict(source)
+        if sender_id is not None:
+            checked["sender_id"] = str(sender_id or "")
+        if group_id is not None:
+            checked["group_id"] = str(group_id or "")
+            checked["session_kind"] = "group" if group_id else "private"
+        return self._policy().check(**checked)["read_allowed"]
 
     def _gate_images(self, event, group_key):
         result = self._event_images(event)
@@ -2378,27 +2977,39 @@ class Main(Star):
                                    "age_seconds": str(round(max(0, now - stamp), 1))})
         return result[:3]
 
+    async def _livingemotion_block_reason(self, event):
+        if not coupling_enabled(self.context, self.config, "livingemotion"):
+            return ""
+        targets = self._mention_targets(event)
+        for row in event.get_extra("_at_guard_fragments", []):
+            targets.update(row["mention_targets"])
+        explicit = (str(event.get_self_id()) in targets
+                    or getattr(event, "is_at_or_wake_command", False))
+        return await availability_reason(
+            self.context, event, unsolicited=bool(event.get_group_id()) and not explicit,
+            config=self.config,
+        )
+
     async def _recall_gate_memory(self, event: AstrMessageEvent, req=None) -> list[str]:
-        if congling_for(self.context, event):
-            # 复用本次请求的原生补充，不另查一次记忆，也不重复注入主回复。
-            return [str(getattr(part, "text", ""))[:2000] for part in
-                    (getattr(req, "extra_user_content_parts", []) or [])
-                    if "congling:" in str(getattr(part, "text", ""))][:4]
+        # 情绪只从 LivingEmotion 读取，禁用/不可用时不回退到从绫。
+        emotion_lines = await state_lines(self.context, event, req, config=self.config)
+        if not coupling_enabled(self.context, self.config, "livingmemory"):
+            return emotion_lines
         metadata = self.context.get_registered_star("astrbot_plugin_livingmemory")
         if metadata is None or not metadata.activated or metadata.star_cls is None:
-            return []
+            return emotion_lines
         instance = metadata.star_cls
         initializer = getattr(instance, "initializer", None)
         engine = getattr(initializer, "memory_engine", None)
         if engine is None:
-            return []
+            return emotion_lines
         # 使用记忆插件自己的身份解析器，避免另造人格/群标识映射。
         package = type(instance).__module__.rsplit(".", 1)[0]
         utils = importlib.import_module(f"{package}.core.utils")
         persona_id = await utils.get_persona_id(self.context, event)
         session_id = str(event.unified_msg_origin or "")
         if not persona_id or not session_id:
-            return []  # 身份不明时绝不能退到全库检索。
+            return emotion_lines  # 身份不明时绝不能退到全库检索。
         # 请求局部采集器随async任务传播，避免跨会话或并发检索串用耗时。
         try:
             timing = importlib.import_module(f"{package}.core.retrieval.request_timing")
@@ -2407,6 +3018,10 @@ class Main(Star):
         if not callable(getattr(timing, "capture", None)):
             timing = None
         async def search():
+            current = self.context.get_registered_star("astrbot_plugin_livingmemory")
+            if (not current or current.star_cls is not instance
+                    or not coupling_enabled(self.context, self.config, "livingmemory")):
+                return []  # 身份解析等待期间关闭接入，不再启动检索。
             # 阶段 1：优先走 LivingMemory 的统一身份入口（person 范围 + 旧会话双读
             # + 受众过滤），不再由 at_guard 自己拼 session_id。
             unified = getattr(instance, "search_memories_for_event", None)
@@ -2430,6 +3045,16 @@ class Main(Star):
                 finally:
                     event.set_extra("_at_guard_memory_timings",
                                     {"retrieval_collected": True, **metrics})
+        if (not coupling_enabled(self.context, self.config, "livingmemory")
+                or self.context.get_registered_star("astrbot_plugin_livingmemory").star_cls is not instance):
+            return emotion_lines  # 等待期间停用或重载，不使用旧实例结果。
+        validator = getattr(instance, "validate_identity_results", None)
+        if callable(validator):
+            results = await validator(results)
+        current = self.context.get_registered_star("astrbot_plugin_livingmemory")
+        if (not current or current.star_cls is not instance
+                or not coupling_enabled(self.context, self.config, "livingmemory")):
+            return emotion_lines
         lines = []
         for result in results:
             meta = result.metadata or {}
@@ -2448,7 +3073,7 @@ class Main(Star):
             content = str(result.content or "").strip()
             if content:
                 lines.append(content[:400])
-        return lines[:3]
+        return emotion_lines + lines[:3]
 
     def _starts_with_bot_name(self, text: str) -> bool:
         normalized = text.lstrip()
@@ -2614,7 +3239,7 @@ class Main(Star):
         allowed = int(stats.get("allowed", 0))
         blocked = int(stats.get("blocked", 0))
         threshold = self._participation_threshold()
-        dist = self.engine.score_distribution(self.engine.provider_label())
+        dist = self.engine.score_distribution(self.engine.decision_model_label())
         quantiles = dist.get("quantiles", {}) or {}
         q_text = (
             f"P50 {quantiles.get('p50')} / P75 {quantiles.get('p75')} / P90 {quantiles.get('p90')}"
@@ -2676,6 +3301,27 @@ class Main(Star):
             if timestamp >= since and text.strip() and not text.startswith(BOT_LINE_PREFIX)
         ]
 
+    @staticmethod
+    def _compact_row(raw: str) -> str:
+        """判定只需要「谁说了什么、有没有图」。
+
+        整条 MessageMeta 里的 session_id / message_policy_revision / bot_names /
+        group_id 每条都重复，一条就能撑到 600 字符，2400 的流水预算只装得下一条，
+        模型等于看不到群聊。这里只保留判定真正用得上的字段。
+        """
+        try:
+            meta = json.loads(raw)
+        except (ValueError, TypeError):
+            return raw or ""
+        if not isinstance(meta, dict):
+            return raw or ""
+        keep = {}
+        for key in ("sender_name", "text", "has_images", "unread_media"):
+            value = meta.get(key)
+            if value not in (None, "", [], False):
+                keep[key] = value[:200] if isinstance(value, str) else value
+        return json.dumps(keep, ensure_ascii=False) if keep else (raw or "")
+
     def _context_rows(self, group_key, max_messages, exclude_timestamp=None):
         if max_messages <= 0:
             return []
@@ -2686,8 +3332,18 @@ class Main(Star):
         newest_first = []
         budget = 2400
         for stamp, raw in reversed(rows[-max_messages:]):
+            if self._policy().black_active:
+                try:
+                    meta = json.loads(raw)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(meta, dict) or not meta.get("platform"):
+                    continue
+                if not self._policy_source_readable({**meta, "session_kind": meta.get("session_type", "")}):
+                    continue
+            # 先精简再转义：整条 JSON 进流水会把预算吃光，后面几条全被挤掉。
             line = f"[{max(0, int(now - stamp))}秒前] " + html.escape(
-                " ".join((raw or "").split())
+                " ".join(self._compact_row(raw).split())
             )[:600]
             if not line:
                 continue

@@ -16,6 +16,29 @@ from typing import Any, Callable
 
 
 COOLDOWN_SECONDS = 10 * 60
+# 偶发抖动（超时、限流、5xx）不值得冻住十分钟；真正需要人看的故障才用长冷却。
+SHORT_COOLDOWN_SECONDS = 2 * 60
+_SHORT_COOLDOWN_CATEGORIES = frozenset({
+    "timeout",
+    "connection_error",
+    "http_429",
+    "http_5xx",
+    "empty_response",
+    "protocol_error",
+})
+
+
+def cooldown_for(category: str, *, short: float | None = None,
+                 long: float | None = None) -> float:
+    """按故障类别给出冷却秒数：可恢复类用短冷却，其余用长冷却。"""
+    short_value = SHORT_COOLDOWN_SECONDS if short is None else float(short)
+    long_value = COOLDOWN_SECONDS if long is None else float(long)
+    key = str(category or "").strip().lower()
+    if key in _SHORT_COOLDOWN_CATEGORIES:
+        return max(0.0, short_value)
+    return max(0.0, long_value)
+
+
 SCHEMA_VERSION = 2
 MAX_HISTORY = 32
 
@@ -135,6 +158,28 @@ FAILURE_CATEGORY_LABELS = {
 }
 
 
+_HTTP_STATUS_IN_TEXT = re.compile(
+    r"(?:HTTP|status[ _]?code)\s*[=:]?\s*([1-5]\d{2})", re.IGNORECASE
+)
+
+
+def _status_from_text(text: str) -> int | None:
+    """从被包装过的异常文案里取回 HTTP 状态码。
+
+    多上游/中转插件常把上游异常裹成裸 RuntimeError 再抛出，原始异常既不在
+    __cause__ 也不在 __context__ 上，只能靠文案里的 "RateLimitError (HTTP 429)"
+    这类片段识别，否则限流会被当成无法归类的未知错误。
+    """
+    for match in _HTTP_STATUS_IN_TEXT.finditer(text or ""):
+        try:
+            status = int(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if 100 <= status <= 599:
+            return status
+    return None
+
+
 def _http_status(exc: BaseException) -> int | None:
     for candidate in _exception_chain(exc):
         value = getattr(candidate, "status_code", None)
@@ -149,7 +194,7 @@ def _http_status(exc: BaseException) -> int | None:
             continue
         if 100 <= status <= 599:
             return status
-    return None
+    return _status_from_text(str(exc))
 
 
 def _exception_chain(exc: BaseException):
@@ -260,6 +305,19 @@ def classify_classifier_failure(
         ))
         for name in names
     ) or any(isinstance(item, (KeyError, ValueError)) for item in chain):
+        return ClassifierFailure(
+            "configuration_error", FailureDisposition.NEEDS_ATTENTION
+        )
+
+    # 兜底：异常链已被上游插件抹平，只剩中文文案可读。
+    text = str(exception).lower()
+    if "超过总时限" in text or "route timeout" in text or "route_timeout" in text:
+        return ClassifierFailure("timeout", FailureDisposition.RECOVERABLE)
+    if "没有可调用的上游" in text or "无可用上游" in text or "no upstream" in text:
+        return ClassifierFailure("provider_missing", FailureDisposition.NEEDS_ATTENTION)
+    if "ratelimit" in text or "too many requests" in text:
+        return ClassifierFailure("http_429", FailureDisposition.RECOVERABLE)
+    if "badrequest" in text or "invalidrequest" in text:
         return ClassifierFailure(
             "configuration_error", FailureDisposition.NEEDS_ATTENTION
         )
@@ -786,6 +844,17 @@ class ClassifierOutageRecovery:
             OutageState.NEEDS_ATTENTION,
         }
 
+    def _cooldown_for(self, category: str) -> float:
+        """短路冷却时长；配置项缺失时退回内置默认。"""
+        try:
+            short = float(self.config.get(
+                "classifier_short_cooldown_seconds", SHORT_COOLDOWN_SECONDS))
+            long_value = float(self.config.get(
+                "classifier_cooldown_seconds", COOLDOWN_SECONDS))
+        except (TypeError, ValueError):
+            short, long_value = SHORT_COOLDOWN_SECONDS, COOLDOWN_SECONDS
+        return cooldown_for(category, short=short, long=long_value)
+
     def sync_enabled(self) -> OutageState:
         """配置保存后同步开关；进行中的故障不能被开关直接丢弃。"""
         if self.enabled:
@@ -822,7 +891,9 @@ class ClassifierOutageRecovery:
             state=target,
             error_category=error_category,
             provider_id=provider_id,
-            cooldown_until=now + COOLDOWN_SECONDS
+            cooldown_until=(
+                now + self._cooldown_for(error_category)
+            )
             if target is OutageState.COOLING
             else None,
             updated_at=now,
@@ -856,7 +927,7 @@ class ClassifierOutageRecovery:
             event.state = target
             event.updated_at = now
             if target is OutageState.COOLING:
-                event.cooldown_until = now + COOLDOWN_SECONDS
+                event.cooldown_until = now + self._cooldown_for(event.error_category)
             elif (
                 target is OutageState.RECOVERING
                 and event.recovery_window_end is None

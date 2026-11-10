@@ -1,16 +1,16 @@
-"""控制本次请求中的图片数量与内联编码大小。
+"""把交给主模型的图片压进上下文预算，避免 base64 原图撑爆 token。
 
-QQ/OneBot 的 base64 原图会扩大请求体，因此单独控制图片预算。
-图片 Token 的实际计费由提供商决定，不能把编码字符数等同于 Token。
+背景：QQ/OneBot 常把图片给成 base64，原样进 req.image_urls 时，
+上下文会被几十万 token 的 base64 文本占满（实测 4000x3000 原图约 28 万 token/张）。
 
 策略（三道闸，任何一道单独生效都能兜住）：
 - 张数闸：最多 MAX_IMAGES 张。超了先砍中间，保留「当前消息图」（头部）
   和「连续分片图」（尾部）——这两类才是本轮真正要看的。
 - 单张闸：单张 base64 超过 MAX_SINGLE_B64 直接丢，异常大图不冒险。
-- 总量闸：压缩后仍超 MAX_TOTAL_B64 就继续丢，限制已识别内联编码总量。
+- 总量闸：压缩后仍超 MAX_TOTAL_B64 就继续丢，保证再多的图也撑不爆请求。
 - http/file/本地路径原样保留：宿主自己取，不占 prompt 字节。
-- base64 / data URI 用 Pillow 的 draft() 尝试解码降采样，再压成 JPEG；
-  不同格式的解码内存开销仍取决于 Pillow。
+- base64 / data URI 用 Pillow 的 draft() 在解码阶段降采样，再压成 JPEG
+  （draft 不生成全尺寸位图，实测内存零增长；不加 draft 单张要 +46MB）
 """
 from __future__ import annotations
 

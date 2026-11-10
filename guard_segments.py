@@ -7,11 +7,19 @@ from astrbot.api.message_components import Plain
 from astrbot.core.agent.message import TextPart
 
 try:
+    from .guard_expression import forbid_phrases, strip_forbidden
     from .guard_native_reply import managed_options, second_period_regex
     from .guard_request_trace import emit
+    from .guard_thinking_filter import strip_thinking
 except ImportError:
+    from guard_expression import forbid_phrases, strip_forbidden
     from guard_native_reply import managed_options, second_period_regex
     from guard_request_trace import emit
+    from guard_thinking_filter import strip_thinking
+
+
+# 上一段已用这些标点收口时，中文排版不再补空格，避免出现「。 画面」。
+_SENTENCE_TAIL = "。．.！!？?~…，,、；;：:"
 
 
 class ReplySegments:
@@ -89,7 +97,14 @@ class ReplySegments:
             nonlocal pending
             if not pending:
                 return
-            text = pending
+            # 相邻 Plain 已合并成完整模型正文，此处是剥离 thinking 与口头禅禁忌的最佳时点。
+            text = strip_thinking(pending)[0]
+            text = strip_forbidden(
+                text, forbid_phrases(getattr(self.plugin, "config", None) or {})
+            )
+            pending = ""
+            if not text.strip():
+                return
             if not split:
                 if raw.get("only_llm_result") is not True and not self.structured(text):
                     text = re.sub(r"\s*\r?\n\s*", " ", text)
@@ -115,7 +130,13 @@ class ReplySegments:
                     continue
                 bucket = index * maximum // text_count
                 if compact and isinstance(compact[-1], Plain) and bucket == last_bucket:
-                    joiner = "\n\n" if self.structured(compact[-1].text + component.text) else " "
+                    previous = compact[-1].text.rstrip()
+                    if self.structured(previous + component.text):
+                        joiner = "\n\n"
+                    elif previous and previous[-1] in _SENTENCE_TAIL:
+                        joiner = ""
+                    else:
+                        joiner = " "
                     compact[-1].text += joiner + component.text
                 else:
                     compact.append(component)

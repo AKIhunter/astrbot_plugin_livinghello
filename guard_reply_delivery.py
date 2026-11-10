@@ -19,6 +19,10 @@ try:
 except ImportError:
     from guard_request_trace import emit, TRACE_KEY
     from guard_reply_health import KEY as HEALTH_KEY, send_accepted
+try:
+    from .guard_thinking_filter import strip_thinking_chain
+except ImportError:
+    from guard_thinking_filter import strip_thinking_chain
 
 OWNER_KEY = "_at_guard_reply_owner"
 RECALLED_KEY = "_at_guard_source_recalled"
@@ -291,12 +295,21 @@ class ReplyDelivery:
             task = asyncio.current_task()
             self.tasks.add(task)
             try:
+                _p = event.get_extra("_at_guard_delivery_plan") or {}
+                self.logger.warning(
+                    "[LH-probe] wrapped enter: chain=%d token_ok=%r plan_failed=%r "
+                    "attempted=%d",
+                    len(getattr(message, "chain", None) or []),
+                    getattr(message, "_at_guard_delivery_token", None) is _p.get("token"),
+                    bool(_p.get("failed")),
+                    len(_p.get("attempted") or {}),
+                )
                 async with lock:
                     if not await self.pause(event, 0):
                         return
                     health = event.get_extra(HEALTH_KEY)
                     if health:
-                        # 宿主 except 分支可能直接发送自定义错误提示，须在这里阻止群发。
+                        # 原生内部Agent在except里直接event.send，自定义错误文案也须拦截。
                         caller_frame = sys._getframe(1)
                         caller = caller_frame.f_code.co_filename.replace("\\", "/")
                         native_error = (sys.exc_info()[1] if caller.endswith(
@@ -316,6 +329,13 @@ class ReplyDelivery:
                     belongs = bool(plan and getattr(message, "_at_guard_delivery_token", None)
                                    is plan["token"])
                     if not belongs:
+                        expression = getattr(self, "expression", None)
+                        if expression and event.get_extra(OWNER_KEY) == "at_guard":
+                            # 失败提示等原生直发也可能带引用；只移除私聊当前消息头。
+                            chain = expression.private_headers(event, incoming)
+                            if chain != list(incoming):
+                                message = self.derive(message, chain)
+                                incoming = chain
                         if incoming:
                             event.set_extra("_livinghello_any_send_attempted", True)
                         try:
@@ -412,18 +432,38 @@ class ReplyDelivery:
                     async for chunk in stream:
                         if not await self.pause(event, 0):
                             return
+                        if getattr(chunk, "type", "") in {"break", "reasoning", "tool_call", "agent_stats"}:
+                            continue
                         template = chunk
                         chain.extend(getattr(chunk, "chain", []) or [])
                     if template is None or not chain:
                         return
                     full = self.derive(template, chain)
+                    # 流式 delta.content 里的思考段不会被 core 剥离，
+                    # 必须在合并成整段后、切段之前清掉，否则会被切成多条气泡发出。
+                    try:
+                        merged = list(getattr(full, 'chain', None) or [])
+                        before_len = sum(len(c.text) for c in merged
+                                        if isinstance(c, Plain))
+                        if strip_thinking_chain(merged):
+                            full.chain = merged
+                            after_len = sum(len(c.text) for c in merged
+                                           if isinstance(c, Plain))
+                            emit(event, 'thinking_filter', 'success',
+                                 removed=before_len - after_len)
+                            if not full.chain:
+                                return
+                    except Exception as exc:
+                        self.logger.warning(
+                            '[智能过滤] thinking 清洗失败: %r', exc)
                     health_row = event.get_extra(HEALTH_KEY)
                     if health_row and health_row["model_done"]:
+                        # 生成器完全耗尽之后才认领；工具直接发送不继承该标记。
                         full._livinghello_reply_token = health_row["token"]
                     if event.get_extra(OWNER_KEY) == "at_guard":
                         expression = getattr(self, "expression", None)
                         if expression:
-                            expression.clean_chain(full)
+                            expression.clean_chain(full, event)
                         if not full.chain:
                             return
                         plan = event.get_extra("_at_guard_delivery_plan")

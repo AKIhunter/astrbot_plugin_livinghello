@@ -430,7 +430,7 @@ class ReplyHealth:
                     await self.storage_call(self.store.save, dict(self.summary))
             return
         self.plugin.logger.warning(
-            "[LivingHello] 回复流程未确认完成: model_done=%r sent=%r failed=%r fault=%r "
+            "[LH-probe] health finish: model_done=%r sent=%r failed=%r fault=%r "
             "plan_failed=%r blocked=%r expected=%r",
             row["model_done"], row["sent"], row["failed"], row["fault"],
             bool(plan.get("failed")), blocked, row["expected"],
@@ -517,7 +517,7 @@ class ReplyHealth:
         if not platform_id or not re.fullmatch(r"[\w.-]{1,128}", platform_id):
             self.notification = "missing_platform"
             return 0
-        # 只在 QQ/OneBot 平台定位管理员私聊，不把 QQ 号映射为其他平台用户。
+        # 只在 QQ/OneBot 平台构造原生 QQ @，不把 QQ 号映射为其他平台用户。
         if event is not None:
             try:
                 kind = str(event.get_platform_name() or "").lower()
@@ -567,6 +567,27 @@ class ReplyHealth:
                 pass  # 未知发送保持本轮已认领，禁止自动重发。
         self.notification = "sent" if count == len(routes) else "send_unknown"
         return count
+
+    async def classifier_recovered(self, probe_started: float) -> bool:
+        """成功探测只恢复对应的旧判断故障，不覆盖更新故障或其他发送层故障。"""
+        if (self.closed or isinstance(probe_started, bool)
+                or not isinstance(probe_started, (int, float))
+                or not math.isfinite(probe_started)):
+            return False
+        async with self.state_lock:
+            failed_at = self.summary.get("failed_at")
+            if (self.summary.get("state") != "failed"
+                    or self.summary.get("layer") != "classifier"
+                    or not isinstance(failed_at, (int, float))
+                    or failed_at > probe_started):
+                return False
+            updated = {**self.summary, "state": "healthy",
+                       "recovered_at": self.clock(), "recovery_source": "classifier_probe"}
+            await self.storage_call(self.store.save, updated)
+            if self.store.health != "ready":
+                return False
+            self.summary = updated
+            return True
 
     def snapshot(self):
         return {**self.summary, "monitoring": len(self.active),

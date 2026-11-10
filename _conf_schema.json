@@ -1,34 +1,178 @@
 {
-  "reply_fallback_enabled": {"type":"bool","default":false,"description":"兜底回复（主模型失败重试）","hint":"仅已通过闸门的本地主模型请求：首次失败后最多重试5次，耗尽私聊管理员QQ，等待60秒再尝试一次。不会重放工具或重试发送；已输出片段、撤回、权限或上下文失效时停止。管理员设置和提醒限频与断线恢复共用，本开关独立生效。"},
-  "outage_notify_admin_qq": {"type":"list","default":[],"description":"异常提醒管理员QQ","hint":"留空使用AstrBot全局管理员。群聊异常只发管理员私聊，附来源群、消息摘录和请求编号。"},
-  "outage_notify_interval_minutes": {"type":"int","default":10,"description":"异常提醒最小间隔（分钟）","slider":{"min":1,"max":1440,"step":1},"hint":"提醒额度持久化，热重载不重置；最近判断仍记录每次异常。"},
-  "reply_health_timeout_seconds": {"type":"int","default":900,"description":"回复闭环超时（秒）","slider":{"min":60,"max":7200,"step":30}},
-  "outage_watch_classifier": {"type":"bool","default":true,"description":"判断模型异常提醒"},
-  "outage_watch_vision": {"type":"bool","default":true,"description":"判定看图模型异常提醒"},
-  "outage_watch_understand_image": {"type":"bool","default":true,"description":"图片理解模型异常提醒"},
-  "outage_watch_understand_voice": {"type":"bool","default":true,"description":"语音理解模型异常提醒"},
-  "outage_watch_main_model": {"type":"bool","default":true,"description":"主模型异常提醒"},
-  "outage_watch_tts": {"type":"bool","default":false,"description":"语音回复模型异常提醒"},
-  "outage_watch_image_gen": {"type":"bool","default":true,"description":"生图模型异常提醒"},
-  "understand_hard_timeout_seconds": {"type":"int","default":20,"description":"输入理解总超时（秒）","slider":{"min":3,"max":60,"step":1}},
-  "expression_takeover_enabled": {"type":"bool","default":true,"description":"启用回复方式管理","hint":"可独立使用，也可与从绫配套；只管理主回复的发送方式。从绫感知、人设、情绪与记忆按原生配置运行。"},
-  "reply_quote_enabled": {"type":"bool","default":true,"description":"引用当前消息","hint":"开启后首条正文必定引用有效原消息；不使用概率。"},
-  "reply_mention_enabled": {"type":"bool","default":false,"description":"@当前发送者","hint":"开启后群聊首条正文必定使用原生@；私聊或平台不支持时不伪造。"},
-  "reply_typing_enabled": {"type":"bool","default":false,"description":"模拟回复耗时"},
-  "reply_typing_chars_per_second": {"type":"float","default":2.5,"description":"模拟打字速度（字/秒）","slider":{"min":0.5,"max":20,"step":0.1}},
-  "reply_recall_group": {"type":"bool","default":false,"description":"群聊撤回消息不回复"},
-  "reply_recall_private": {"type":"bool","default":false,"description":"私聊撤回消息不回复"},
-  "expression_strip_emoji": {"type":"bool","default":true,"description":"清理文本Emoji和颜文字"},
-  "understand_expand_forward": {"type":"bool","default":true,"description":"展开合并转发"},
-  "understand_forward_max_nodes": {"type":"int","default":60,"description":"最多展开条数","slider":{"min":1,"max":300,"step":1}},
-  "understand_forward_max_depth": {"type":"int","default":2,"description":"转发最大层数","slider":{"min":0,"max":8,"step":1}},
-  "understand_forward_summary_threshold": {"type":"int","default":1200,"description":"转发摘要阈值","slider":{"min":100,"max":12000,"step":100}},
-  "understand_quote_depth": {"type":"int","default":3,"description":"引用链展开层数","slider":{"min":0,"max":8,"step":1}},
-  "understand_card_parse": {"type":"bool","default":true,"description":"解析卡片和小程序"},
-  "understand_image_enabled": {"type":"bool","default":true,"description":"图片理解"},
-  "understand_image_provider_id": {"type":"string","default":"","description":"图片理解模型","editor_mode":"select_provider"},
-  "understand_voice_enabled": {"type":"bool","default":false,"description":"语音转文字理解"},
-  "understand_voice_provider_id": {"type":"string","default":"","description":"语音理解模型","editor_mode":"select_provider"},
+  "reply_fallback_enabled": {
+    "type": "bool",
+    "default": false,
+    "description": "兜底回复（主模型失败重试）",
+    "hint": "仅已通过闸门的本地主模型请求：首次失败后最多重试5次，耗尽私聊管理员QQ，等待60秒再尝试一次。不会重放工具或重试发送；已输出片段、撤回、权限或上下文失效时停止。管理员设置和提醒限频与断线恢复共用，本开关独立生效。"
+  },
+  "message_blacklist_qq": {
+    "type": "list",
+    "default": [],
+    "description": "黑名单 QQ 号",
+    "hint": "不读取、不归档、不判断、不回复；同类号码不能同时存在于黑、白、灰名单。"
+  },
+  "message_blacklist_groups": {
+    "type": "list",
+    "default": [],
+    "description": "黑名单 QQ 群号",
+    "hint": "屏蔽整个群的消息及后续历史读取。"
+  },
+  "message_graylist_qq": {
+    "type": "list",
+    "default": [],
+    "description": "灰名单 QQ 号",
+    "hint": "只读背景；原生@机器人或以机器人称呼开头才取得回复资格。"
+  },
+  "message_graylist_groups": {
+    "type": "list",
+    "default": [],
+    "description": "灰名单 QQ 群号",
+    "hint": "群内普通消息静默；明确@或称呼唤醒例外。"
+  },
+  "message_whitelist_qq": {
+    "type": "list",
+    "default": [],
+    "description": "白名单 QQ 号",
+    "hint": "用户或群任一命中；填写任一白名单启用限制，两类都清空则关闭。"
+  },
+  "message_whitelist_groups": {
+    "type": "list",
+    "default": [],
+    "description": "白名单 QQ 群号",
+    "hint": "名单外只读背景，@、称呼、私聊及观察模式不能绕过。"
+  },
+  "expression_takeover_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "启用回复方式管理",
+    "hint": "可独立使用，也可与从绫配套。从绫提供感知和固定人设；动态情绪和记忆由功能耦合开关控制。"
+  },
+  "expression_private_reuse": {
+    "type": "bool",
+    "default": false,
+    "description": "私聊是否复用",
+    "hint": "默认关闭：私聊直接回复，不引用当前消息，也不复用本卡片的Emoji清理。开启后私聊沿用引用和清理设置；@发送者仅用于群聊。"
+  },
+  "reply_quote_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "引用当前消息",
+    "hint": "开启后首条正文必定引用有效原消息；不使用概率。"
+  },
+  "reply_mention_enabled": {
+    "type": "bool",
+    "default": false,
+    "description": "@当前发送者",
+    "hint": "开启后群聊首条正文必定使用原生@；私聊或平台不支持时不伪造。"
+  },
+  "reply_typing_enabled": {
+    "type": "bool",
+    "default": false,
+    "description": "模拟回复耗时"
+  },
+  "reply_typing_chars_per_second": {
+    "type": "float",
+    "default": 2.5,
+    "description": "模拟打字速度（字/秒）",
+    "slider": {
+      "min": 0.5,
+      "max": 20,
+      "step": 0.1
+    }
+  },
+  "reply_recall_group": {
+    "type": "bool",
+    "default": false,
+    "description": "群聊撤回消息不回复"
+  },
+  "reply_recall_private": {
+    "type": "bool",
+    "default": false,
+    "description": "私聊撤回消息不回复"
+  },
+  "expression_strip_emoji": {
+    "type": "bool",
+    "default": true,
+    "description": "清理文本Emoji和颜文字"
+  },
+  "expression_forbid_phrases": {
+    "type": "list",
+    "default": [],
+    "description": "口头禅禁忌",
+    "hint": "命中即从正文删除，长词优先；单条不超过20字，最多30条；代码块与表格内不处理，删除后收拢多余空白与重复标点。"
+  },
+  "understand_expand_forward": {
+    "type": "bool",
+    "default": true,
+    "description": "展开合并转发"
+  },
+  "understand_forward_max_nodes": {
+    "type": "int",
+    "default": 60,
+    "description": "最多展开条数",
+    "slider": {
+      "min": 1,
+      "max": 300,
+      "step": 1
+    }
+  },
+  "understand_forward_max_depth": {
+    "type": "int",
+    "default": 2,
+    "description": "转发最大层数",
+    "slider": {
+      "min": 0,
+      "max": 8,
+      "step": 1
+    }
+  },
+  "understand_forward_summary_threshold": {
+    "type": "int",
+    "default": 1200,
+    "description": "转发摘要阈值",
+    "slider": {
+      "min": 100,
+      "max": 12000,
+      "step": 100
+    }
+  },
+  "understand_quote_depth": {
+    "type": "int",
+    "default": 3,
+    "description": "引用链展开层数",
+    "slider": {
+      "min": 0,
+      "max": 8,
+      "step": 1
+    }
+  },
+  "understand_card_parse": {
+    "type": "bool",
+    "default": true,
+    "description": "解析卡片和小程序"
+  },
+  "understand_image_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "图片理解"
+  },
+  "understand_image_provider_id": {
+    "type": "string",
+    "default": "",
+    "description": "图片理解模型",
+    "editor_mode": "select_provider"
+  },
+  "understand_voice_enabled": {
+    "type": "bool",
+    "default": false,
+    "description": "语音转文字理解"
+  },
+  "understand_voice_provider_id": {
+    "type": "string",
+    "default": "",
+    "description": "语音理解模型",
+    "editor_mode": "select_provider"
+  },
   "gate_mode": {
     "description": "参与模式",
     "type": "string",
@@ -68,10 +212,40 @@
     "hint": "超时按静默处理（fail-closed），因为放过一条无关消息会在群里刷屏。实测热态 p50≈1.3s，但空闲后首包会摸到 2.5s 以上，低于 3s 会开始丢正常消息。"
   },
   "classifier_outage_recovery_enabled": {
-    "description": "文字判定断线恢复",
+    "description": "回复断线监测与恢复",
     "type": "bool",
     "default": false,
-    "hint": "默认关闭。开启后文字判定依赖中断会进入固定10分钟冷却和恢复流程；冷却时间不可编辑。"
+    "hint": "监测文字判定、主模型、最终发送和流程结束。最终回复未确认发出时仅@管理员；全局10分钟最多提醒一次，重载不重置。文字判定故障仍按10分钟冷却补读。"
+  },
+  "outage_notify_admin_qq": {
+    "description": "断线提醒管理员 QQ",
+    "type": "list",
+    "default": [],
+    "hint": "填写被指定接收断线提醒的管理员QQ号，最多20个。留空使用AstrBot全局管理员中的有效QQ号；不会@当前普通用户或全体成员。"
+  },
+  "reply_health_timeout_seconds": {
+    "description": "回复流程最长等待（秒）",
+    "type": "int",
+    "default": 900,
+    "hint": "范围60-7200秒。超时仍无最终闭环证据时记录未知并提醒，不取消正在执行的主模型。正常流程结束会立即检查，无需等到超时。"
+  },
+  "reasoning_retry_enabled": {
+    "description": "空正文自动补答",
+    "type": "bool",
+    "default": true,
+    "hint": "主模型只返回思考、没有可发送正文时，按原请求换关闭思考的模型再补一次。只补一次，补不到仍按原流程记录未送达。"
+  },
+  "reasoning_retry_provider_id": {
+    "description": "补答使用的模型",
+    "type": "string",
+    "default": "deepseek/deepseek-flash-quiet",
+    "hint": "留空使用 deepseek/deepseek-flash-quiet。必须指向已关闭思考的模型，否则可能再次只返回思考。"
+  },
+  "reasoning_retry_timeout_seconds": {
+    "description": "补答超时（秒）",
+    "type": "int",
+    "default": 120,
+    "hint": "范围10-300秒。补答会重放原请求上下文，超时视为补答失败，不阻断原响应流程。"
   },
   "vision_provider_id": {
     "description": "需要看图时的多模态小模型",
@@ -147,13 +321,12 @@
     "description": "自主回复机会有效期（秒）",
     "type": "float",
     "default": 30,
-    "hint": "普通自主回复的等待、判定、生成计入有效期；开启从绫配套且从绫上报实际爬楼准备秒数时，扣除该段耗时。正文超时或出现新消息仍取消；显式呼叫不受此限制。范围5-120秒。"
-  },
-  "gate_congling_prepare_compat": {
-    "description": "适配从绫爬楼准备耗时",
-    "type": "bool",
-    "default": true,
-    "hint": "默认开：扣除新版congling在当前事件上报的实际爬楼/补课准备耗时，防止读完历史后当前答复立即过期。无congling、旧版未上报或计时无效时不扣除。关闭按原总年龄检查。新消息撤销、正文超时仍保留；需congling人格钩子在at_guard判定之后执行。"
+    "hint": "普通自主回复的等待、判定、生成计入有效期。正文超时或出现新消息仍取消；显式呼叫不受此限制。范围5-120秒。",
+    "slider": {
+      "min": 5,
+      "max": 120,
+      "step": 1
+    }
   },
   "gate_memory_timeout_seconds": {
     "description": "背景记忆检索超时（秒）",
@@ -258,5 +431,140 @@
       "step": 10
     },
     "hint": "同一群内完全相同的消息在此时间内只回复一次；设为 0 关闭。"
+  },
+  "integrate_livingemotion_catchup": {
+    "type": "bool",
+    "default": true,
+    "description": "启用 LivingEmotion 爬楼配合：醒来窗口读取睡眠期未读时，把爬楼耗时从回复有效期里扣除。",
+    "hint": "只影响本插件的时限预留；爬楼本身由 LivingEmotion 独立运行。"
+  },
+  "outage_watch_classifier": {
+    "type": "bool",
+    "default": true,
+    "description": "判断模型出错时提醒管理员",
+    "hint": "负责文字判定的小模型；属于断线恢复的一部分，总开关关闭时不提醒。"
+  },
+  "outage_watch_vision": {
+    "type": "bool",
+    "default": true,
+    "description": "判定看图模型出错时提醒管理员",
+    "hint": "判定阶段用来读图的模型；准备阶段失败也归入这一项。"
+  },
+  "outage_watch_understand_image": {
+    "type": "bool",
+    "default": true,
+    "description": "图片理解模型出错时提醒管理员",
+    "hint": "回复前理解图片内容用的模型，超时或异常都会提醒。"
+  },
+  "outage_watch_understand_voice": {
+    "type": "bool",
+    "default": true,
+    "description": "语音转写模型出错时提醒管理员",
+    "hint": "把语音转成文字用的模型；转写失败时提示模型不要猜测内容。"
+  },
+  "outage_watch_main_model": {
+    "type": "bool",
+    "default": true,
+    "description": "主对话模型出错时提醒管理员",
+    "hint": "最终没拿到回复内容时提醒；只影响提醒，不影响判定。"
+  },
+  "outage_watch_tts": {
+    "type": "bool",
+    "default": false,
+    "description": "语音回复模型异常时提醒（间接感知）",
+    "hint": "语音由AstrBot宿主合成，本插件拿不到失败回调，只能按「语音开启但本轮没发出音频」推断，可能误报，默认关闭。"
+  },
+  "outage_watch_image_gen": {
+    "type": "bool",
+    "default": true,
+    "description": "AI 生图模型出错时提醒管理员",
+    "hint": "接口异常或超时会提醒；当日额度用尽属于产品限制，不提醒。"
+  },
+  "outage_notify_interval_minutes": {
+    "type": "int",
+    "default": 10,
+    "description": "两次提醒的最小间隔（分钟）",
+    "hint": "范围1-1440分钟。间隔内多个模型先后出错只提醒一次，超过后再次出错才提醒。"
+  },
+  "classifier_short_cooldown_seconds": {
+    "type": "int",
+    "description": "偶发故障冷却（秒）",
+    "hint": "超时、限流、5xx 这类偶发抖动的冷却时长。原来所有故障统一冷却 10 分钟，一次 5 秒超时就会让所有群静默十分钟。建议 90–180。",
+    "default": 120
+  },
+  "classifier_cooldown_seconds": {
+    "type": "int",
+    "description": "需人工故障冷却（秒）",
+    "hint": "认证失败、模型缺失、配置错误这类需要人工介入的故障冷却时长。默认 600 秒（10 分钟）。",
+    "default": 600
+  },
+  "gate_upstream_fanout_enabled": {
+    "type": "bool",
+    "description": "判定按上游轮转",
+    "hint": "开启后，判定模型走自动路由时会对每个上游单独设短超时，谁先给出结果就用谁。关闭后回到原行为：等路由自己切换上游（单上游超时 45 秒，判定等不起）。",
+    "default": true
+  },
+  "gate_upstream_try_timeout_seconds": {
+    "type": "float",
+    "description": "单上游尝试超时（秒）",
+    "hint": "轮转时每个上游最多等多久，超时就换下一个。默认 3 秒；总耗时仍受「判定总超时」约束。",
+    "default": 3.0
+  },
+  "reply_early_ack_seconds": {
+    "type": "int",
+    "description": "慢请求先回一句（秒，0关闭）",
+    "hint": "只有「已判定要回、且生成卡了这么久还没结果」才发一句。设 0 关闭。正常速度的请求完全不受影响。",
+    "default": 20
+  },
+  "reply_early_ack_texts": {
+    "type": "list",
+    "description": "垫场句（多条按分钟轮换）",
+    "hint": "每行一条，到点还没出结果时发一条。",
+    "default": [
+      "稍等，我想一下。",
+      "我看一下，马上说。",
+      "等一下，我确认下。"
+    ]
+  },
+  "classifier_needs_attention_retry_seconds": {
+    "type": "int",
+    "description": "故障重探间隔（秒）",
+    "hint": "判定模型故障进入「待处理」后，每隔多久自动重探一次。设为 0 表示不自动重探（旧行为：一直静默到手动处理）。",
+    "default": 300
+  },
+  "classifier_outage_self_heal_seconds": {
+    "type": "int",
+    "description": "故障自愈放行（秒）",
+    "hint": "故障持续超过这个时长仍然没恢复时，本插件放弃拦截、放行判断，避免一个上游拖死所有会话。设为 0 关闭。",
+    "default": 1800
+  },
+  "understand_hard_timeout_seconds": {
+    "type": "int",
+    "description": "图片理解总预算（秒）",
+    "hint": "单条媒体的「解析 + 理解」合计上限，超时即判失败并让模型不要猜图。原来只靠 asyncio 超时，事件循环被占住时会失效（实测 12 秒配置跑成 70 秒）。",
+    "default": 20,
+    "slider": {
+      "min": 3,
+      "max": 60,
+      "step": 1
+    }
+  },
+  "reply_early_ack_cooldown_seconds": {
+    "type": "int",
+    "description": "垫场句每群冷却（秒）",
+    "hint": "同一个群两次垫场的最小间隔，防止刷屏。默认 600 秒（10 分钟）。设 0 不限制。",
+    "default": 600
+  },
+  "coupling_livingemotion_enabled": {
+    "type": "bool",
+    "default": false,
+    "description": "接入 LivingEmotion",
+    "hint": "插件接入后可启用情绪、好感度和爬楼；仍遵循 LivingEmotion 自身的模式与模块配置。"
+  },
+  "coupling_livingmemory_enabled": {
+    "type": "bool",
+    "default": false,
+    "description": "接入 LivingMemory",
+    "hint": "插件与记忆引擎就绪后可启用记忆检索和主动回忆。"
   }
 }

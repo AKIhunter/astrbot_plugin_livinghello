@@ -36,7 +36,8 @@ def router_connections(context):
             continue
         pid = f"{parent}:upstream_{int(slot)}"
         result[pid] = dict(id=pid, parent=parent,
-                          display=str(raw.get("name") or f"上游 {slot}").strip(),
+                          display=str(raw.get("name") or raw.get("model")
+                                      or f"上游 {slot}").strip(),
                           model=model, api_type=str(raw.get("api_type") or "chat").lower(),
                           api_base=base, key=[key])
     return result

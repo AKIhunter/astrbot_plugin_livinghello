@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import hashlib
 import html
 import inspect
 import json
@@ -23,14 +25,17 @@ from astrbot.api import logger
 from astrbot.api.star import Context
 from astrbot.api.web import error_response, json_response, request
 try:
+    from .guard_message_policy import FIELDS as MESSAGE_POLICY_FIELDS, validate_policy_config
     from .guard_media import image_target
     from .guard_expression_help import HELP as EXPRESSION_HELP
-    from .guard_engine import GATE_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT
+    from .guard_engine import GATE_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT, GateEngine, Decision
+    from .guard_probe_input import parse_probe, ProbeInputError
     from .guard_understanding import audio_capable
     from .guard_native_reply import NativeReply, NativeReplyError
     from .guard_native_settings import NativeSettings
     from .guard_image_settings import ImageSettings
     from .guard_flow import build_flow
+    from .guard_coupling import snapshot as coupling_snapshot, SPECS as COUPLING_SPECS
     from .guard_classifier_outage import (
         COOLDOWN_SECONDS,
         ClassifierOutageRecovery,
@@ -38,14 +43,17 @@ try:
         OutageState,
     )
 except ImportError:
+    from guard_message_policy import FIELDS as MESSAGE_POLICY_FIELDS, validate_policy_config
     from guard_media import image_target
     from guard_expression_help import HELP as EXPRESSION_HELP
-    from guard_engine import GATE_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT
+    from guard_engine import GATE_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT, GateEngine, Decision
+    from guard_probe_input import parse_probe, ProbeInputError
     from guard_understanding import audio_capable
     from guard_native_reply import NativeReply, NativeReplyError
     from guard_native_settings import NativeSettings
     from guard_image_settings import ImageSettings
     from guard_flow import build_flow
+    from guard_coupling import snapshot as coupling_snapshot, SPECS as COUPLING_SPECS
     from guard_classifier_outage import (
         COOLDOWN_SECONDS,
         ClassifierOutageRecovery,
@@ -53,19 +61,27 @@ except ImportError:
         OutageState,
     )
 
-PLUGIN_NAME = "astrbot_plugin_at_guard"
+PLUGIN_NAME = "astrbot_plugin_LivingHello"
 SCHEMA_PATH = Path(__file__).resolve().parent / "_conf_schema.json"
 
 # key -> (类型, 下限, 上限)。字符串型没有范围，单独处理。
 NUMERIC_FIELDS: dict[str, tuple[str, float, float]] = {
     "outage_notify_interval_minutes": ("int", 1, 1440),
-    "reply_health_timeout_seconds": ("int", 60, 7200),
     "participation_confidence_threshold": ("int", 0, 100),
     "classifier_timeout_seconds": ("float", 0.5, 8.0),
     "vision_timeout_seconds": ("float", 0.5, 12),
     "gate_image_cache_ttl_seconds": ("int", 0, 1800),
     "gate_main_fallback_timeout_seconds": ("float", 0.5, 12),
     "gate_total_timeout_seconds": ("float", 1, 25),
+    # 判定上游轮转与分级冷却（前缀派生管不到，需显式登记）。
+    "gate_upstream_try_timeout_seconds": ("float", 0.5, 8.0),
+    "classifier_short_cooldown_seconds": ("int", 30, 1800),
+    "classifier_cooldown_seconds": ("int", 60, 3600),
+    "classifier_needs_attention_retry_seconds": ("int", 0, 3600),
+    "classifier_outage_self_heal_seconds": ("int", 0, 86400),
+    "reply_early_ack_seconds": ("int", 0, 60),
+    "understand_hard_timeout_seconds": ("int", 3, 60),
+    "reply_early_ack_cooldown_seconds": ("int", 0, 7200),
     "gate_vision_hourly_budget": ("int", 0, 120),
     "gate_min_length": ("int", 0, 20),
     "gate_hourly_budget": ("int", 0, 600),
@@ -77,15 +93,22 @@ NUMERIC_FIELDS: dict[str, tuple[str, float, float]] = {
     "fragment_wait_seconds": ("float", 0, 5.0),
     "proactive_cooldown_seconds": ("float", 0, 60.0),
     "duplicate_window_seconds": ("int", 0, 3600),
+    "reply_health_timeout_seconds": ("int", 60, 7200),
 }
 BOOL_FIELDS = {
+    "apply_to_private", "gate_main_fallback_enabled",
+    "fragment_wait_private", "reply_quote_enabled", "reply_mention_enabled",
+    "classifier_outage_recovery_enabled",
+    # 功能耦合：与 LivingEmotion 爬楼配合的总开关。
+    "integrate_livingemotion_catchup",
+    # 判定按上游逐个短超时轮转。
+    "gate_upstream_fanout_enabled",
+    # 断线恢复：按模型分别决定是否提醒管理员。
     "reply_fallback_enabled",
     "outage_watch_classifier", "outage_watch_vision",
     "outage_watch_understand_image", "outage_watch_understand_voice",
     "outage_watch_main_model", "outage_watch_tts", "outage_watch_image_gen",
-    "apply_to_private", "gate_main_fallback_enabled", "gate_congling_prepare_compat",
-    "fragment_wait_private", "reply_quote_enabled", "reply_mention_enabled",
-    "classifier_outage_recovery_enabled",
+    "coupling_livingemotion_enabled", "coupling_livingmemory_enabled",
 }
 STRING_FIELDS = {
     "gate_mode",
@@ -95,7 +118,8 @@ STRING_FIELDS = {
     "empty_mention_reply",
     "empty_mention_persona_prompt",
 }
-LIST_FIELDS = {"bot_names", "outage_notify_admin_qq"}
+LIST_FIELDS = {"bot_names", "outage_notify_admin_qq", "expression_forbid_phrases",
+               "reply_early_ack_texts", *MESSAGE_POLICY_FIELDS}
 # 新表达/理解配置直接从宿主schema派生白名单和数值范围，避免UI与后端漏项。
 _expression_schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8-sig"))
 for _key, _field in _expression_schema.items():
@@ -103,8 +127,15 @@ for _key, _field in _expression_schema.items():
         continue
     _type = _field["type"]
     if _type in {"int", "float"}:
-        _bounds = _field["slider"]
-        NUMERIC_FIELDS[_key] = (_type, _bounds["min"], _bounds["max"])
+        # 单个字段漏写 slider 不该让整页注册失败（曾导致「找不到该路由」）。
+        _bounds = _field.get("slider") or {}
+        _lo = _bounds.get("min", 0)
+        _hi = _bounds.get("max", 100000)
+        if not isinstance(_lo, (int, float)):
+            _lo = 0
+        if not isinstance(_hi, (int, float)) or _hi <= _lo:
+            _hi = _lo + 100000
+        NUMERIC_FIELDS[_key] = (_type, _lo, _hi)
     elif _type == "bool":
         BOOL_FIELDS.add(_key)
     elif _type == "string":
@@ -144,9 +175,22 @@ def _failure(message: str, status_code: int = 400):
     return error_response(message, status_code=status_code)
 
 
+# 慢接口阈值（毫秒）。控制台首屏是串行请求，单条超过这个值就会明显拖慢打开速度。
+SLOW_ENDPOINT_MS = 120.0
+
+
 def _bind(plugin: Any, handler: Handler):
     async def bound_handler():
-        return await handler(plugin)
+        started = time.perf_counter()
+        try:
+            return await handler(plugin)
+        finally:
+            used = (time.perf_counter() - started) * 1000.0
+            if used >= SLOW_ENDPOINT_MS:
+                logger.warning(
+                    f"[智能过滤] 控制台慢接口 {handler.__name__.replace('handle_', '')} "
+                    f"{used:.0f}ms"
+                )
 
     bound_handler.__name__ = f"at_guard_{handler.__name__}"
     return bound_handler
@@ -160,6 +204,65 @@ def _current(plugin: Any, key: str, default: Any = None) -> Any:
     return default if value is None else value
 
 
+# get_models() 对多数 provider 是真实的 HTTP 请求（问上游有哪些模型）。
+# state 每 15 秒轮询一次，不通缓存就等于每 15 秒打一遍全部上游，
+# 既拖慢页面又白烧上游配额。模型列表变化很少，缓存 10 分钟足够。
+PROVIDERS_CACHE_TTL_SECONDS = 600.0
+
+
+def _provider_catalog_revision(plugin: Any) -> str | None:
+    """只读本地注册/连接信息；凭据只参与摘要，不进入缓存或前端回执。"""
+    try:
+        try:
+            from .guard_router_connections import router_connections
+        except ImportError:
+            from guard_router_connections import router_connections
+
+        def signature(provider):
+            getter = getattr(provider, "get_model", None)
+            return (id(provider), getattr(provider, "provider_config", None),
+                    getter() if callable(getter) else None)
+
+        registered = []
+        for role in ("", "stt_", "tts_"):
+            getter = getattr(plugin.context, f"get_all_{role}providers", None)
+            for provider in getter() if callable(getter) else []:
+                upstreams = getattr(provider, "upstreams", None)
+                registered.append((role, signature(provider), [
+                    (getattr(item, "name", None), signature(getattr(item, "client", None)))
+                    for item in upstreams if item is not None
+                ] if isinstance(upstreams, (list, tuple)) else []))
+        raw = json.dumps((id(plugin.context), registered, router_connections(plugin.context)),
+                         sort_keys=True, default=str, ensure_ascii=False)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    except Exception:
+        return None  # 无法核对注册状态时不缓存，保留原来的读取路径。
+
+
+async def _providers(plugin: Any) -> list[dict[str, Any]]:
+    """目录按插件实例缓存；普通参数保存不清缓存，连接变化或过期才重建。"""
+    if not hasattr(plugin, "_console_providers_lock"):
+        plugin._console_providers_lock = asyncio.Lock()
+    async with plugin._console_providers_lock:
+        # 冷加载共用一把锁，避免状态轮询与保存重复访问同一模型目录。
+        for _ in range(2):
+            revision = _provider_catalog_revision(plugin)
+            cached = getattr(plugin, "_console_providers_cache", None)
+            if (revision is not None and cached and cached["revision"] == revision
+                    and time.monotonic() - cached["at"] < PROVIDERS_CACHE_TTL_SECONDS):
+                return copy.deepcopy(cached["data"])
+            data = await _build_providers(plugin)
+            if revision is None:
+                return data
+            if _provider_catalog_revision(plugin) == revision:
+                # 宿主启动时的空目录可能只是暂态，不把它固定十分钟。
+                if data:
+                    plugin._console_providers_cache = {
+                        "revision": revision, "at": time.monotonic(), "data": copy.deepcopy(data)}
+                return data
+        raise RuntimeError("模型连接正在变化，请稍后重试")
+
+
 def _native_model_display(config: dict[str, Any], model: str, display: str) -> str:
     """仅修饰官方 DeepSeek 的显示名，不改 provider id 或请求模型。"""
     if not model.lower().startswith("deepseek-"):
@@ -170,7 +273,7 @@ def _native_model_display(config: dict[str, Any], model: str, display: str) -> s
         return display
     if host != "api.deepseek.com":
         return display
-    # 真正的 thinking 配置优先，不能凭 quiet 名字推断请求模式。
+    # 以真正发送的 thinking 配置为准；quiet 名字本身不能证明已关闭思考。
     extra = config.get("custom_extra_body", {})
     if not isinstance(extra, dict):
         return display
@@ -190,7 +293,7 @@ def _native_model_display(config: dict[str, Any], model: str, display: str) -> s
     return f"{display or model}（{suffix}）"
 
 
-async def _providers(plugin: Any) -> list[dict[str, Any]]:
+async def _build_providers(plugin: Any) -> list[dict[str, Any]]:
     """列出可选的判定模型。
 
     除了 AstrBot 原生 provider，插件的 provider（例如「多 API 模型路由」）
@@ -211,13 +314,17 @@ async def _providers(plugin: Any) -> list[dict[str, Any]]:
         from guard_router_connections import router_connections, CHAT_TYPES
     connections = router_connections(plugin.context)
     items: dict[str, dict[str, Any]] = {}
+    skipped_disabled = 0
+    total_providers = 0
     try:
         for provider in plugin.context.get_all_providers():
+            total_providers += 1
             config = getattr(provider, "provider_config", {}) or {}
             provider_id = str(config.get("id", "") or "")
             if not provider_id:
                 continue
             if config.get("enable") is False:
+                skipped_disabled += 1
                 continue
             connection = connections.get(provider_id)
             if connection and connection["api_type"] not in CHAT_TYPES:
@@ -298,7 +405,9 @@ async def _providers(plugin: Any) -> list[dict[str, Any]]:
                     "id": provider_id,
                     "model": model,
                     "kind": kind,
-                    "display": display_name,
+                    "display": display_name or (
+                        f"多 API 路由（{len(names)} 个上游自动降级）" if kind == "router" else model
+                    ),
                     "upstreams": names,
                     "instances": 1,
                     "supports_images": vision_supported,
@@ -336,7 +445,7 @@ async def _providers(plugin: Any) -> list[dict[str, Any]]:
                     "supports_images": pinned_vision,
                 }
     except Exception as exc:
-        logger.debug(f"[智能过滤] 读取模型列表失败: {exc!r}")
+        logger.warning(f"[智能过滤] 读取模型列表失败: {exc!r}")
     for item in items.values():
         item["role"] = "chat"
         try:
@@ -365,10 +474,20 @@ async def _providers(plugin: Any) -> list[dict[str, Any]]:
                     "supports_images": False, "supports_audio": role == "stt"}
     for pid, connection in connections.items():
         if pid in items and connection["api_type"] in CHAT_TYPES:
-            items[pid]["display"] = connection["display"]
+            items[pid]["display"] = connection["display"] or connection["model"]
             items[pid]["model"] = connection["model"]
             items[pid]["api_type"] = connection["api_type"]
-    return sorted(items.values(), key=lambda item: item["id"])
+    result = sorted(items.values(), key=lambda item: item["id"])
+    # 空结果不缓存：宿主的 provider 可能晚于首次请求才注册完成，
+    # 一旦把空列表钉住 10 分钟，模型选择器就一个候选都没有。
+    if not result:
+        logger.warning("[智能过滤] 模型列表为空（宿主 provider 可能尚未注册），本次不缓存")
+    logger.warning(
+        f"[智能过滤] 模型列表 {len(result)} 项"
+        f"（宿主 provider {total_providers} 个，enable=False 跳过 {skipped_disabled} 个，"
+        f"路由连接 {len(connections)} 个）"
+    )
+    return result
 
 
 _CONGLING_PERCEIVED_MARKER = re.compile(
@@ -682,17 +801,23 @@ def _outage_status(
     ):
         remaining = max(0, int(math.ceil(latest.cooldown_until - now)))
     storage_health = str(service.store.health or "unavailable")
+    reply_health = plugin._reply_health().snapshot()
+    combined_state = service.state.value
+    if service.enabled and combined_state == "healthy" and reply_health.get("state") == "failed":
+        combined_state = "reply_failed"
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "enabled": service.enabled,
-        "state": service.state.value,
+        "state": combined_state,
+        "classifier_state": service.state.value,
+        "reply_health": reply_health,
         "read_health": (
             "error" if storage_health == "unavailable" else "ok"
         ),
         "cooldown_minutes": COOLDOWN_SECONDS // 60,
         "cooldown_remaining_seconds": remaining,
         "provider_display": _outage_provider_display(plugin, providers),
-        "admins": _global_admins(plugin),
+        "admins": reply_health["admins"],
         "last_failure_at": latest.started_at if latest is not None else None,
         "last_error_category": (
             latest.error_category if latest is not None else None
@@ -702,41 +827,91 @@ def _outage_status(
             len(latest.affected_sessions) if latest is not None else 0
         ),
         "backfill": backfill,
-        "reply_health": plugin._reply_health().snapshot()
-        if callable(getattr(plugin, "_reply_health", None)) else {},
     }
 
 
+# 控制台首屏每次都拉 state；2 核机器上并发请求会互相拖慢，
+# 1.5 秒内复用同一份结果，避免 15 秒轮询与人工刷新重复触发同一批计算。
+_STATE_CACHE: dict[str, Any] = {"at": 0.0, "data": None}
+STATE_CACHE_TTL_SECONDS = 1.5
+
+
+def _invalidate_state() -> None:
+    """任何写入成功后调用：下次读 state 必须重新计算。"""
+    _STATE_CACHE["data"] = None
+    _STATE_CACHE["at"] = 0.0
+    # 参数/统计写入只清状态；模型目录由本地连接修订和TTL独立失效。
+
+
 async def _state(plugin: Any) -> dict[str, Any]:
+    cached = _STATE_CACHE["data"]
+    if cached is not None and time.monotonic() - _STATE_CACHE["at"] < STATE_CACHE_TTL_SECONDS:
+        return cached
+
     engine = plugin.engine
+    marks: list[tuple[str, float]] = []
+    last = time.perf_counter()
+
+    def mark(name: str) -> None:
+        nonlocal last
+        current = time.perf_counter()
+        marks.append((name, (current - last) * 1000.0))
+        last = current
+
     participation = getattr(plugin, "participation_stats", {}) or {}
     schema = _load_schema_subset()
     providers = await _providers(plugin)
-    return {
+    mark("配置与模型列表")
+
+    config = {key: _current(plugin, key, schema.get(key, {}).get("default")) for key in EDITABLE}
+    today = engine.snapshot()
+    budget = engine.budget_usage()
+    image_cache = plugin._image_observation_cache().snapshot()
+    mark("统计与缓存")
+
+    distribution = engine.score_distribution(engine.decision_model_label())
+    mark("分数分布")
+
+    decisions = await _decision_rows(plugin, engine.log.recent(10))
+    mark("最近判定")
+
+    data = {
         "version": "2.7.1",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
-        "config": {key: _current(plugin, key, schema.get(key, {}).get("default")) for key in EDITABLE},
+        "config": config,
         "schema": schema,
         "fieldHelp": {key: {"desc": values[0], "examples": list(values[1:])}
                       for key, values in EXPRESSION_HELP.items()},
-        "today": engine.snapshot(),
+        "today": today,
         "lifetime": {
             "total": int(participation.get("total", 0) or 0),
             "allowed": int(participation.get("allowed", 0) or 0),
             "blocked": int(participation.get("blocked", 0) or 0),
             "average": float(participation.get("average", 0.0) or 0.0),
         },
-        "budget": engine.budget_usage(),
-        "image_cache": plugin._image_observation_cache().snapshot(),
+        "budget": budget,
+        "image_cache": image_cache,
         "congling_compat": _congling_compat(plugin),
+        "function_coupling": coupling_snapshot(plugin.context, plugin.config),
         "providers": providers,
         "outage_recovery": _outage_status(plugin, providers),
-        "distribution": engine.score_distribution(engine.provider_label()),
+        "distribution": distribution,
         # 概览只给出最近10条；完整排查仍通过搜索接口覆盖内存中的600条。
-        "decisions": await _decision_rows(plugin, engine.log.recent(10)),
+        "decisions": decisions,
         "listeners": plugin._trace().listeners(),
+        "message_policy": {**plugin.get_message_policy_snapshot(),
+                           "companion": plugin.message_policy_companion()},
     }
+    mark("其余状态")
+
+    total = sum(ms for _, ms in marks)
+    if total >= 200.0:
+        detail = " ".join(f"{name}={ms:.0f}ms" for name, ms in marks if ms >= 10.0)
+        logger.warning(f"[智能过滤] state 计算 {total:.0f}ms | {detail}")
+    _STATE_CACHE["data"] = data
+    _STATE_CACHE["at"] = time.monotonic()
+    return data
 
 
 def _congling_compat(plugin: Any) -> dict[str, Any]:
@@ -745,7 +920,6 @@ def _congling_compat(plugin: Any) -> dict[str, Any]:
         "detected": False,
         "active": False,
         "order": "unknown",
-        "prepare_accounting": _current(plugin, "gate_congling_prepare_compat", True) is True,
     }
     try:
         metadata = plugin.context.get_registered_star("astrbot_plugin_congling")
@@ -778,11 +952,37 @@ def _load_schema_subset() -> dict[str, Any]:
 
 def _coerce(key: str, value: Any) -> Any:
     if key == "outage_notify_admin_qq":
-        parts = value if isinstance(value, (list, tuple)) else re.split(r"[\s,，;；]+", str(value or ""))
-        ids = list(dict.fromkeys(str(item).strip() for item in parts if str(item).strip()))
-        if len(ids) > 20 or any(not re.fullmatch(r"[1-9][0-9]{0,19}", item) for item in ids):
-            raise ValueError("管理员QQ须为正整数号码，最多20个")
-        return ids
+        try:
+            from .guard_reply_health import qq_ids
+        except ImportError:
+            from guard_reply_health import qq_ids
+        parts = value if isinstance(value, (list, tuple)) else re.split(r"[\s,，;；]+", str(value or "").strip())
+        parts = [str(v).strip() for v in parts if str(v).strip()]
+        valid = qq_ids(parts)
+        if len(parts) > 20 or any(v not in valid for v in parts):
+            raise ValueError("管理员 QQ 必须为1-20位正整数，最多20个")
+        return valid
+    if key in MESSAGE_POLICY_FIELDS:
+        # 名单按完整候选检查；不在单字段阶段丢掉错误项。
+        return value
+    if key == "expression_forbid_phrases":
+        # 口头禅可能含空格，不能用空白切分；空列表表示不启用该功能。
+        parts = (
+            list(value) if isinstance(value, (list, tuple))
+            else re.split(r"[,，、\n]+", str(value or ""))
+        )
+        phrases = []
+        for item in parts:
+            phrase = str(item or "").strip()
+            if not phrase:
+                continue
+            if len(phrase) > 20:
+                raise ValueError("单条口头禅不能超过 20 字: %s" % phrase)
+            if phrase not in phrases:
+                phrases.append(phrase)
+        if len(phrases) > 30:
+            raise ValueError("口头禅最多 30 条")
+        return phrases
     if key in LIST_FIELDS:
         if isinstance(value, (list, tuple)):
             parts = [str(item) for item in value]
@@ -841,8 +1041,11 @@ async def handle_config(plugin: Any):
     if not isinstance(body, dict) or not body:
         return _failure("没有要保存的字段")
 
+    expected_revision = body.get("message_policy_expected_revision")
     updates: dict[str, Any] = {}
     for key, value in body.items():
+        if key == "message_policy_expected_revision":
+            continue
         if key not in EDITABLE:
             return _failure(f"不允许修改的配置项: {key}")
         try:
@@ -857,10 +1060,12 @@ async def handle_config(plugin: Any):
     ):
         return _failure("当前断线恢复流程尚未结束，不能直接关闭", 409)
 
-    providers = await _providers(plugin)
+    model_fields = ("classifier_provider_id", "vision_provider_id", "understand_image_provider_id",
+                    "understand_voice_provider_id")
+    # 普通参数和清空模型选择无需读取目录；非空模型仍必须经过可用性校验。
+    providers = await _providers(plugin) if any(updates.get(key) for key in model_fields) else []
     known = {item["id"] for item in providers}
-    for key in ("classifier_provider_id", "vision_provider_id", "understand_image_provider_id",
-                "understand_voice_provider_id"):
+    for key in model_fields:
         provider_id = updates.get(key)
         if provider_id and provider_id not in known:
             return _failure(f"模型 {provider_id} 不在可用列表中")
@@ -872,22 +1077,51 @@ async def handle_config(plugin: Any):
                 item["id"] == provider_id and item.get("supports_audio") for item in providers):
             return _failure("语音理解需要原生STT或支持音频输入的模型")
 
-    missing = object()
-    before = {key: plugin.config.get(key, missing) for key in updates}
-    changed = [key for key, value in updates.items() if before[key] != value]
-    try:
-        for key, value in updates.items():
-            plugin.config[key] = value
-        plugin.config.save_config()
-    except Exception as exc:
-        # 保存失败恢复运行中配置，不让“保存失败”实际改变判定逻辑。
-        for key, value in before.items():
-            if value is missing:
-                plugin.config.pop(key, None)
-            else:
+    if not hasattr(plugin, "_config_write_lock"):
+        plugin._config_write_lock = asyncio.Lock()
+    async with plugin._config_write_lock:
+        coupling = coupling_snapshot(plugin.context, plugin.config)
+        for kind, (name, key, _) in COUPLING_SPECS.items():
+            if updates.get(key) is True and not coupling["integrations"][kind]["connected"]:
+                return _failure(f"{name} 未接入，无法启用", 409)
+        current_policy = plugin.get_message_policy_snapshot()
+        policy_updates = set(MESSAGE_POLICY_FIELDS).intersection(updates)
+        if policy_updates and expected_revision != current_policy["revision"]:
+            return error_response("名单已被另一页面修改，请刷新后核对草稿再保存", status_code=409,
+                                  data={"revision": current_policy["revision"], "code": "revision"})
+        candidate = {**plugin.config, **updates}
+        validation = validate_policy_config(candidate)
+        if not validation["valid"]:
+            return error_response("名单校验未通过", data=validation)
+        companion = plugin.message_policy_companion()
+        if any(validation["counts"].values()) and not companion["supported"]:
+            return error_response("当前从绫不支持消息名单历史过滤，请先更新配套插件",
+                                  data={"code": "companion", "errors": []})
+        for key in policy_updates:
+            updates[key] = validation["normalized_values"][key]
+        missing = object()
+        before = {key: plugin.config.get(key, missing) for key in updates}
+        changed = [key for key, value in updates.items() if before[key] != value]
+        try:
+            for key, value in updates.items():
                 plugin.config[key] = value
-        logger.exception(f"[智能过滤] 保存配置失败: {exc}")
-        return _failure(f"配置未落盘: {exc}", 500)
+            plugin.config.save_config()
+        except Exception as exc:
+            # 所有字段和运行快照一起回退；失败候选不得影响后续普通保存。
+            for key, value in before.items():
+                if value is missing:
+                    plugin.config.pop(key, None)
+                else:
+                    plugin.config[key] = value
+            logger.exception(f"[智能过滤] 保存配置失败: {exc}")
+            return _failure(f"配置未落盘: {exc}", 500)
+        # 与落盘之间没有 await：只有完整成功才发布不可变快照。
+        plugin.publish_message_policy(validation)
+        saved_config = {key: plugin.config[key] for key in updates}
+        policy_snapshot = plugin.get_message_policy_snapshot()
+        saved_policy = {key: policy_snapshot[key] for key in (
+            "contract", "revision", "healthy", "active", "whitelist_active", "counts")}
+        saved_policy["companion"] = companion
 
     if "classifier_outage_recovery_enabled" in updates:
         try:
@@ -901,11 +1135,42 @@ async def handle_config(plugin: Any):
         trigger_probe(immediate=True, reason="config_saved")
 
     logger.info(f"[智能过滤] 控制台更新 {len(updates)} 项: {sorted(updates)}")
-    data = await _state(plugin)
-    data["save_notice"] = ("判定口径已变化，旧统计与运行记录仍保留，分析时请结合修改时间。"
-                           if POLICY_FIELDS.intersection(changed)
-                           else "运行统计与判定记录已保留。")
+    _invalidate_state()
+    # 落盘回执不组装统计、追踪、流程图或模型目录，页面在确认后独立刷新。
+    data = {
+        "saved": True,
+        "config": saved_config,
+        "mode": plugin.engine.mode(),
+        "message_policy": saved_policy,
+        "changed": changed,
+        "save_notice": ("判定口径已变化，旧统计与运行记录仍保留，分析时请结合修改时间。"
+                        if POLICY_FIELDS.intersection(changed)
+                        else "运行统计与判定记录已保留。"),
+    }
     return _response(data, f"已保存 {len(changed)} 项")
+
+async def handle_message_policy_validate(plugin: Any):
+    try:
+        body = await request.json(default={})
+    except Exception:
+        return _failure("请求体必须是JSON对象")
+    if not isinstance(body, dict) or not isinstance(body.get("values"), dict):
+        return _failure("请提交六个名单字段")
+    values = body["values"]
+    if set(values) != set(MESSAGE_POLICY_FIELDS):
+        return _failure("校验须包含六个名单字段，不能包含其他配置")
+    current = plugin.get_message_policy_snapshot()
+    if body.get("expected_revision") != current["revision"]:
+        return error_response("名单修订已变化，请刷新后核对草稿", status_code=409,
+                              data={"revision": current["revision"], "code": "revision"})
+    result = validate_policy_config(values)
+    result["current_revision"] = current["revision"]
+    result["companion"] = plugin.message_policy_companion()
+    if any(result["counts"].values()) and not result["companion"]["supported"]:
+        result["valid"] = False
+        result["errors"].append({"field": MESSAGE_POLICY_FIELDS[0], "code": "companion",
+                                 "message": "请先更新从绫以支持历史过滤契约"})
+    return _response(result)
 
 
 async def handle_decisions(plugin: Any):
@@ -937,7 +1202,11 @@ async def handle_request_trace(plugin):
     if not ID_RE.fullmatch(rid):
         return _failure("request_id须为32位小写十六进制ID", 400)
     service = plugin._trace()
-    data = await service.get(rid)
+    try:
+        data = await service.get(rid)
+    except Exception as exc:  # noqa: BLE001 - 必须留下堆栈，否则前端只见 Network Error
+        logger.exception(f"[智能过滤] 读取追踪失败 request_id={rid}: {exc!r}")
+        return _failure("读取追踪时发生内部错误，已记录日志", 500)
     if data is None:
         return _failure("追踪存储不可用" if service.health["storage"] == "unavailable"
                         else "未找到此请求追踪（可能是旧记录或已超过保留范围）",
@@ -1041,6 +1310,7 @@ async def handle_reset(plugin: Any):
                 json.dumps(plugin.participation_stats, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+        _invalidate_state()
         return _response(await _state(plugin), "统计已清零")
     except Exception as exc:
         logger.exception(f"[智能过滤] 重置统计失败: {exc}")
@@ -1054,24 +1324,40 @@ async def handle_probe(plugin: Any):
         return _failure("请求体必须是 JSON")
     if not isinstance(body, dict):
         return _failure("请求体必须是JSON对象")
-    text = str(body.get("text", "") or "").strip()
-    if not text:
-        return _failure("请输入要试跑的消息")
-    bot_line = str((body or {}).get("bot_line", "") or "").strip()
-    is_private = bool((body or {}).get("private", False))
-    if len(text) > 800 or len(bot_line) > 2000:
-        return _failure("待判定消息最多800字，上一句最多2000字")
-    context_lines = body.get("context_lines", [])
-    if (not isinstance(context_lines, list) or len(context_lines) > 30 or
-            any(not isinstance(line, str) or len(line) > 800 for line in context_lines)):
-        return _failure("上下文最多30条，每条最多800字")
+    if body.get("health_check") is True:
+        # 固定合成资料验证当前模型；不重放聊天、不发送消息、不执行故障补读。
+        started = time.time()
+        diagnostics = {}
+        failure = await plugin.engine.probe_classifier(
+            plugin._resolve_classifier_probe_provider, diagnostics=diagnostics)
+        recovered = False
+        if failure is None:
+            recovered = await plugin._reply_health().classifier_recovered(started)
+        return _response({"health_check": True, "probe_passed": failure is None,
+                          "failure_category": failure.category if failure else None,
+                          "recovered": recovered,
+                          "health_state": plugin._reply_health().snapshot().get("state"),
+                          "platform_sends": 0, "diagnostics": diagnostics})
+    try:
+        parsed = parse_probe(body, plugin._policy())
+    except (ProbeInputError, TypeError, ValueError) as exc:
+        return _failure(str(exc))
+    text, bot_line, context_lines, is_private = (
+        parsed["text"], parsed["bot_line"], parsed["context"], parsed["private"])
     try:
         native = _native_settings(plugin).read(body.get("config_id", "default"))
     except NativeReplyError as exc:
         return _failure(str(exc), exc.status)
 
+    # 全新内存引擎隔离 _roll_day、预算、日志与生产计数。
+    engine = GateEngine(dict(plugin.config), None, plugin.engine.logger)
+
+    async def resolve_memory():
+        # 复验只使用复制到的记忆；首判 ground=memory 时按线上同一路径补查并重判。
+        return list(parsed.get("memory") or [])
+
     async def resolve_provider():
-        provider_id = plugin.engine.provider_id()
+        provider_id = engine.provider_id()
         if provider_id:
             provider = plugin.context.get_provider_by_id(provider_id)
             if provider is not None:
@@ -1082,27 +1368,33 @@ async def handle_probe(plugin: Any):
         return await plugin.context.get_using_provider_async(None)
 
     try:
-        decision = await plugin.engine.decide(
-            group_key="#probe",
-            current_text=text,
-            context_lines=context_lines,
-            bot_line=bot_line,
-            is_private=is_private,
-            resolve_provider=resolve_provider,
-            dry_run=True,
-        )
+        policy_result = parsed["policy_result"]
+        if policy_result and (not policy_result["reply_allowed"] or policy_result["requires_explicit"]):
+            decision = Decision(score=None, raw_score=None, threshold=engine.threshold(),
+                                source="policy", action="reply" if policy_result["reply_allowed"] else "silence",
+                                reason=policy_result["reason"])
+        else:
+            decision = await engine.decide(
+                group_key="#probe", current_text=text, context_lines=context_lines,
+                bot_line=bot_line, is_private=is_private, resolve_provider=resolve_provider,
+                resolve_memory=resolve_memory if parsed.get("memory") else None,
+                dry_run=True, message_meta=parsed["meta"],
+                probe_text_limit=parsed["text_limit"], probe_background=parsed["background"])
     except Exception as exc:
         logger.exception(f"[智能过滤] 试跑失败: {exc}")
         return _failure(f"试跑失败: {exc}", 500)
 
+    replay = {**parsed["replay"], "policy_result": parsed["policy_result"],
+              "model_called": bool(decision.model_calls)}
     return _response(
         {
             "decision": decision.as_dict(),
             "raw": decision.raw,
             "checkedAt": int(time.time()),
+            "replay": replay,
             "flow": build_flow(plugin.config, native, decision, {
                 "消息": text, "上一句": bot_line, "上下文": context_lines,
-                "场景": "私聊" if is_private else "群聊", "原生配置": native["config_id"]}),
+                "场景": "私聊" if is_private else "群聊", "原生配置": native["config_id"]}, replay=replay),
         }
     )
 
@@ -1114,6 +1406,7 @@ def register_webui(plugin: Any, context: Context) -> None:
         ("console/request-trace", "GET", handle_request_trace, "读取单次请求的监听与执行追踪"),
         ("console/listeners", "GET", handle_listeners, "核查当前实例激活监听与采集健康"),
         ("console/config", "POST", handle_config, "保存智能过滤参数"),
+        ("console/message-policy/validate", "POST", handle_message_policy_validate, "只校验六个消息名单草稿"),
         ("console/native-segments", "GET", handle_native_segments, "读取AstrBot原生分段配置"),
         ("console/native-segments", "POST", handle_save_native_segments, "同步AstrBot原生分段配置"),
         ("console/native-settings", "GET", handle_native_settings, "读取原生模型、人格与语音配置"),
@@ -1126,15 +1419,22 @@ def register_webui(plugin: Any, context: Context) -> None:
         ("console/reset", "POST", handle_reset, "清零智能过滤统计"),
         ("console/probe", "POST", handle_probe, "试跑一次参与判定"),
     ]
+    _ok = 0
     for endpoint, method, handler, description in routes:
         route = f"/{PLUGIN_NAME}/{endpoint}"
         try:
             context.register_web_api(
                 route, _bind(plugin, handler), [method], description
             )
+            _ok += 1
             logger.info(f"[智能过滤] 已注册 {method} {route}")
         except Exception as exc:
             logger.error(f"[智能过滤] 注册 {method} {route} 失败: {exc}")
+    # 成功时原来完全静默，出问题只能靠猜。这里给一条可核对的汇总日志。
+    logger.warning(
+        f"[智能过滤] 控制台已注册 {_ok}/{len(routes)} 条路由（前缀 /{PLUGIN_NAME}/console）"
+        if _ok else f"[智能过滤] 控制台一条路由都没注册成功（共 {len(routes)} 条尝试）"
+    )
 
     # 把可用的判定模型动态写进插件的内存 schema，让 AstrBot 配置页的
     #「判定用的小模型」从文本框变成真正的下拉框。宿主配置页读的是

@@ -63,20 +63,9 @@ class NativeSettings(NativeReply):
         super().__init__(plugin.context)
         self.plugin = plugin
         self.lock = native_reply.lock  # 分段和模型保存共用一把锁，避免同配置相互覆盖。
-        self.pin_path = Path(plugin.data_dir) / "native_persona_pins.json" if plugin.data_dir else None
         self.profile_path = Path(plugin.data_dir) / "native_selected_profile.json" if plugin.data_dir else None
-        self.pins = {}
-        self.pin_error = False
-        if self.pin_path and self.pin_path.exists():
-            try:
-                pins = json.loads(self.pin_path.read_text(encoding="utf-8"))
-                if not isinstance(pins, dict) or any(not isinstance(k, str) or
-                        not isinstance(v, str) or not v for k, v in pins.items()):
-                    raise ValueError("invalid pins")
-                self.pins = pins
-            except Exception:
-                self.pin_error = True
-                plugin.logger.error("[LivingHello] 固定人格文件损坏，禁止自动回退人格，请恢复备份")
+        # 人格不再存第二份：真源只有 AstrBot 原生配置的 persona_id。
+        # 旧版 native_persona_pins.json 保留在磁盘上但不再读取。
         self._wrapper = None
         self._original = None
 
@@ -134,20 +123,25 @@ class NativeSettings(NativeReply):
             except KeyError:
                 continue
             fields.append(dict(key=key, group=group, title=title, kind=kind, help=help_text))
-        pin = self.pins.get(config_id)
+        persona_value = data.get("persona_id")
+        fixed = persona_value if isinstance(persona_value, str) and persona_value.strip() else None
         result.update(values=data, fields=fields, personas=self.personas(),
-                      persona_fixed=pin is not None, fixed_persona_id=pin,
-                      persona_error=self.pin_error, local_runner=local)
-        result["revision"] = revision({"values": data, "pin": pin, "pin_error": self.pin_error})
+                      persona_fixed=fixed is not None, fixed_persona_id=fixed,
+                      persona_error=False, local_runner=local)
+        result["revision"] = revision({"values": data})
         return result
 
     def fixed_persona_id(self, umo):
-        if self.pin_error:
-            raise NativeReplyError("固定人格文件损坏，请恢复备份", 503)
-        mgr = self.manager()
-        config = mgr.get_conf(umo)
-        config_id = next((key for key, value in mgr.confs.items() if value is config), None)
-        return self.pins.get(config_id)
+        """单一真源：直接读 AstrBot 原生配置里已生效的人格。
+
+        返回 None 表示该配置没设人格，交给宿主原生解析。
+        """
+        config = self.manager().get_conf(umo)
+        try:
+            value = get_path(config, FIELDS["persona_id"][0])
+        except (KeyError, TypeError):
+            return None
+        return value if isinstance(value, str) and value.strip() else None
 
     def install(self):
         manager = getattr(self.context, "persona_manager", None)
@@ -165,7 +159,11 @@ class NativeSettings(NativeReply):
                 return pid, None, pid, False
             persona = next((p for p in manager.personas_v3 if p["name"] == pid), None)
             if persona is None:
-                raise NativeReplyError("已固定的人格不存在，请手动选择有效人格并保存", 409)
+                # 配置里的人格已被删除：回退原生解析，不阻断回复。
+                self.plugin.logger.warning(
+                    "[LivingHello] 配置人格 %r 不存在，回退宿主原生选择", pid)
+                return await original(umo=umo, conversation_persona_id=conversation_persona_id,
+                                      platform_name=platform_name, provider_settings=provider_settings)
             return pid, persona, pid, False
         selected._livinghello_original = original
         self._original, self._wrapper = original, selected
@@ -175,20 +173,6 @@ class NativeSettings(NativeReply):
         manager = getattr(self.context, "persona_manager", None)
         if self._wrapper and getattr(manager, "resolve_selected_persona", None) is self._wrapper:
             manager.resolve_selected_persona = self._original
-
-    def _write_pins(self, pins):
-        if self.pin_path is None:
-            raise NativeReplyError("人格固定数据目录不可用", 503)
-        fd, temporary = tempfile.mkstemp(prefix=".persona-pins-", dir=self.pin_path.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(pins, stream, ensure_ascii=False, indent=2)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.pin_path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
 
     def validate(self, patch, current, providers):
         if not isinstance(patch, dict) or not patch or set(patch) - set(current["values"]):
@@ -218,8 +202,8 @@ class NativeSettings(NativeReply):
                     valid = value in options
             if not valid:
                 raise NativeReplyError(f"{FIELDS[key][2]}的值无效，请检查范围或可用选项")
-        if "persona_id" in patch and (self.pin_error or self._wrapper is None or self.pin_path is None):
-            raise NativeReplyError("当前人格固定入口不可用，未修改人格", 503)
+        if "persona_id" in patch and self._wrapper is None:
+            raise NativeReplyError("当前人格入口不可用，未修改人格", 503)
         return copy.deepcopy(patch)
 
     def _persist_fields(self, config, patch):
@@ -252,13 +236,8 @@ class NativeSettings(NativeReply):
             except Exception as exc:
                 raise NativeReplyError("无法独立保存当前原生配置", 503) from exc
             before = {key: current["values"][key] for key in patch}
-            old_pins = copy.deepcopy(self.pins)
             try:
                 self._persist_fields(config, patch)
-                if "persona_id" in patch:
-                    new_pins = {**self.pins, config_id: patch["persona_id"]}
-                    self._write_pins(new_pins)
-                    self.pins = new_pins
                 await svc.core_lifecycle.reload_pipeline_scheduler(config_id)
                 if any(get_path(config, FIELDS[key][0]) != value for key, value in patch.items()):
                     raise RuntimeError("原生设置生效校验失败")
@@ -270,9 +249,6 @@ class NativeSettings(NativeReply):
                            for key, value in patch.items()):
                         raise RuntimeError("原生设置发生并行修改")
                     self._persist_fields(config, before)
-                    if self.pins != old_pins:
-                        self._write_pins(old_pins)
-                        self.pins = old_pins
                     await svc.core_lifecycle.reload_pipeline_scheduler(config_id)
                 except Exception as recovery:
                     raise NativeReplyError("保存失败且恢复未完成，请检查原生配置与备份", 500) from recovery

@@ -17,11 +17,16 @@ TRACE_KEY = "_livinghello_trace"
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 TERMINAL = {"completed", "cancelled", "failed", "merged", "incomplete", "silent"}
 LISTENERS = {
+    "message_policy": ("AdapterMessageEvent", "check_incoming_message_policy"),
+    "message_policy_archive": ("AdapterMessageEvent", "stop_readonly_message_policy"),
+    "message_policy_request": ("OnLLMRequestEvent", "check_request_message_policy"),
     "receive": ("AdapterMessageEvent", "observe_message_fragments"),
     "input_parse": ("AdapterMessageEvent", "parse_reply_input"),
     "fragments": ("AdapterMessageEvent", "coalesce_message_fragments"),
     "recall": ("AdapterMessageEvent", "prepare_reply_delivery"),
     "understanding": ("OnLLMRequestEvent", "understand_reply_input"),
+    "livingemotion": ("OnLLMRequestEvent", "listen_livingemotion"),
+    "livingmemory": ("OnLLMRequestEvent", "listen_livingmemory"),
     "decision": ("OnLLMRequestEvent", "guard_llm_request"),
     "contracts": ("OnLLMRequestEvent", "attach_reply_contract"),
     "main_model": ("OnAgentBeginEvent", "trace_agent_begin"),
@@ -34,7 +39,8 @@ LISTENERS = {
 }
 META_KEYS = {"reason", "model", "calls", "ms", "span_id", "tool", "count", "before",
              "after", "synced", "judged", "types", "source", "collected", "enabled", "parent_span",
-             "merged_into", "api_calls", "packets", "error_type", "role"}
+             "merged_into", "api_calls", "packets", "error_type", "role",
+             "parse_reason", "parse_format", "format_retry"}
 
 
 def emit(event, feature, status, **metadata):
@@ -213,11 +219,49 @@ class RequestTrace:
         if row and key in row["summary"]:
             row["summary"][key] += 1
 
+    def judged_input(self, event, snapshot):
+        """记录本次判定针对的消息快照；只存有界文本，不存图片/音频本体。"""
+        row = self.rows.get(event.get_extra(ID_KEY))
+        if not row:
+            return
+        try:
+            clean = {}
+            for key in ("sender_id", "sender_name", "group_id", "session_type",
+                        "explicit_call", "message_id", "scene"):
+                value = snapshot.get(key)
+                if isinstance(value, (bool, int, float)) or value is None:
+                    clean[key] = value
+                elif isinstance(value, str):
+                    clean[key] = value[:160]
+            text = snapshot.get("text")
+            if isinstance(text, str):
+                clean["text"] = text[:300]
+                clean["text_length"] = len(text)
+            age = snapshot.get("age_seconds")
+            if isinstance(age, (int, float)):
+                clean["age_seconds"] = round(float(age), 1)
+            media = snapshot.get("unread_media")
+            if isinstance(media, list):
+                clean["unread_media"] = [str(item)[:32] for item in media[:6]]
+            row["judged_input"] = clean
+        except Exception:
+            return
+
+    # 已确定的终态：后到的失败判定不能覆盖掉真实原因
+    # （例如「已判 message_expired 并清空」不该被健康层改写成 final_message_missing）。
+    _LOCKED_STATES = {"cancelled", "completed", "silent", "merged"}
+
     def finish(self, event, state, reason=""):
         row = self.rows.get(event.get_extra(ID_KEY))
-        if row:
-            row["state"] = state
-            self.record(event, "lifecycle", state, reason=reason)
+        if not row:
+            return
+        previous = row.get("state") or ""
+        if previous in self._LOCKED_STATES and state not in self._LOCKED_STATES:
+            # 保留先到的、带具体原因的终态，只补一条记录说明后来发生了什么。
+            self.record(event, "lifecycle", "noted", reason=f"late:{state}:{reason}"[:120])
+            return
+        row["state"] = state
+        self.record(event, "lifecycle", state, reason=reason)
 
     def merge(self, event, sources):
         canonical = self.begin(event)

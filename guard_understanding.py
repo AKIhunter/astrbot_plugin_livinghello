@@ -692,7 +692,14 @@ class Understanding:
                         else "本轮未能识别，请勿猜测画面或来源",
                     })
             else:
-                texts.append(observation.prompt)
+                # 纯文本与原始消息完全一致且无媒体时跳过，避免重复注入同一段正文。
+                original = str(getattr(source, "message_str", "") or "")
+                if (
+                    observation.prompt != original
+                    or observation.images
+                    or observation.voices
+                ):
+                    texts.append(observation.prompt)
             timings = event.get_extra("_at_guard_input_timings", {}) or {}
             for key, value in observation.timings.items():
                 previous = timings.get(key, {})
@@ -713,6 +720,11 @@ class Understanding:
                          + json.dumps(media_notes, ensure_ascii=False)
                          + "\n</livinghello_media_understanding>"
                 ).mark_as_temp())
+            event.set_extra(attached_key, True)
+            return
+        if not texts:
+            # 没有需要展开的内容时不追加空的 <at_guard_understanding> 块。
+            emit(event, "understanding_attachment", "skipped", reason="plain_text")
             event.set_extra(attached_key, True)
             return
         req.extra_user_content_parts.append(TextPart(

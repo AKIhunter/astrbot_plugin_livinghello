@@ -4,7 +4,8 @@ from __future__ import annotations
 import copy
 
 GATE = [
-    ("input", "候选输入", "取得当前消息、上一句、上下文；群聊明确呼叫与公开监听采用不同入口。"),
+    ("input", "候选输入", "取得当前消息、上一句、上下文；名单先于参与判断和观察模式生效。"),
+    ("policy", "名单与来源", "QQ来源命中黑名单不读；白名单外、灰名单未明确唤醒只读静默。文字无来源时不模拟名单。"),
     ("fragment", "碎片等待与撤回", "等待同一用户的碎片消息；只在等待窗口内拦截撤回。文字试跑不模拟平台事件。"),
     ("rules", "本地规则与预算", "检查最短长度、有效内容和每群小时预算。试跑跳过预算计数；规则不通过立即静默。"),
     ("context", "组织判定上下文", "有效期0不筛时间，只取已配置条数；正数先筛时间再取条数。保留字符上限、会话隔离及从旧到新的顺序。"),
@@ -18,17 +19,19 @@ GATE = [
 ]
 GENERATE = [
     ("native", "选原生模型与固定人格", "按当前会话的原生配置选主模型。页面保存的人格在宿主选择入口生效，从绫也复用同一选择。"),
+    ("emotion", "情绪、好感度与爬楼", "功能耦合开启且 LivingEmotion 就绪时复用其当前会话状态与爬楼；关闭不读取，不回退到从绫。"),
     ("perception", "复用感知与图片证据", "从绫启用时使用从绫感知；独立模式使用内容理解配置。充分图片摘要优先复用，不足时传原图。"),
     ("retrieve", "补足话题依据", "复用本次记忆、联网搜索和向量查询结果；确实缺信息时由主模型按工具能力补查。"),
     ("writeback", "证据与记忆回写", "同次请求复用查询缓存；有效长期事实可由记忆工具回写，避免后续反复查询。是否调用由实际工具执行记录确认。"),
     ("generate", "主模型生成正文", "以当前问题、已验证证据及唯一人格生成回复。主模型接口失败时按原生设置重试和回退。"),
     ("image", "按需生成或编辑图片", "主模型可调用LivingHello独立AI生图工具；使用已注册模型或路由上游，按日共享额度，图生图仅用本次图片。"),
-    ("segments", "正文清理与分段", "模型自行分段和多消息发送独立。第二句号、分段词需各自开启；最多分段数超出后合并保留正文。"),
+    ("segments", "正文清理、口头禅过滤与分段", "分段前先在完整正文上删除口头禅禁忌，避免短语被段落切开而漏网；模型自行分段和多消息发送独立。第二句号、分段词需各自开启；最多分段数超出后合并保留正文。"),
     ("freshness", "最后一次时效检查", "检查当前消息是否被新消息替代、重复、超时或等待窗口内撤回；从绫准备耗时按配套设置扣除。"),
     ("send", "原生发送", "经AstrBot原生管线处理TTS、文本排版转图、引用与@并发送；文字试跑到此仅展示计划。"),
 ]
 GATE_EDGES = [
-    ("input", "fragment", "线上入口"), ("fragment", "rules", "窗口内未撤回"),
+    ("input", "policy", "核验来源"), ("policy", "fragment", "具备资格"),
+    ("policy", "result", "名单静默/灰名单明确唤醒"), ("fragment", "rules", "窗口内未撤回"),
     ("rules", "context", "规则通过"), ("rules", "result", "短路静默"),
     ("context", "text", "送入模型"), ("text", "memory", "需要记忆"),
     ("text", "vision", "需要画面"), ("text", "veto", "证据足够"),
@@ -61,7 +64,7 @@ def graph(rows, edges):
             "edges": [dict(source=a, target=b, label=c) for a, b, c in edges]}
 
 
-def build_flow(config, native=None, decision=None, inputs=None):
+def build_flow(config, native=None, decision=None, inputs=None, replay=None):
     mode_id = str(config.get("gate_mode", "enforce") or "enforce").strip().lower()
     mode_id = mode_id if mode_id in MODES else "enforce"
     mode = copy.deepcopy(MODES[mode_id])
@@ -83,6 +86,8 @@ def build_flow(config, native=None, decision=None, inputs=None):
     plan["perception"]["evidence"].update(
         图片理解=config.get("understand_image_provider_id") or "跟随独立内容理解配置",
         说明="从绫启用状态与具体工具结果需以实际会话记录为准")
+    plan["emotion"]["evidence"]["LivingEmotion 开关"] = config.get("coupling_livingemotion_enabled", False)
+    plan["retrieve"]["evidence"]["LivingMemory 开关"] = config.get("coupling_livingmemory_enabled", False)
     plan["send"]["evidence"]["文本排版转图"] = values.get("t2i", False)
     nodes["rules"]["evidence"] = dict(最短长度=config.get("gate_min_length", 2),
                                         小时预算=config.get("gate_hourly_budget", 120))
@@ -144,6 +149,22 @@ def build_flow(config, native=None, decision=None, inputs=None):
         if d["action"] != "reply" and mode_id == "enforce":
             for node in plan.values():
                 node.update(status="skipped", evidence={**node["evidence"], "原因": "硬闸门未放行，线上不会生成"})
+        if replay:
+            check = replay.get("policy_result")
+            nodes["policy"].update(
+                status=("passed" if check["reply_allowed"] else "blocked") if check else "skipped",
+                evidence={"来源已模拟": replay["source_simulated"], "名单结果": check,
+                          "说明": replay["notices"]})
+            if d["source"] == "policy":
+                for key in ("rules", "context", "text", "memory", "vision", "fallback", "veto", "threshold"):
+                    nodes[key].update(status="skipped", evidence={"原因": "名单规则处理，未调用判定模型"})
+                nodes["result"].update(status="passed" if d["action"] == "reply" else "blocked",
+                                       explanation="名单硬限制与工作模式无关",
+                                       evidence={"判断原因": d["reason"], "实际模型调用数": 0,
+                                                 "线上处理": "明确唤醒直通，仍受原有约束" if d["action"] == "reply" else "名单静默"})
+                if d["action"] != "reply":
+                    for node in plan.values():
+                        node.update(status="skipped", evidence={"原因": "名单规则静默，不进入生成"})
     note = (
         "点击节点查看依据。硬闸门未放行不会生成；试跑只执行判断，不发送消息。"
         if mode_id == "enforce"

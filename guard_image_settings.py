@@ -9,6 +9,7 @@ from contextvars import ContextVar
 from datetime import datetime, timedelta
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -22,13 +23,22 @@ try:
     from .guard_native_reply import NativeReplyError, revision
     from .guard_router_connections import router_connections, CHAT_TYPES
     from .guard_request_trace import emit, TRACE_KEY, touch
+    from .guard_reply_health import report_model_fault
 except ImportError:
     from guard_native_reply import NativeReplyError, revision
     from guard_router_connections import router_connections, CHAT_TYPES
     from guard_request_trace import emit, TRACE_KEY, touch
+    from guard_reply_health import report_model_fault
 
 TOOL_NAME = "livinghello_generate_image"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+# 私聊只在消息明显涉及图片时挂载生图工具，减少无关工具定义进入请求。
+IMAGE_INTENT_WORDS = (
+    "生图", "文生图", "图生图", "配图", "配张图", "修图", "改图", "p图",
+    "换脸", "画一", "画个", "画张", "画幅", "画只", "画一下", "帮我画", "给我画",
+    "生成图片", "生成图像", "生成照片", "生成头像", "生成壁纸", "表情包",
+    "draw", "paint", "generate an image", "generate a picture",
+)
 IMAGE_EVENT = ContextVar("livinghello_image_event", default=None)
 FIELDS = {
     "enabled": ("启用AI生图", "bool", "主模型可按需要调用文生图或图生图工具，关闭后不提供工具。"),
@@ -235,9 +245,22 @@ class ImageSettings:
             return None
         return self._tool
 
+    def needed(self, event):
+        """群聊保持原行为；私聊仅在当前消息需要生图时才挂工具。"""
+        if getattr(event, "get_group_id", lambda: "")():
+            return True
+        observation = event.get_extra("_at_guard_understanding")
+        if observation is not None and getattr(observation, "images", None):
+            return True
+        text = str(getattr(event, "message_str", "") or "").lower()
+        return any(word in text for word in IMAGE_INTENT_WORDS)
+
     def attach(self, event, req):
         if self._closed or self.error or not self.values["enabled"] or self.values["daily_limit"] == 0:
             emit(event, "image_tool_attachment", "disabled", reason="image_unavailable")
+            return
+        if not self.needed(event):
+            emit(event, "image_tool_attachment", "skipped", reason="private_no_image_intent")
             return
         tool = self.ensure_tool()
         if tool is None:
@@ -388,6 +411,10 @@ class ImageSettings:
                 terminal_reason = "quota_exhausted"
                 emit(event, "image_quota", "skipped", reason=terminal_reason)
             emit(event, "image_error", terminal_status, reason=terminal_reason, error_type=type(exc).__name__)
+            if terminal_reason != "quota_exhausted":
+                # 额度用尽属于产品限制，不是模型故障，不打扰管理员。
+                report_model_fault(self.plugin, "image_gen", terminal_status,
+                                   str(exc)[:80], event)
             if service:
                 row = service.rows.get(event.get_extra("_livinghello_request_id"), {})
                 if row.get("features", {}).get("image_api", {}).get("status") == "running":
@@ -514,6 +541,17 @@ class ImageSettings:
                 emit(event, "image_api", "running", calls=1, model=model)
             async with session.post(base + endpoint, headers=headers, allow_redirects=False, **body) as response:
                 if response.status not in {200, 201}:
+                    # 上游 400 的真实原因只在响应体里（例如「该模型不支持 Chat Completions」），
+                    # 原来直接丢弃，只剩一句「HTTP 400」，等于把排查线索扔了。
+                    # 只写日志，不改进用户看到的文案。
+                    detail = ""
+                    try:
+                        detail = (await response.text())[:400]
+                    except Exception:
+                        detail = "<响应体不可读>"
+                    logging.getLogger("astrbot").warning(
+                        "[LivingHello] 生图接口 HTTP %s endpoint=%s model=%s resp=%s",
+                        response.status, endpoint, model, " ".join(detail.split()))
                     raise NativeReplyError(f"生图接口HTTP {response.status}")
                 if response.content_length and response.content_length > MAX_IMAGE_BYTES * 2:
                     raise NativeReplyError("生图响应过大")

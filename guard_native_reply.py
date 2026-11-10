@@ -30,7 +30,7 @@ REMOVED_FIELDS = (
     "expression_persona_inject", "expression_quote_probability", "expression_quote_probability_max",
     "expression_quote_cooldown_seconds", "expression_quote_max_age_seconds",
     "expression_typo_probability", "expression_strip_trailing_period", "expression_flatten_newline",
-    "expression_max_chars_per_bubble", "expression_forbid_phrases", "expression_self_repeat_guard",
+    "expression_max_chars_per_bubble", "expression_self_repeat_guard",
     "expression_sticker_enabled", "expression_voice_enabled", "expression_tts_provider_id",
     "reply_max_bubbles_private", "reply_max_bubbles_group", "reply_bubble_interval_seconds",
 )
