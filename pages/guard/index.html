@@ -1858,7 +1858,7 @@
   const GATE_FIELDS = [
     { key: "participation_confidence_threshold", label: "参与阈值", type: "range", min: 0, max: 100, step: 1 },
     { key: "classifier_provider_id", label: "判定模型", type: "provider" },
-    { key: "classifier_timeout_seconds", label: "文字判定超时", type: "number", min: 0.5, max: 8, step: 0.1, unit: "秒" },
+    { key: "classifier_timeout_seconds", label: "文字判定超时", type: "number", min: 1, max: 15, step: 0.1, unit: "秒" },
     { key: "gate_min_length", label: "最短参与字数", type: "number", min: 0, max: 20, step: 1, unit: "字" },
     { key: "gate_upstream_fanout_enabled", label: "判定按上游轮转", type: "bool", advanced: true },
     { key: "gate_upstream_try_timeout_seconds", label: "单上游尝试超时", type: "number", min: 0.5, max: 8, step: 0.1, unit: "秒", advanced: true },
@@ -1870,12 +1870,13 @@
     { key: "classifier_outage_self_heal_seconds", label: "故障自愈放行", type: "number", min: 0, max: 86400, step: 60, unit: "秒", advanced: true },
   ];
   const VISION_FIELDS = [
-    { key: "vision_provider_id", label: "多模态小模型", type: "provider" },
+    { key: "vision_shared_provider_id", label: "视觉模型（共用）", type: "provider" },
+    { key: "vision_provider_id", label: "判定看图模型（可选覆盖）", type: "provider" },
     { key: "gate_main_fallback_enabled", label: "主模型兜底", type: "bool" },
     { key: "gate_image_cache_ttl_seconds", label: "图片含义缓存", type: "number", min: 0, max: 1800, step: 1, unit: "秒", advanced: true },
-    { key: "vision_timeout_seconds", label: "多模态超时", type: "number", min: 0.5, max: 12, step: 0.1, unit: "秒", advanced: true },
+    { key: "vision_timeout_seconds", label: "多模态超时", type: "number", min: 1, max: 20, step: 0.1, unit: "秒", advanced: true },
     { key: "understand_hard_timeout_seconds", label: "图片理解总预算", type: "number", min: 3, max: 60, step: 1, unit: "秒", advanced: true },
-    { key: "gate_main_fallback_timeout_seconds", label: "主模型兜底超时", type: "number", min: 0.5, max: 12, step: 0.1, unit: "秒", advanced: true },
+    { key: "gate_main_fallback_timeout_seconds", label: "主模型兜底超时", type: "number", min: 1, max: 20, step: 0.1, unit: "秒", advanced: true },
   ];
   const CONTEXT_FIELDS = [
     { key: "gate_context_messages", label: "判定流水条数", type: "number", min: 0, max: 30, step: 1, unit: "条" },
@@ -1886,7 +1887,7 @@
   const BUDGET_FIELDS = [
     { key: "gate_hourly_budget", label: "每小时判定上限", type: "number", min: 0, max: 600, step: 1, unit: "次" },
     { key: "gate_vision_hourly_budget", label: "每小时视觉上限", type: "number", min: 0, max: 120, step: 1, unit: "次" },
-    { key: "gate_total_timeout_seconds", label: "整条判定时限", type: "number", min: 1, max: 25, step: 0.1, unit: "秒" },
+    { key: "gate_total_timeout_seconds", label: "整条判定时限", type: "number", min: 1, max: 60, step: 0.1, unit: "秒" },
   ];
   const REPLY_FIELDS = [
     { key: "fragment_wait_seconds", label: "碎片消息等待", type: "number", min: 0, max: 5, step: 0.1, unit: "秒" },
@@ -1916,7 +1917,7 @@
     { key: "understand_quote_depth", label: "引用链展开层数", type: "number", min: 0, max: 8, step: 1, unit: "层" },
     { key: "understand_card_parse", label: "解析卡片和小程序", type: "bool" },
     { key: "understand_image_enabled", label: "图片理解", type: "bool" },
-    { key: "understand_image_provider_id", label: "图片理解模型", type: "provider", role: "vision" },
+    { key: "understand_image_provider_id", label: "图片理解模型（可选覆盖）", type: "provider", role: "vision" },
     { key: "understand_voice_enabled", label: "语音转文字理解", type: "bool" },
     { key: "understand_voice_provider_id", label: "语音理解模型", type: "provider", role: "speech" },
   ];
@@ -1960,20 +1961,21 @@
     outage_notify_admin_qq: { desc: "填写有效QQ号码，留空使用AstrBot全局管理员。仅发送QQ私聊，提醒共用持久限频额度。", ex: "多个QQ用逗号分隔；兜底回复不需要同时打开文字判定断线恢复。" },
     participation_confidence_threshold: { desc: "参与适合度至少达到这个分数才有机会放行；还需理解话题，并且没有静默否决。", ex: "设 50：理解清楚且适合度 75 可放行；对方说「别继续了」仍静默。设 0 也不会取消静默否决。" },
     classifier_provider_id: { desc: "负责先判断是否接话的文字小模型，不负责写回复。留空会跟随会话主模型。", ex: "选择「Qwen/Qwen3-8B（锁定上游）」：日常文字判断固定用它。" },
-    classifier_timeout_seconds: { desc: "只限制一次文字判定的等待时间，超时则静默。", ex: "设 3.5 秒：文字模型超过 3.5 秒还没返回，本次不主动回复。" },
+    classifier_timeout_seconds: { desc: "只限制一次文字判定的等待时间（1–15 秒），超时则静默。", ex: "设 10 秒：文字模型超过 10 秒还没返回，本次不主动回复。" },
     gate_min_length: { desc: "归一化后的文字太短就跳过判断；有可用图片的消息除外。设 0 关闭长度过滤。", ex: "设 2 字：「嗯」会被过滤，「怎么打」可以进入判断；纯图片仍可走看图流程。" },
-    vision_provider_id: { desc: "只有图片内容决定是否参与时才使用，同时给回复模型提供图片摘要；正常静默不会再兜底。", ex: "选 qwen3-vl-plus：看图判断并提取摘要；摘要不足时回复仍需原图。留空按主模型兜底开关处理。" },
+    vision_shared_provider_id: { desc: "判定看图和图片理解默认都用这个模型。下面两个模型项只做单独覆盖，填了就优先于本项；本项留空表示不共用，两处各自跟随会话当前模型（判定看图仍按主模型兜底开关处理）。", ex: "两处都用同一个：只填本项；只有判定要换：再单独填「判定看图模型」。" },
+    vision_provider_id: { desc: "只覆盖判定看图的多模态小模型，同时给回复模型提供图片摘要；正常静默不会再兜底。留空跟随「视觉模型（共用）」；共用也为空时按主模型兜底开关处理。", ex: "选 qwen3-vl-plus：看图判断并提取摘要；摘要不足时回复仍需原图。留空则跟随共用视觉模型。" },
     gate_image_cache_ttl_seconds: { desc: "同完整会话、同视觉配置的相同图片，可短时复用已有观察；每条新消息仍重新判断是否参与。0关闭。", ex: "设300秒：5分钟内再次聊到已识别的图，文字模型直接参考缓存摘要；命中不续期，改模型或重载后重新识别。" },
-    vision_timeout_seconds: { desc: "只限制一次多模态判断；超时或调用失败时，才尝试已开启的主模型兜底。", ex: "设 6 秒：看图模型超过 6 秒未返回，再检查能否用会话主模型兜底。" },
+    vision_timeout_seconds: { desc: "只限制一次多模态判断（1–20 秒）；超时或调用失败时，才尝试已开启的主模型兜底。实际等待仍受整条判定时限截断。", ex: "设 15 秒：看图模型超过 15 秒未返回，再检查能否用会话主模型兜底。" },
     gate_main_fallback_enabled: { desc: "多模态模型异常时，让当前会话主模型再判断一次；主模型必须支持图片。", ex: "开启：多模态接口报错 → 主模型兜底；多模态正常说「不该回」就到此结束。" },
-    gate_main_fallback_timeout_seconds: { desc: "开启主模型兜底时，限制这次兜底调用的等待时间。", ex: "设 6 秒：主模型兜底超过 6 秒也未返回，保持静默。" },
+    gate_main_fallback_timeout_seconds: { desc: "开启主模型兜底时，限制这次兜底调用的等待时间（1–20 秒）。实际等待仍受整条判定时限截断。", ex: "设 12 秒：主模型兜底超过 12 秒也未返回，保持静默。" },
     gate_context_messages: { desc: "参与判断参考多少条近期群聊，包含机器人发言。越多越费输入 Token。", ex: "设 12 条：让小模型参考最近 12 条流水；设 0 不附近期流水。" },
     gate_context_max_age_seconds: { desc: "0表示不筛选时间，只按判定流水条数取近期消息；正数允许30~3600秒。机器人上一句及引用图片遵循同一规则，字符限制和会话隔离保留；不改变回复机会有效期。", ex: "设0，判定流水8条：保留最近8条，即使消息间隔超过一小时。" },
     gate_memory_timeout_seconds: { desc: "只有缺少历史背景时，才按当前会话和人格查记忆，最多补查一次。", ex: "设 1.5 秒：「昨天那件事后来呢？」需要查背景，检索超时或没有证据就静默。" },
     participation_context_messages: { desc: "放行后给主模型补充多少条近期群聊，帮助它写回复；与判定流水条数独立。", ex: "设 12 条：主模型生成时补充最近 12 条流水；不会改变小模型的判定条数。" },
     gate_hourly_budget: { desc: "每群每小时判定调用的总上限；文字、看图、兜底及记忆复判都计入。0 表示不限。", ex: "设 120 次：一条消息若用了文字和看图两层，就占 2 次，而不是 1 条消息。" },
     gate_vision_hourly_budget: { desc: "每群的多模态和主模型兜底共用此上限，同时仍受总判定上限约束。0 表示不限这一项。", ex: "设 20 次：看图 1 次再兜底 1 次，共占 2 次；用完后保持静默。" },
-    gate_total_timeout_seconds: { desc: "整条判定流程的总时限，包含文字、看图、兜底和背景检索；不含碎片等待及回复生成。", ex: "设 18 秒：即使各模型都有剩余时间，整条判定超过 18 秒也会停止。" },
+    gate_total_timeout_seconds: { desc: "整条判定流程的总时限（1–60 秒），包含文字、看图、兜底和背景检索；不含碎片等待及回复生成。各阶段超时都受它剩余预算截断，要跑满文字 15+多模态 20+兜底 20 需设到 55 以上。", ex: "设 18 秒：即使各模型都有剩余时间，整条判定超过 18 秒也会停止。" },
     fragment_wait_seconds: { desc: "明确 @、引用机器人、称呼唤醒和普通群聊都等待。同一会话、同一用户每次续发重置倒计时，安静结束后整批统一判断；其他用户不重置。0关闭。", ex: "设3秒：第0秒@机器人，第2秒发「我想问」，第4秒发「怎么加点」；第7秒一起判断，只产生一次回复机会。" },
     fragment_wait_private: { desc: "开启后私聊也按同用户续发重置碎片等待；默认关闭，与「过滤私聊」独立。", ex: "开启且等待3秒：连续私聊合并理解；关闭「过滤私聊」时照常直接交给主模型，不额外判参与分数。" },
     proactive_cooldown_seconds: { desc: "上次主动回复后，同群在这段时间内不再主动接话。0 表示关闭冷却。", ex: "设 8 秒：机器人刚主动说完，接下来 8 秒不连续抢话。" },
@@ -2009,7 +2011,7 @@
     understand_quote_depth: { desc: "引用链往上追几层；层数越多越看得懂「他在回谁」，也更费 token。", ex: "设 3 层：A 引用 B、B 引用 C，会读到 C；设 0 只看直接引用。" },
     understand_card_parse: { desc: "解析分享卡片和小程序链接的标题与简介，避免只看到一串 URL。", ex: "开启：B 站分享卡片能读到视频标题；关闭只剩链接。" },
     understand_image_enabled: { desc: "是否让插件自己读图并生成摘要给判定和回复用；关闭则只知道有几张图。", ex: "开启：能说出「图上是一张装备截图」；关闭只知道「含 1 张图」。" },
-    understand_image_provider_id: { desc: "专门用来读图的模型，需支持图片输入。留空则无法理解图片内容。", ex: "选 qwen3-vl-plus：用该模型读图并生成摘要。" },
+    understand_image_provider_id: { desc: "只覆盖回复前的图片理解，需支持图片输入。留空跟随「视觉模型（共用）」；共用也为空时跟随会话当前模型。", ex: "选 qwen3-vl-plus：图片理解固定用它；留空则与共用视觉模型一致。" },
     understand_voice_enabled: { desc: "是否把语音转成文字再判断；关闭则忽略语音内容。", ex: "开启：有人发语音时先转文字，再判断要不要接话。" },
     understand_voice_provider_id: { desc: "语音转写用的模型，需支持音频输入或原生 STT。留空则无法转写。", ex: "选原生 STT：用宿主语音识别转写。" },
     reply_recall_group: { desc: "群消息在判定或生成期间被撤回，就放弃这条回复。", ex: "开启：对方发完立刻撤回，机器人不再追着回。" },
@@ -2028,6 +2030,7 @@
     classifier_provider_id: "留空：不同会话会跟随各自主模型，成本和评分尺度可能随会话变化。",
     classifier_timeout_seconds: "设 1 秒：网络稍慢就会静默，适合低延迟优先但可能漏掉正常消息。",
     gate_min_length: "设 0：关闭短句过滤，「嗯」「好」也会进入模型判断，但不代表一定回复。",
+    vision_shared_provider_id: "留空：不共用，判定看图和图片理解各自跟随会话主模型；已填覆盖项时不影响覆盖项。",
     vision_provider_id: "留空并关闭主模型兜底：文字判断确认必须看图时，本次保持静默。",
     gate_image_cache_ttl_seconds: "设 0：相同图片每次都重新识别，模型调用更多，但不会复用旧摘要。",
     vision_timeout_seconds: "设 10 秒：给看图模型更多时间，代价是图片消息的判定等待更长。",
@@ -2265,7 +2268,9 @@
       const select = document.createElement("select");
       const follow = document.createElement("option");
       follow.value = "";
-      follow.textContent = field.key === "vision_provider_id" ? "未配置（按兜底开关处理）"
+      follow.textContent = field.key === "vision_provider_id" || field.key === "understand_image_provider_id"
+        ? "跟随「视觉模型（共用）」"
+        : field.key === "vision_shared_provider_id" ? "不共用（各自跟随会话当前模型）"
         : field.role === "tts" ? "跟随会话原生TTS"
         : field.role === "speech" ? "跟随会话原生STT"
         : "跟随会话当前模型";
@@ -2273,7 +2278,8 @@
       const candidates = (state.data.providers || []).filter(p =>
         field.role === "tts" ? p.role === "tts"
         : field.role === "speech" ? p.supports_audio === true
-        : field.role === "vision" || field.key === "vision_provider_id" ? p.supports_images === true
+        : field.role === "vision" || field.key === "vision_provider_id"
+          || field.key === "vision_shared_provider_id" ? p.supports_images === true
         : !p.role || p.role === "chat");
       // 显示用户自己给上游起的名字（name），不暴露 provider:upstream_N 这种内部标识；
       // 原生 provider 与路由上游分组展示，两类都能直接选。
@@ -2337,7 +2343,10 @@
       const initial = value || "";
       const paint = () => {
         tip.textContent = select.value ? "当前选择：" + select.options[select.selectedIndex]?.textContent
-          : field.key === "vision_provider_id" ? "未配置多模态模型。" : providerHint("");
+          : field.key === "vision_shared_provider_id" ? "未共用；两处各自跟随会话当前模型。"
+          : field.key === "vision_provider_id" || field.key === "understand_image_provider_id"
+            ? "未覆盖；跟随共用视觉模型，共用为空时跟随会话模型。"
+          : providerHint("");
         if (select.value !== initial) {
           // 分数尺度是跟模型走的，换模型不重标定等于沿用别人的阈值。
           tip.textContent += "；模型已更换，保存后请重新观察分数尺度。";
@@ -3913,7 +3922,8 @@
       if (key === "gate_mode") return;
       const value = state.draft[key];
       if (value === null || value === undefined) return;
-      if (value === "" && key !== "classifier_provider_id" && key !== "vision_provider_id") return;
+      if (value === "" && key !== "classifier_provider_id" && key !== "vision_provider_id"
+          && key !== "vision_shared_provider_id" && key !== "understand_image_provider_id") return;
       payload[key] = value;
     });
     if(policyDirty()) {

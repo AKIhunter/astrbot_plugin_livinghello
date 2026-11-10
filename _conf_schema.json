@@ -155,8 +155,9 @@
   "understand_image_provider_id": {
     "type": "string",
     "default": "",
-    "description": "图片理解模型",
-    "editor_mode": "select_provider"
+    "description": "图片理解模型（可选覆盖）",
+    "editor_mode": "select_provider",
+    "hint": "只覆盖回复前的图片理解。留空跟随「视觉模型（共用）」；共用项也为空时跟随支持图片的会话模型。"
   },
   "understand_voice_enabled": {
     "type": "bool",
@@ -201,11 +202,11 @@
     "type": "float",
     "default": 3.5,
     "slider": {
-      "min": 0.5,
-      "max": 8,
+      "min": 1,
+      "max": 15,
       "step": 0.1
     },
-    "hint": "超时按静默处理（fail-closed），因为放过一条无关消息会在群里刷屏。实测热态 p50≈1.3s，但空闲后首包会摸到 2.5s 以上，低于 3s 会开始丢正常消息。"
+    "hint": "范围1-15秒。超时按静默处理（fail-closed），因为放过一条无关消息会在群里刷屏。实测热态 p50≈1.3s，但空闲后首包会摸到 2.5s 以上，低于 3s 会开始丢正常消息。"
   },
   "classifier_outage_recovery_enabled": {
     "description": "回复断线监测与恢复",
@@ -243,11 +244,17 @@
     "default": 120,
     "hint": "范围10-300秒。补答会重放原请求上下文，超时视为补答失败，不阻断原响应流程。"
   },
-  "vision_provider_id": {
-    "description": "需要看图时的多模态小模型",
+  "vision_shared_provider_id": {
+    "description": "视觉模型（共用）",
     "type": "string",
     "default": "",
-    "hint": "文字层需要看图时调用，同时返回图片摘要和不确定点供回复参考。仅列出可确认图片能力的候选；摘要不足时仍需原图。留空按主模型兜底开关处理。"
+    "hint": "判定看图和图片理解默认都用这个模型。下面两个模型项只用于单独覆盖：留空跟随共用项，填了就以覆盖值为准。本项留空表示不共用，两处各自跟随会话当前模型（判定看图仍按主模型兜底开关处理）。"
+  },
+  "vision_provider_id": {
+    "description": "判定看图模型（可选覆盖）",
+    "type": "string",
+    "default": "",
+    "hint": "只覆盖文字层需要看图时调用的多模态小模型，同时返回图片摘要和不确定点供回复参考。仅列出可确认图片能力的候选；摘要不足时仍需原图。留空跟随「视觉模型（共用）」；共用项也为空时按主模型兜底开关处理。"
   },
   "gate_image_cache_ttl_seconds": {
     "description": "图片观察缓存时间（秒）",
@@ -259,7 +266,12 @@
     "description": "多模态判定超时（秒）",
     "type": "float",
     "default": 6,
-    "hint": "范围0.5-12秒。超时或返回格式异常才兜底；正常静默不会继续调用主模型。"
+    "slider": {
+      "min": 1,
+      "max": 20,
+      "step": 0.1
+    },
+    "hint": "范围1-20秒。超时或返回格式异常才兜底；正常静默不会继续调用主模型。实际等待仍受整条判定时限的剩余预算截断。"
   },
   "gate_main_fallback_enabled": {
     "description": "多模态异常时使用会话主模型兜底",
@@ -271,13 +283,23 @@
     "description": "主模型兜底超时（秒）",
     "type": "float",
     "default": 6,
-    "hint": "范围0.5-12秒。兜底一次，仍异常或看不懂则静默。"
+    "slider": {
+      "min": 1,
+      "max": 20,
+      "step": 0.1
+    },
+    "hint": "范围1-20秒。兜底一次，仍异常或看不懂则静默。实际等待仍受整条判定时限的剩余预算截断。"
   },
   "gate_total_timeout_seconds": {
     "description": "整条判定链路最长时间（秒）",
     "type": "float",
     "default": 18,
-    "hint": "范围1-25秒，包含文字、看图、兜底、记忆检索及模型解析。碎片等待和最终回复生成另受回复机会有效期约束。"
+    "slider": {
+      "min": 1,
+      "max": 60,
+      "step": 0.1
+    },
+    "hint": "范围1-60秒，包含文字、看图、兜底、记忆检索及模型解析。要同时跑满文字15+多模态20+兜底20（共55秒），需把本项设到55以上。碎片等待和最终回复生成另受回复机会有效期约束。"
   },
   "gate_vision_hourly_budget": {
     "description": "每群每小时视觉和主模型判定上限",

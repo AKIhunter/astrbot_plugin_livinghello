@@ -39,6 +39,11 @@ except ImportError:
         classify_classifier_failure,
     )
 
+try:
+    from .guard_vision_choice import GATE_OVERRIDE_KEY, effective_vision_provider
+except ImportError:
+    from guard_vision_choice import GATE_OVERRIDE_KEY, effective_vision_provider
+
 GATE_MODES = ("enforce", "shadow")
 DEFAULT_MODE = "enforce"
 DEFAULT_THRESHOLD = 65
@@ -594,7 +599,8 @@ class GateEngine:
     def timeout(self) -> float:
         # 实测：热态 p50≈1.3s、p90≈1.9s，但冷启动/空闲后首包会摸到 2.5s 以上
         # （连接重建 + 服务端排队）。给到 3.5s 才不会把正常消息 fail-closed 掉。
-        return self._float("classifier_timeout_seconds", 3.5, 0.5, 8.0)
+        # 范围与 schema、控制台保存校验、页面输入框保持一致：1-15 秒。
+        return self._float("classifier_timeout_seconds", 3.5, 1, 15)
 
     def upstream_fanout_enabled(self) -> bool:
         """判定是否按上游逐个短超时轮转（仅对自动路由 provider 生效）。"""
@@ -693,19 +699,24 @@ class GateEngine:
         return ""
 
     def vision_label(self) -> str:
-        return str(self._raw("vision_provider_id", "") or "").strip()
+        # 显式覆盖优先；留空跟随「视觉模型（共用）」；都为空时保持原逻辑。
+        return effective_vision_provider(self.config, GATE_OVERRIDE_KEY)
 
     def vision_timeout(self) -> float:
-        return self._float("vision_timeout_seconds", 6, 0.5, 12)
+        # 上限与页面/schema 同步放宽到 20 秒，避免保存后被这里静默夹回。
+        return self._float("vision_timeout_seconds", 6, 1, 20)
 
     def image_cache_ttl(self) -> int:
         return self._int("gate_image_cache_ttl_seconds", 300, 0, 1800)
 
     def main_timeout(self) -> float:
-        return self._float("gate_main_fallback_timeout_seconds", 6, 0.5, 12)
+        # 上限与页面/schema 同步放宽到 20 秒；仍受 total_timeout() 剩余预算截断。
+        return self._float("gate_main_fallback_timeout_seconds", 6, 1, 20)
 
     def total_timeout(self) -> float:
-        return self._float("gate_total_timeout_seconds", 18, 1, 25)
+        # 上限与 schema、控制台保存校验、页面输入框同步放宽到 60 秒：
+        # 文字15 + 多模态20 + 兜底20 = 55，再加取模型/取图开销才有余量。
+        return self._float("gate_total_timeout_seconds", 18, 1, 60)
 
     def main_fallback_enabled(self) -> bool:
         return self._raw("gate_main_fallback_enabled", True) is True

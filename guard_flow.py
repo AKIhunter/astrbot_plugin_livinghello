@@ -3,6 +3,11 @@ from __future__ import annotations
 
 import copy
 
+try:
+    from .guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+except ImportError:
+    from guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+
 GATE = [
     ("input", "候选输入", "取得当前消息、上一句、上下文；名单先于参与判断和观察模式生效。"),
     ("policy", "名单与来源", "QQ来源命中黑名单不读；白名单外、灰名单未明确唤醒只读静默。文字无来源时不模拟名单。"),
@@ -84,7 +89,8 @@ def build_flow(config, native=None, decision=None, inputs=None, replay=None):
         固定人格=native.get("fixed_persona_id") or "尚未由此页固定",
         回退模型=values.get("fallback_provider_ids", []))
     plan["perception"]["evidence"].update(
-        图片理解=config.get("understand_image_provider_id") or "跟随独立内容理解配置",
+        # 展示实际生效值：显式覆盖优先，留空跟随「视觉模型（共用）」。
+        图片理解=effective_vision_provider(config, UNDERSTAND_OVERRIDE_KEY) or "跟随会话当前模型",
         说明="从绫启用状态与具体工具结果需以实际会话记录为准")
     plan["emotion"]["evidence"]["LivingEmotion 开关"] = config.get("coupling_livingemotion_enabled", False)
     plan["retrieve"]["evidence"]["LivingMemory 开关"] = config.get("coupling_livingmemory_enabled", False)

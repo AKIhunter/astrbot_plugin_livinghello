@@ -22,11 +22,13 @@ try:
     from .guard_expression import congling_for, takeover
     from .guard_media import image_target
     from .guard_reply_delivery import number
+    from .guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
 except ImportError:
     from guard_reply_health import report_model_fault
     from guard_expression import congling_for, takeover
     from guard_media import image_target
     from guard_reply_delivery import number
+    from guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
 
 
 def read(value, *names, default=""):
@@ -470,8 +472,11 @@ class Understanding:
             state = "success"
             calls = 0 if role == "vision" else 1
             try:
-                selected = self.config.get("understand_image_provider_id" if role == "vision"
-                                           else "understand_voice_provider_id", "")
+                if role == "vision":
+                    # 图片理解：显式覆盖优先；留空跟随「视觉模型（共用）」，都空时跟随会话模型。
+                    selected = effective_vision_provider(self.config, UNDERSTAND_OVERRIDE_KEY)
+                else:
+                    selected = self.config.get("understand_voice_provider_id", "")
                 provider, kwargs = await self.resolve(selected, event, role)
                 if role == "vision":
                     target = image_target(provider, selected)
