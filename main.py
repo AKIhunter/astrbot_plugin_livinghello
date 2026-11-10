@@ -172,7 +172,16 @@ class Main(Star):
         return self._policy().snapshot()
 
     def get_function_coupling(self):
-        return coupling_snapshot(self.context, self.config)
+        result = coupling_snapshot(self.context, self.config)
+        # 私聊水位窗口由 LivingHello 拥有，经既有耦合契约下发给 LivingEmotion，
+        # 避免它直接读取本插件配置（跨插件直读是标准化禁止项）。
+        engine = getattr(self, "engine", None)
+        result["reply_freshness"] = {
+            "contract": "livinghello.reply-freshness.v1",
+            "private_watermark_window_seconds": (
+                engine.private_watermark_window() if engine is not None else 0.0),
+        }
+        return result
 
     @filter.on_llm_request(priority=10500)
     async def listen_livingemotion(self, event: AstrMessageEvent, req: ProviderRequest):
@@ -281,6 +290,7 @@ class Main(Star):
             result.chain = []
             if hasattr(result, "async_stream"):
                 result.async_stream = None
+        # 兼容用的历史键名：LivingEmotion 也按这个键回传丢弃原因，跨插件共用，不要改名。
         event.set_extra("_at_guard_delivery_blocked", reason)
         event.stop_event()
 
@@ -1073,7 +1083,7 @@ class Main(Star):
             event.set_extra("_at_guard_topic_contract", True)
 
         # 图片预算：base64 原图能把上下文撑到几十万 token，必须在最后一次请求前排掉。
-        # 放在这里是因为此时 at_guard、分片、image_history、其他插件的图片都已追加完。
+        # 放在这里是因为此时 LivingHello、分片、image_history、其他插件的图片都已追加完。
         if not event.get_extra("_livinghello_image_budget_done"):
             event.set_extra("_livinghello_image_budget_done", True)
             try:
@@ -1138,6 +1148,9 @@ class Main(Star):
             if delivered:
                 self._reply_health().tool_delivered(event, target=target, elapsed=spent)
                 service.increment(event, "tool_delivered")
+            else:
+                # 与「压根没调工具」区分：工具确实调了但结果是错误。
+                self._reply_health().tool_failed(event, result_text)
             emit(event, "tool_delivery", "success" if delivered else "failed",
                  tool=tool_name, ms=round(spent * 1000, 2))
             self.logger.info(
@@ -1560,7 +1573,7 @@ class Main(Star):
             return
         self.config["gate_mode"] = "enforce"
         self.logger.warning(
-            f"[智能过滤] 参与模式 {raw or '空值'} 已停用，自动迁移为硬闸门。"
+            f"[LivingHello] 参与模式 {raw or '空值'} 已停用，自动迁移为硬闸门。"
         )
         saver = getattr(self.config, "save_config", None)
         if callable(saver):
@@ -1568,7 +1581,7 @@ class Main(Star):
                 saver()
             except Exception as exc:
                 self.logger.warning(
-                    f"[智能过滤] 参与模式迁移未落盘，当前进程仍使用硬闸门: {exc!r}"
+                    f"[LivingHello] 参与模式迁移未落盘，当前进程仍使用硬闸门: {exc!r}"
                 )
 
     def get_fixed_native_persona_id(self, umo):
@@ -1576,17 +1589,53 @@ class Main(Star):
         settings = getattr(self, "_native_settings", None)
         return settings.fixed_persona_id(umo) if settings is not None else None
 
+    def _normalize_typing_config(self) -> None:
+        """旧开关并入打字速度：0=关闭，>0=开启；迁移后删除旧键。"""
+        if "reply_typing_enabled" not in self.config:
+            return
+        legacy_on = self.config.get("reply_typing_enabled") is True
+        try:
+            speed = float(self.config.get("reply_typing_chars_per_second", 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            speed = 0.0
+        if not math.isfinite(speed) or speed < 0:
+            speed = 0.0
+        if not legacy_on:
+            # 旧开关关闭：无论速度填了多少都保持关闭。
+            speed = 0.0
+        elif speed <= 0:
+            # 旧开关开启但速度为 0：按旧默认速度继续模拟，避免静默关闭。
+            speed = 2.5
+        self.config["reply_typing_chars_per_second"] = round(min(speed, 20.0), 2)
+        try:
+            del self.config["reply_typing_enabled"]
+        except (KeyError, TypeError):
+            pass
+        self.logger.warning(
+            "[回复方式] 模拟回复耗时开关已合并到打字速度："
+            f"当前 {self.config['reply_typing_chars_per_second']} 字/秒（0=不模拟）。"
+        )
+        saver = getattr(self.config, "save_config", None)
+        if callable(saver):
+            try:
+                saver()
+            except Exception as exc:
+                self.logger.warning(
+                    f"[回复方式] 打字配置迁移未落盘，当前进程仍使用合并后的值: {exc!r}"
+                )
+
     async def initialize(self) -> None:
         """Register the console bridge, then install bot names as wake prefixes."""
         self._ensure_classifier_probe_runtime()
         self._classifier_probe_closed = False
         self._normalize_gate_mode()
+        self._normalize_typing_config()
         try:
             from .guard_webui import register_webui
 
             register_webui(self, self.context)
         except Exception as exc:
-            self.logger.warning(f"[智能过滤] 控制台注册失败: {exc!r}")
+            self.logger.warning(f"[LivingHello] 控制台注册失败: {exc!r}")
 
         try:
             if getattr(self.context, "persona_manager", None) is not None:
@@ -1625,10 +1674,10 @@ class Main(Star):
             global_config["wake_prefix"] = wake_prefixes
             if added:
                 self.logger.info(
-                    f"[智能过滤] 已注册机器人称呼唤醒词：{', '.join(added)}"
+                    f"[LivingHello] 已注册机器人称呼唤醒词：{', '.join(added)}"
                 )
         except Exception as exc:
-            self.logger.warning(f"[智能过滤] 注册机器人称呼失败: {exc!r}")
+            self.logger.warning(f"[LivingHello] 注册机器人称呼失败: {exc!r}")
         # A reloaded instance must not wait out the old timer again. Persisted
         # PROBING is also reclaimed here after an interrupted prior instance.
         self.request_classifier_outage_probe(
@@ -1772,7 +1821,7 @@ class Main(Star):
                 event.set_extra("_at_guard_group_key", group_key)
                 event.set_extra("_at_guard_judged_revision", self.context_revision.get(group_key, 0))
             if mentions_self:
-                self.logger.info("[智能过滤] 原生@本机器人，直接进入回复流程。")
+                self.logger.info("[LivingHello] 原生@本机器人，直接进入回复流程。")
             self._record_bypass(event, "at_call" if mentions_self else "wake")
             return
 
@@ -1988,7 +2037,7 @@ class Main(Star):
                 decision.score, decision.threshold, False, decision.reason
             )
             self.logger.info(
-                f"[智能过滤] 参与适合度 {decision.score}/100，阈值 {decision.threshold}："
+                f"[LivingHello] 参与适合度 {decision.score}/100，阈值 {decision.threshold}："
                 f"静默（{decision.reason}，未生成回复，判定层={decision.stage}）"
             )
             event.stop_event()
@@ -2456,6 +2505,8 @@ class Main(Star):
     async def at_guard_score(self, text: str) -> dict | None:
         """对外打分入口：供其他插件（如 congling 醒后补课）耦合调用。
 
+        方法名是已公开的历史接口名，配套插件按它调用，改名会断掉耦合，保留。
+
         对一段文本做「该不该回」的打分，返回 {"score": 0~100}。不依赖 event，
         用配置里钉死的判定模型；拿不到模型 / 判定失败返回 None（调用方降级）。
 
@@ -2473,7 +2524,7 @@ class Main(Star):
             provider = None
         if provider is None:
             return None
-        # 复用判定模型，dry_run 不落统计（避免污染 at_guard 自己的分布）
+        # 复用判定模型，dry_run 不落统计（避免污染 LivingHello 自己的分布）
         try:
             async def resolve():
                 return provider
@@ -2488,7 +2539,7 @@ class Main(Star):
                 dry_run=True,
             )
         except Exception as exc:
-            self.logger.debug(f"[智能过滤] 对外打分失败: {exc!r}")
+            self.logger.debug(f"[LivingHello] 对外打分失败: {exc!r}")
             return None
         if decision.source == "error":
             return None
@@ -3047,7 +3098,7 @@ class Main(Star):
                     or not coupling_enabled(self.context, self.config, "livingmemory")):
                 return []  # 身份解析等待期间关闭接入，不再启动检索。
             # 阶段 1：优先走 LivingMemory 的统一身份入口（person 范围 + 旧会话双读
-            # + 受众过滤），不再由 at_guard 自己拼 session_id。
+            # + 受众过滤），不再由 LivingHello 自己拼 session_id。
             unified = getattr(instance, "search_memories_for_event", None)
             if callable(unified):
                 return await unified(
@@ -3276,7 +3327,7 @@ class Main(Star):
             "shadow": "观察模式",
         }.get(self._gate_mode(), self._gate_mode())
         yield event.plain_result(
-            f"智能过滤（{mode_label}）：阈值 {threshold}/100；"
+            f"LivingHello（{mode_label}）：阈值 {threshold}/100；"
             f"累计判断 {total} 次，平均 {average:.1f}；"
             f"放行 {allowed}，静默 {blocked}。\n"
             f"分数分布：{q_text}。\n"

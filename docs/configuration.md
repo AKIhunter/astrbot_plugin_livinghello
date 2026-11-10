@@ -26,8 +26,7 @@
 | `expression_private_reuse` | `false` | 私聊是否复用回复方式；关闭时直接回复，不引用当前消息，不复用本卡片的 Emoji 清理；开启后沿用引用与清理开关，@仍仅用于群聊 |
 | `reply_quote_enabled` | `true` | 引用当前消息 |
 | `reply_mention_enabled` | `false` | @当前发送者 |
-| `reply_typing_enabled` | `false` | 模拟回复耗时 |
-| `reply_typing_chars_per_second` | `2.5` | 模拟打字速度（字/秒） |
+| `reply_typing_chars_per_second` | `0` | 模拟打字速度（0=不模拟，字/秒） |
 | `reply_recall_group` | `false` | 群聊撤回消息不回复 |
 | `reply_recall_private` | `false` | 私聊撤回消息不回复 |
 | `expression_strip_emoji` | `true` | 清理文本Emoji和颜文字 |

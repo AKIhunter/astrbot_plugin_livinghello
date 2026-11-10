@@ -92,6 +92,7 @@ class EvidenceMemory:
                 del self.rows[key]
             elif key[0] == scope and key[1] in tools and self.related(row["query"], message):
                 hits.append({k: row[k] for k in ("query", "text", "source", "at")})
+        # 兼容用的历史前缀：清理逻辑和已注入的历史请求都按这个标记匹配。
         marker = "<at_guard_evidence"
         parts = req.extra_user_content_parts
         parts[:] = [part for part in parts if marker not in str(getattr(part, "text", ""))]

@@ -1,4 +1,4 @@
-"""智能过滤插件的控制台后端。
+"""LivingHello 插件的控制台后端。
 
 前端页面在 pages/guard/index.html，通过 AstrBot 插件页桥接调用这里的接口。
 所有接口都挂在 /<插件名>/console/* 下，写入前统一做白名单与范围校验，
@@ -87,7 +87,8 @@ NUMERIC_FIELDS: dict[str, tuple[str, float, float]] = {
     "gate_hourly_budget": ("int", 0, 600),
     "gate_context_messages": ("int", 0, 30),
     "gate_context_max_age_seconds": ("float", 0, 3600),
-    "gate_reply_max_age_seconds": ("float", 5, 120),
+    "gate_reply_max_age_seconds": ("float", 5, 300),
+    "private_watermark_window_seconds": ("float", 0, 60),
     "gate_memory_timeout_seconds": ("float", 0.2, 5),
     "participation_context_messages": ("int", 2, 30),
     "fragment_wait_seconds": ("float", 0, 5.0),
@@ -190,7 +191,7 @@ def _bind(plugin: Any, handler: Handler):
             used = (time.perf_counter() - started) * 1000.0
             if used >= SLOW_ENDPOINT_MS:
                 logger.warning(
-                    f"[智能过滤] 控制台慢接口 {handler.__name__.replace('handle_', '')} "
+                    f"[LivingHello] 控制台慢接口 {handler.__name__.replace('handle_', '')} "
                     f"{used:.0f}ms"
                 )
 
@@ -456,7 +457,7 @@ async def _build_providers(plugin: Any) -> list[dict[str, Any]]:
                     "supports_images": pinned_vision,
                 }
     except Exception as exc:
-        logger.warning(f"[智能过滤] 读取模型列表失败: {exc!r}")
+        logger.warning(f"[LivingHello] 读取模型列表失败: {exc!r}")
     for item in items.values():
         item["role"] = "chat"
         try:
@@ -492,9 +493,9 @@ async def _build_providers(plugin: Any) -> list[dict[str, Any]]:
     # 空结果不缓存：宿主的 provider 可能晚于首次请求才注册完成，
     # 一旦把空列表钉住 10 分钟，模型选择器就一个候选都没有。
     if not result:
-        logger.warning("[智能过滤] 模型列表为空（宿主 provider 可能尚未注册），本次不缓存")
+        logger.warning("[LivingHello] 模型列表为空（宿主 provider 可能尚未注册），本次不缓存")
     logger.warning(
-        f"[智能过滤] 模型列表 {len(result)} 项"
+        f"[LivingHello] 模型列表 {len(result)} 项"
         f"（宿主 provider {total_providers} 个，enable=False 跳过 {skipped_disabled} 个，"
         f"路由连接 {len(connections)} 个）"
     )
@@ -919,7 +920,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     total = sum(ms for _, ms in marks)
     if total >= 200.0:
         detail = " ".join(f"{name}={ms:.0f}ms" for name, ms in marks if ms >= 10.0)
-        logger.warning(f"[智能过滤] state 计算 {total:.0f}ms | {detail}")
+        logger.warning(f"[LivingHello] state 计算 {total:.0f}ms | {detail}")
     _STATE_CACHE["data"] = data
     _STATE_CACHE["at"] = time.monotonic()
     return data
@@ -1040,7 +1041,7 @@ async def handle_state(plugin: Any):
     try:
         return _response(await _state(plugin))
     except Exception as exc:
-        logger.exception(f"[智能过滤] 控制台状态读取失败: {exc}")
+        logger.exception(f"[LivingHello] 控制台状态读取失败: {exc}")
         return _failure(str(exc), 500)
 
 
@@ -1126,7 +1127,7 @@ async def handle_config(plugin: Any):
                     plugin.config.pop(key, None)
                 else:
                     plugin.config[key] = value
-            logger.exception(f"[智能过滤] 保存配置失败: {exc}")
+            logger.exception(f"[LivingHello] 保存配置失败: {exc}")
             return _failure(f"配置未落盘: {exc}", 500)
         # 与落盘之间没有 await：只有完整成功才发布不可变快照。
         plugin.publish_message_policy(validation)
@@ -1147,7 +1148,7 @@ async def handle_config(plugin: Any):
     if outage.current_event is not None and callable(trigger_probe):
         trigger_probe(immediate=True, reason="config_saved")
 
-    logger.info(f"[智能过滤] 控制台更新 {len(updates)} 项: {sorted(updates)}")
+    logger.info(f"[LivingHello] 控制台更新 {len(updates)} 项: {sorted(updates)}")
     _invalidate_state()
     # 落盘回执不组装统计、追踪、流程图或模型目录，页面在确认后独立刷新。
     data = {
@@ -1218,7 +1219,7 @@ async def handle_request_trace(plugin):
     try:
         data = await service.get(rid)
     except Exception as exc:  # noqa: BLE001 - 必须留下堆栈，否则前端只见 Network Error
-        logger.exception(f"[智能过滤] 读取追踪失败 request_id={rid}: {exc!r}")
+        logger.exception(f"[LivingHello] 读取追踪失败 request_id={rid}: {exc!r}")
         return _failure("读取追踪时发生内部错误，已记录日志", 500)
     if data is None:
         return _failure("追踪存储不可用" if service.health["storage"] == "unavailable"
@@ -1326,7 +1327,7 @@ async def handle_reset(plugin: Any):
         _invalidate_state()
         return _response(await _state(plugin), "统计已清零")
     except Exception as exc:
-        logger.exception(f"[智能过滤] 重置统计失败: {exc}")
+        logger.exception(f"[LivingHello] 重置统计失败: {exc}")
         return _failure(str(exc), 500)
 
 
@@ -1394,7 +1395,7 @@ async def handle_probe(plugin: Any):
                 dry_run=True, message_meta=parsed["meta"],
                 probe_text_limit=parsed["text_limit"], probe_background=parsed["background"])
     except Exception as exc:
-        logger.exception(f"[智能过滤] 试跑失败: {exc}")
+        logger.exception(f"[LivingHello] 试跑失败: {exc}")
         return _failure(f"试跑失败: {exc}", 500)
 
     replay = {**parsed["replay"], "policy_result": parsed["policy_result"],
@@ -1414,11 +1415,11 @@ async def handle_probe(plugin: Any):
 
 def register_webui(plugin: Any, context: Context) -> None:
     routes: list[tuple[str, str, Handler, str]] = [
-        ("console/state", "GET", handle_state, "智能过滤控制台状态"),
+        ("console/state", "GET", handle_state, "LivingHello 控制台状态"),
         ("console/decisions", "GET", handle_decisions, "搜索群ID、私聊QQ及判定内容"),
         ("console/request-trace", "GET", handle_request_trace, "读取单次请求的监听与执行追踪"),
         ("console/listeners", "GET", handle_listeners, "核查当前实例激活监听与采集健康"),
-        ("console/config", "POST", handle_config, "保存智能过滤参数"),
+        ("console/config", "POST", handle_config, "保存 LivingHello 参数"),
         ("console/message-policy/validate", "POST", handle_message_policy_validate, "只校验六个消息名单草稿"),
         ("console/native-segments", "GET", handle_native_segments, "读取AstrBot原生分段配置"),
         ("console/native-segments", "POST", handle_save_native_segments, "同步AstrBot原生分段配置"),
@@ -1429,7 +1430,7 @@ def register_webui(plugin: Any, context: Context) -> None:
         ("console/image-settings", "GET", handle_image_settings, "读取独立AI生图配置与每日额度"),
         ("console/image-settings", "POST", handle_save_image_settings, "保存独立AI生图设置"),
         ("console/flow", "GET", handle_flow, "读取判定与生成流程"),
-        ("console/reset", "POST", handle_reset, "清零智能过滤统计"),
+        ("console/reset", "POST", handle_reset, "清零 LivingHello 统计"),
         ("console/probe", "POST", handle_probe, "试跑一次参与判定"),
     ]
     _ok = 0
@@ -1440,13 +1441,13 @@ def register_webui(plugin: Any, context: Context) -> None:
                 route, _bind(plugin, handler), [method], description
             )
             _ok += 1
-            logger.info(f"[智能过滤] 已注册 {method} {route}")
+            logger.info(f"[LivingHello] 已注册 {method} {route}")
         except Exception as exc:
-            logger.error(f"[智能过滤] 注册 {method} {route} 失败: {exc}")
+            logger.error(f"[LivingHello] 注册 {method} {route} 失败: {exc}")
     # 成功时原来完全静默，出问题只能靠猜。这里给一条可核对的汇总日志。
     logger.warning(
-        f"[智能过滤] 控制台已注册 {_ok}/{len(routes)} 条路由（前缀 /{PLUGIN_NAME}/console）"
-        if _ok else f"[智能过滤] 控制台一条路由都没注册成功（共 {len(routes)} 条尝试）"
+        f"[LivingHello] 控制台已注册 {_ok}/{len(routes)} 条路由（前缀 /{PLUGIN_NAME}/console）"
+        if _ok else f"[LivingHello] 控制台一条路由都没注册成功（共 {len(routes)} 条尝试）"
     )
 
     # 把可用的判定模型动态写进插件的内存 schema，让 AstrBot 配置页的
@@ -1474,7 +1475,7 @@ async def _refresh_provider_schema(plugin: Any) -> None:
         try:
             providers = await _providers(plugin)
         except Exception as exc:
-            logger.warning(f"[智能过滤] 拉取判定模型列表失败: {exc!r}")
+            logger.warning(f"[LivingHello] 拉取判定模型列表失败: {exc!r}")
             return
         options = [item["id"] for item in providers]
         if not options:
@@ -1494,15 +1495,15 @@ def _write_schema_options(plugin: Any, options: list[str], vision_options: list[
         config = getattr(metadata, "config", None)
         schema = getattr(config, "schema", None)
         if not isinstance(schema, dict):
-            logger.warning("[智能过滤] 未找到插件配置 schema，判定模型下拉未注入")
+            logger.warning("[LivingHello] 未找到插件配置 schema，判定模型下拉未注入")
             return
         for key in ("classifier_provider_id", "vision_shared_provider_id", "vision_provider_id"):
             field = schema.get(key)
             if isinstance(field, dict):
                 field["options"] = [""] + (options if key == "classifier_provider_id" else (vision_options or []))
         logger.info(
-            f"[智能过滤] 已把 {len(options)} 个判定模型写入配置 schema 下拉："
+            f"[LivingHello] 已把 {len(options)} 个判定模型写入配置 schema 下拉："
             f"{', '.join(options)}"
         )
     except Exception as exc:
-        logger.warning(f"[智能过滤] 写入判定模型下拉失败: {exc!r}")
+        logger.warning(f"[LivingHello] 写入判定模型下拉失败: {exc!r}")

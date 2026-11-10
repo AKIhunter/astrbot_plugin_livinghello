@@ -1,4 +1,4 @@
-"""智能过滤闸门的判定引擎。
+"""LivingHello 闸门的判定引擎。
 
 与 main.py 的分工：
 - main.py 只做协议层：事件、群流水、AstrBot 的 stop_event、防刷屏。
@@ -617,7 +617,11 @@ class GateEngine:
         return maximum == 0 or age <= maximum
 
     def reply_max_age(self) -> float:
-        return self._float("gate_reply_max_age_seconds", 30, 5, 120)
+        return self._float("gate_reply_max_age_seconds", 30, 5, 300)
+
+    def private_watermark_window(self) -> float:
+        # 私聊水位宽限：0 保留旧的严格相等校验，>0 时由 LivingEmotion 按时间窗放行连发。
+        return self._float("private_watermark_window_seconds", 15, 0, 60)
 
     def memory_timeout(self) -> float:
         return self._float("gate_memory_timeout_seconds", 1.5, 0.2, 5)
@@ -1181,7 +1185,7 @@ class GateEngine:
                 failure.category if failure is not None else ""
             )
             self.logger.debug(
-                "[智能过滤] 取判定模型失败，已按脱敏类别关闭本次判定。"
+                "[LivingHello] 取判定模型失败，已按脱敏类别关闭本次判定。"
             )
             provider = None
         if provider is None:

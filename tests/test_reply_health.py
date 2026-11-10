@@ -273,8 +273,8 @@ class ReplyHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.health.finish_cron(event))
         self.assertTrue(event.get_extra(KEY)["ended"])
         self.assertEqual(self.health.summary["state"], "failed")
-        self.assertEqual(self.health.summary["category"], "final_message_missing")
-        trace.finish.assert_called_once_with(event, "failed", "final_message_missing")
+        self.assertEqual(self.health.summary["category"], "tool_not_called")
+        trace.finish.assert_called_once_with(event, "failed", "tool_not_called")
 
     async def test_non_cron_tool_delivery_is_not_final_send(self):
         # 回归保护：普通消息的 send_message_to_user 不能代替带 token 的最终回复包。

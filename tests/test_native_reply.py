@@ -240,7 +240,7 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
 
     def test_migration_preserves_wait_recall_understanding_and_native_values(self):
         config = dict(expression_quote_probability=.6, expression_sticker_enabled=True,
-                      fragment_wait_seconds=3.5, reply_typing_enabled=True,
+                      fragment_wait_seconds=3.5, reply_typing_chars_per_second=2.5,
                       reply_recall_group=True, understand_voice_enabled=True)
         native = {"platform_settings": {"reply_with_quote": False, "reply_with_mention": True,
                                        "segmented_reply": copy.deepcopy(NATIVE)}}
@@ -249,7 +249,7 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(config["reply_quote_enabled"])
         self.assertTrue(config["reply_mention_enabled"])
         self.assertEqual(config["fragment_wait_seconds"], 3.5)
-        self.assertTrue(config["reply_typing_enabled"])
+        self.assertEqual(config["reply_typing_chars_per_second"], 2.5)
         self.assertTrue(config["reply_recall_group"])
         self.assertTrue(config["understand_voice_enabled"])
         self.assertEqual(native, before)
@@ -282,7 +282,7 @@ class ReplyModeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_independent_media_send_and_semantic_heads_are_preserved(self):
         guard = plugin(gate_config(expression_takeover_enabled=True, reply_quote_enabled=False,
-                                   reply_mention_enabled=False, reply_typing_enabled=True))
+                                   reply_mention_enabled=False, reply_typing_chars_per_second=2.5))
         event = Event()
         semantic_quote, semantic_at = Reply(id="m1"), At(qq="999")
         event.result.chain = [semantic_quote, semantic_at, Plain("原文")]

@@ -1,4 +1,4 @@
-# 智能过滤插件
+# LivingHello 插件
 
 用于 AstrBot 4.29.1 及以上版本。
 

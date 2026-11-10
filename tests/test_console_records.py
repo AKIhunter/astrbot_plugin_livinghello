@@ -516,7 +516,7 @@ class OutageConsoleStatusTest(unittest.TestCase):
         source = Path(guard_webui.__file__).read_text()
         self.assertIn('"outage_recovery": _outage_status(plugin, providers)', source)
         self.assertIn(
-            '("console/state", "GET", handle_state, "智能过滤控制台状态")',
+            '("console/state", "GET", handle_state, "LivingHello 控制台状态")',
             source,
         )
 
@@ -566,7 +566,7 @@ _timing_path = Path(os.environ.get(
     # 测试移入 tests/ 后仍从插件同级目录寻找可选配套源码。
     str(Path(__file__).resolve().parents[2] / "LivingMemory/core/retrieval/request_timing.py")))
 timing = None
-# LivingMemory是可选配套插件；独立克隆AtGuard时不能让其缺席阻断全部测试导入。
+# LivingMemory是可选配套插件；独立克隆LivingHello时不能让其缺席阻断全部测试导入。
 if _timing_path.is_file():
     _spec = importlib.util.spec_from_file_location("lm_request_timing_test", _timing_path)
     timing = importlib.util.module_from_spec(_spec)

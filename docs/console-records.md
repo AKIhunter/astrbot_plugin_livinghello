@@ -25,7 +25,7 @@
 | text | 所有文字判定调用，包含记忆补查后的文字复判 |
 | vision | 多模态判定调用，包含失败与超时 |
 | main_fallback | 图片异常后的主模型判定调用 |
-| memory | at_guard记忆接口总等待，含身份解析、检索及返回值复核 |
+| memory | LivingHello记忆接口总等待，含身份解析、检索及返回值复核 |
 | embedding | 请求向量或等待同请求内共享的向量任务 |
 | vector_index | 原生向量索引搜索 |
 | memory_read | 记忆文档读取，以及线上权限筛选所需的候选读取 |

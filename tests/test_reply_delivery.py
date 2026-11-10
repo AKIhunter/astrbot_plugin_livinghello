@@ -122,7 +122,7 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.event.sent[0].chain[0], Reply)
 
     async def test_unrelated_direct_send_is_not_split_or_delayed(self):
-        await self.arm(reply_typing_enabled=True)
+        await self.arm(reply_typing_chars_per_second=2.5)
         direct = Chain([Plain("提示")], llm=False)
         with patch.object(self.delivery, "typing_pause", new_callable=AsyncMock) as wait:
             await self.event.send(direct)
@@ -130,7 +130,7 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(self.event.sent[0], direct)
 
     async def test_typing_output_chars_25_gives_10_seconds(self):
-        self.guard.config.update(expression_takeover_enabled=True, reply_typing_enabled=True)
+        self.guard.config.update(expression_takeover_enabled=True, reply_typing_chars_per_second=2.5)
         self.assertEqual(self.delivery.typing_seconds([Plain("字" * 25)]), 10)
         self.assertEqual(self.delivery.typing_seconds([Plain("字" * 100)]), 40)
         self.assertEqual(self.delivery.typing_seconds([Plain("字 " * 25)]), 10)
@@ -138,13 +138,13 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.delivery.typing_seconds([Plain("字" * 25)]), 5)
 
     async def test_typing_off_and_owner_off_disable_delay(self):
-        for config in ({"reply_typing_enabled": False}, {"reply_typing_enabled": True, "expression_takeover_enabled": False}):
+        for config in ({"reply_typing_chars_per_second": 0}, {"reply_typing_chars_per_second": 2.5, "expression_takeover_enabled": False}):
             self.guard.config.update(config)
             self.assertEqual(self.delivery.typing_seconds([Plain("字" * 25)]), 0)
 
     async def test_typing_one_delay_per_actual_bubble_without_duplicate_plan(self):
         self.event.result.chain = [Plain("字" * 25)]
-        await self.arm(reply_typing_enabled=True)
+        await self.arm(reply_typing_chars_per_second=2.5)
         with patch.object(self.delivery, "typing_pause", new_callable=AsyncMock, return_value=True) as wait:
             await self.event.send(self.event.result)
             await self.event.send(self.event.result)
@@ -196,7 +196,7 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_recall_during_typing_ends_wait_immediately(self):
         self.event.result.chain = [Plain("字" * 25)]
-        await self.arm(reply_recall_group=True, reply_typing_enabled=True)
+        await self.arm(reply_recall_group=True, reply_typing_chars_per_second=2.5)
         task = asyncio.create_task(self.event.send(self.event.result))
         await asyncio.sleep(0)
         self.delivery.notice(recall(self.event))
@@ -205,7 +205,7 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_earlier_fragment_recall_wakes_current_typing_wait(self):
         self.event.result.chain = [Plain("字" * 25)]
-        await self.arm(reply_recall_group=True, reply_typing_enabled=True)
+        await self.arm(reply_recall_group=True, reply_typing_chars_per_second=2.5)
         earlier = Event(mid="old")
         self.window(earlier)
         await self.delivery.prepare(earlier)
@@ -225,7 +225,7 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.event.sent), 1)
 
     async def test_unload_cancels_typing_without_sending(self):
-        await self.arm(reply_typing_enabled=True)
+        await self.arm(reply_typing_chars_per_second=2.5)
         task = asyncio.create_task(self.event.send(self.event.result))
         await asyncio.sleep(0)
         await self.delivery.close()
@@ -336,12 +336,16 @@ class SettingsTest(unittest.TestCase):
     def test_old_features_removed_new_default_and_limits(self):
         schema = _load_schema_subset()
         self.assertTrue(schema["expression_takeover_enabled"]["default"])
-        self.assertFalse(schema["reply_typing_enabled"]["default"])
-        self.assertEqual(schema["reply_typing_chars_per_second"]["default"], 2.5)
+        self.assertNotIn("reply_typing_enabled", schema)
+        self.assertEqual(schema["reply_typing_chars_per_second"]["default"], 0)
+        self.assertEqual(schema["private_watermark_window_seconds"]["default"], 15)
         for key in ("reply_delivery_enabled", "reply_hesitation_enabled", "reply_recall_window_seconds"):
             self.assertNotIn(key, EDITABLE)
             self.assertNotIn(key, schema)
-        for key, value in (("reply_typing_chars_per_second", 0), ("understand_forward_max_depth", 9)):
+        self.assertEqual(_coerce("reply_typing_chars_per_second", 0), 0)
+        self.assertEqual(schema["gate_reply_max_age_seconds"]["slider"]["max"], 300)
+        self.assertEqual(_coerce("gate_reply_max_age_seconds", 300), 300)
+        for key, value in (("reply_typing_chars_per_second", -1), ("understand_forward_max_depth", 9)):
             with self.assertRaises(ValueError):
                 _coerce(key, value)
         for key in REMOVED_FIELDS:

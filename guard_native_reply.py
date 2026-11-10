@@ -14,6 +14,8 @@ FIELDS = (
     "words_count_threshold", "split_mode", "regex", "split_words", "content_cleanup_rule",
 )
 VIRTUAL_FIELDS = {"second_period", "split_words_enabled", "max_segments"}
+# 兼容用的历史标记：已写进宿主人格配置的分段正则并随配置持久化，
+# 改名会让旧配置不再被识别为“管理模式”。不要改。
 MANAGED_RE = re.compile(r"^\(\?#at-guard-reply-v2;words=([01]);second=([01]);max=(\d+)\)")
 
 

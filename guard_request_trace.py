@@ -115,7 +115,7 @@ class RequestTrace:
                 "last_seen": dict(self.last_seen), "health": dict(self.health),
                 "pending": len(self.pending), "active": sum(r["state"] not in TERMINAL for r in self.rows.values()),
                 "features": {key: config.get(key) for key in (
-                    "gate_mode", "expression_takeover_enabled", "reply_typing_enabled",
+                    "gate_mode", "expression_takeover_enabled", "reply_typing_chars_per_second",
                     "reply_recall_group", "reply_recall_private", "understand_image_enabled",
                     "understand_voice_enabled")}}
 

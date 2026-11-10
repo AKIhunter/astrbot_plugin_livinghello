@@ -112,7 +112,7 @@ class NativePipelineTests(unittest.IsolatedAsyncioTestCase):
                            native_quote=True, native_mention=True, quote=True, mention=True,
                            media=False, tts=False, t2i=False, cancel="", streaming=False):
         guard = plugin(gate_config(expression_takeover_enabled=True, reply_quote_enabled=quote,
-                                   reply_mention_enabled=mention, reply_typing_enabled=True))
+                                   reply_mention_enabled=mention, reply_typing_chars_per_second=2.5))
         event = Event()
         event.get_platform_name = lambda: platform
         event.plugins_name = []

@@ -24,6 +24,8 @@ try:
 except ImportError:
     from guard_thinking_filter import strip_thinking_chain
 
+# 兼容用的历史标识：congling/core/rhythm.py 仍按这个键名和 "at_guard" 值判断
+# 回复归属，改名会让从绫把 LivingHello 的回复当成自己的。不要改。
 OWNER_KEY = "_at_guard_reply_owner"
 RECALLED_KEY = "_at_guard_source_recalled"
 
@@ -232,11 +234,13 @@ class ReplyDelivery:
         return result
 
     def typing_seconds(self, chain, event=None):
-        if not enabled(self.config, "reply_typing_enabled") or not self.owns_expression():
+        # 速度 0 即关闭模拟；不再单独维护开关，避免「开关开着但速度 0」的歧义。
+        speed = number(self.config, "reply_typing_chars_per_second", 0, 0, 20)
+        if speed <= 0 or not self.owns_expression():
             return 0.0
         text = "".join(c.text for c in chain if isinstance(c, Plain))
         chars = len(re.sub(r"\s", "", text))
-        return chars / number(self.config, "reply_typing_chars_per_second", 2.5, .5, 20)
+        return chars / speed
 
     async def typing_pause(self, event, seconds):
         started = time.monotonic()
@@ -271,7 +275,7 @@ class ReplyDelivery:
             result.derive = owned_derive
             result._at_guard_delivery_token = token
         except (AttributeError, TypeError):
-            self.logger.warning("[智能过滤] 当前结果不能登记发送策略，保留原生回复")
+            self.logger.warning("[LivingHello] 当前结果不能登记发送策略，保留原生回复")
             return
         event.set_extra("_at_guard_delivery_plan", {
             "token": token, "semantic_headers": {
@@ -415,7 +419,7 @@ class ReplyDelivery:
             event.send = wrapped
             event.set_extra("_at_guard_send_patched", True)
         except (AttributeError, TypeError):
-            self.logger.warning("[智能过滤] 当前事件无法包装发送，表达保留宿主行为")
+            self.logger.warning("[LivingHello] 当前事件无法包装发送，表达保留宿主行为")
             return False
 
         original_streaming = getattr(event, "send_streaming", None)
@@ -455,7 +459,7 @@ class ReplyDelivery:
                                 return
                     except Exception as exc:
                         self.logger.warning(
-                            '[智能过滤] thinking 清洗失败: %r', exc)
+                            '[LivingHello] thinking 清洗失败: %r', exc)
                     health_row = event.get_extra(HEALTH_KEY)
                     if health_row and health_row["model_done"]:
                         # 生成器完全耗尽之后才认领；工具直接发送不继承该标记。

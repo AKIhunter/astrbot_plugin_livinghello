@@ -20,7 +20,7 @@ run_offline_tests.py         根目录兼容运行入口
 .github/workflows/checks.yml 文档和离线回归
 ```
 
-正式仓库为 `AKIhunter/astrbot_plugin_livinghello`，默认分支 `main`。独立维护根目录源码，不再从旧总库同步或执行 subtree split。技术 ID 保留 `astrbot_plugin_at_guard`，不要为了名称统一而搬数据、改 API 或重命名运行模块。
+正式仓库为 `AKIhunter/astrbot_plugin_livinghello`，默认分支 `main`。独立维护根目录源码，不再从旧总库同步或执行 subtree split。技术 ID 已统一为 `astrbot_plugin_LivingHello`，目录、配置、数据与路由随之迁移；不要再改回旧名，也不要新增第二套别名。
 
 ## 从完整克隆执行验证
 
@@ -65,7 +65,7 @@ git archive --format=zip HEAD -o /tmp/livinghello-release.zip
 
 ## 日志与指标
 
-默认数据目录沿用 `data/plugin_data/astrbot_plugin_at_guard/`：
+默认数据目录为 `data/plugin_data/astrbot_plugin_LivingHello/`：
 
 | 文件或指标 | 权威含义 | 更新/复核触发 |
 | --- | --- | --- |
@@ -123,7 +123,7 @@ LivingMemory 的 `core/retrieval/request_timing.py` 可通过请求局部 Contex
 
 ## WebUI 接口索引
 
-路由前缀沿用 `astrbot_plugin_at_guard`，通过 AstrBot 插件页面桥接和权限机制访问。
+路由前缀为 `astrbot_plugin_LivingHello`，通过 AstrBot 插件页面桥接和权限机制访问。
 
 | 路径 | 方法 | 用途 |
 | --- | --- | --- |

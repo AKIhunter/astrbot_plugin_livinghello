@@ -32,12 +32,17 @@ INTENTIONAL = {
     "whitelist_user", "whitelist_group", "graylist_user", "graylist_group",
     "no_reply", "new_message", "stale_context", "expired", "duplicate",
     "message_expired", "context_changed",
+    # 以下由 LivingEmotion 在丢弃已生成回复时回传：属于主动取消，不是发送失败。
+    "superseded_by_new_message", "configuration_changed", "memory_evidence_changed",
+    "watermark_unverified", "send_check_error", "event_stopped", "streaming_conflict",
+    "mode_inactive",
 }
 CATEGORIES = {"timeout", "connection_error", "http_429", "http_5xx", "empty_response",
               "protocol_error", "authentication_error", "provider_missing",
               "configuration_error", "send_unknown", "final_message_missing",
               "model_reply_missing", "completion_timeout", "preparation_failed",
-              "quota_exhausted", "model_execution_error"}
+              "quota_exhausted", "model_execution_error",
+              "tool_call_failed", "tool_not_called"}
 ERROR_LABELS = {
     "quota_exhausted": "上游账户余额或额度不足",
     "timeout": "模型请求超时", "connection_error": "上游连接失败",
@@ -48,6 +53,7 @@ ERROR_LABELS = {
     "final_message_missing": "最终回复未确认发送",
     "send_unknown": "回复发送失败或结果未确认",
     "completion_timeout": "回复流程超时", "preparation_failed": "消息准备失败",
+    "tool_call_failed": "发送工具调用失败", "tool_not_called": "未调用发送工具",
 }
 
 
@@ -74,6 +80,9 @@ def error_category(value):
     if any(word in text for word in ("not enough quota", "insufficient_quota",
                                      "insufficient balance", "余额不足", "额度不足")):
         return "quota_exhausted"
+    # 判定模型返回非法枚举/不符合约定格式，不能落到通用执行异常。
+    if "protocol" in text or "invalid response format" in text:
+        return "protocol_error"
     if "429" in text or "rate limit" in text:
         return "http_429"
     if "timeout" in text or "timed out" in text:
@@ -285,7 +294,7 @@ class ReplyHealth:
         # cron 主动任务没有 pipeline 最终投递，只能把工具发送当作送达证据。
         row = {"event": event, "service": self, "expected": expected, "model_done": False,
                "sent": 0, "failed": False, "fault": None, "ended": False,
-               "cron": is_cron_event(event), "tool_sent": 0,
+               "cron": is_cron_event(event), "tool_sent": 0, "tool_error": False,
                "token": object(), "owner": None, "started": self.clock()}
         event.set_extra(KEY, row)
         self.active[id(event)] = row
@@ -390,11 +399,38 @@ class ReplyHealth:
 
     def model_done(self, event, response):
         row = self.watch(event, expected=True)
-        if row:
-            row["model_done"] = response is not None and getattr(response, "role", "") != "err"
-            if response is not None and getattr(response, "role", "") == "err":
-                row["fault"] = ("main_model", error_category(
-                    getattr(response, "completion_text", "")))
+        if not row:
+            return
+        if response is None:
+            row["model_done"] = False
+            return
+        if getattr(response, "role", "") == "err":
+            row["model_done"] = False
+            row["fault"] = ("main_model", error_category(
+                getattr(response, "completion_text", "")))
+            return
+        # 正文为空（含只回 reasoning 被裁空）属于模型层空响应，
+        # 不能留到投递层被误报成 final_message_missing。
+        if hasattr(response, "completion_text"):
+            body = getattr(response, "completion_text", "")
+            try:
+                empty = not str(body or "").strip()
+            except Exception:
+                empty = False
+            if empty:
+                row["model_done"] = False
+                row["fault"] = ("main_model", "empty_response")
+                return
+        row["model_done"] = True
+
+    def tool_failed(self, event, reason=""):
+        """cron 发送工具报错：与「压根没调工具」区分，终态仍是 failed。"""
+        row = event.get_extra(KEY)
+        if not row or row["ended"]:
+            return False
+        row["tool_error"] = True
+        row["tool_error_reason"] = safe_excerpt(reason, 120)
+        return True
 
     def classifier_failed(self, event, category):
         row = self.watch(event)
@@ -494,7 +530,9 @@ class ReplyHealth:
             bool(plan.get("failed")), blocked, row["expected"],
         )
         layer, category = row["fault"] or (
-            ("delivery", "send_unknown" if row["failed"] else "final_message_missing")
+            ("delivery", "tool_call_failed") if row.get("cron") and row.get("tool_error")
+            else ("delivery", "tool_not_called") if row.get("cron") and not row.get("tool_sent")
+            else ("delivery", "send_unknown" if row["failed"] else "final_message_missing")
             if row["model_done"] else ("main_model", "model_reply_missing"))
         if timed_out:
             layer, category = "pipeline", "completion_timeout"

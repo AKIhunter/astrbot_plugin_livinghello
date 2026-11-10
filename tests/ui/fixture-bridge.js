@@ -67,7 +67,6 @@
     duplicate_window_seconds: 60,
     gate_reply_max_age_seconds: 30,
     gate_congling_prepare_compat: true,
-    reply_typing_enabled: true,
     reply_typing_chars_per_second: 4,
     expression_takeover_enabled: true,
     reply_quote_enabled: true,

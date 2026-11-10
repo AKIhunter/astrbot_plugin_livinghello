@@ -20,7 +20,7 @@ AstrBot 只在非流式 ``_parse_openai_completion()`` 里用正则剥离
 围栏代码块/表格原样保留，不参与标签清洗，避免把示例代码误删。
 
 设计约束：不创建新组件对象，只改连续 Plain 中的第一个、把同组其余置空，
-以保留 at_guard 投递链里基于 ``id(c)`` 的组件追踪。
+以保留 LivingHello 投递链里基于 ``id(c)`` 的组件追踪。
 """
 from __future__ import annotations
 

@@ -1197,6 +1197,7 @@
   let settingsData = null, settingsDraft = {}, imageData = null, imageDraft = {}, flowData = null;
   let stateSequence = 0, flowSequence = 0;
   const nativeDirty = () => Object.keys(nativeDraft).length + Object.keys(settingsDraft).length + Object.keys(imageDraft).length;
+  // 兼容用的历史键名：浏览器里已保存的选择按它存取，改名会丢用户已选的原生配置。
   const nativeProfileKey = "at-guard-native-profile";
   let preferredNativeProfile = "default";
   try { preferredNativeProfile = localStorage.getItem(nativeProfileKey) || "default"; } catch (_) {}
@@ -1892,9 +1893,9 @@
     { key: "fragment_wait_private", label: "私聊也等待碎片", type: "bool" },
     { key: "proactive_cooldown_seconds", label: "主动回复冷却", type: "number", min: 0, max: 60, step: 0.1, unit: "秒" },
     { key: "duplicate_window_seconds", label: "相同消息去重", type: "number", min: 0, max: 3600, step: 1, unit: "秒" },
-    { key: "gate_reply_max_age_seconds", label: "回复机会有效期", type: "number", min: 5, max: 120, step: 1, unit: "秒" },
-    { key: "reply_typing_enabled", label: "模拟回复耗时", type: "bool" },
-    { key: "reply_typing_chars_per_second", label: "模拟打字速度", type: "number", min: 0.5, max: 20, step: 0.1, unit: "字/秒" },
+    { key: "gate_reply_max_age_seconds", label: "回复机会有效期", type: "number", min: 5, max: 300, step: 1, unit: "秒" },
+    { key: "private_watermark_window_seconds", label: "私聊水位时间", type: "number", min: 0, max: 60, step: 1, unit: "秒" },
+    { key: "reply_typing_chars_per_second", label: "模拟打字速度（0=不模拟）", type: "number", min: 0, max: 20, step: 0.1, unit: "字/秒" },
   ];
   const EXPRESSION_FIELDS = [
     { key: "expression_takeover_enabled", label: "启用回复方式管理", type: "bool" },
@@ -1977,7 +1978,8 @@
     fragment_wait_private: { desc: "开启后私聊也按同用户续发重置碎片等待；默认关闭，与「过滤私聊」独立。", ex: "开启且等待3秒：连续私聊合并理解；关闭「过滤私聊」时照常直接交给主模型，不额外判参与分数。" },
     proactive_cooldown_seconds: { desc: "上次主动回复后，同群在这段时间内不再主动接话。0 表示关闭冷却。", ex: "设 8 秒：机器人刚主动说完，接下来 8 秒不连续抢话。" },
     duplicate_window_seconds: { desc: "近期已回复的相同文字，在同群的这段时间里不重复回复。0 表示关闭去重。", ex: "设 60 秒：同群一分钟内再次问相同的「怎么下载」，避免重复回答。" },
-    gate_reply_max_age_seconds: { desc: "自主回复从收到消息到发送的总时限。判定、看图、记忆检索、工具调用和模拟打字的耗时都会从中扣除，剩下的才是正文可用的时间。群里后来有人说话不会取消这轮回复，只有消息被撤回或总时长超限才放弃。", ex: "设120秒：判定2秒、看图4秒、生成20秒、打字3秒，正文实际只占用十几秒，余量充足；总时长超过120秒才放弃。" },
+    gate_reply_max_age_seconds: { desc: "自主回复从收到消息到发送的总时限。判定、看图、记忆检索、工具调用和模拟打字的耗时都会从中扣除，剩下的才是正文可用的时间。范围5-300秒，默认30秒。消息被撤回或总时长超限才放弃；群里后来有人说话不取消，私聊新消息是否取消由「私聊水位时间」决定。", ex: "设300秒：判定2秒、看图4秒、生成20秒、打字3秒，正文可用时间充足；总时长超过300秒才放弃。" },
+    private_watermark_window_seconds: { desc: "私聊回复生成期间收到新消息时的宽限。生成开始后这段时间内到达的消息视为同一轮连发，旧回复照常发送；超过这段时间视为新话题，丢弃旧回复。0=严格水位（任何新消息都丢弃旧回复）。只影响私聊，群聊仍由发送前复核处理。", ex: "设15秒：生成开始后8秒用户又发一句，本轮回复仍发出；若新消息在20秒后才到，则丢弃本轮回复。" },
     bot_names: { desc: "消息以这些名字开头时，视为明确叫机器人，免主动冷却。开启碎片等待时仍合并判断，等待设0时直接放行。名称用逗号分隔。", ex: "填「恰比姐，恰比」：「恰比 在吗」会明确唤醒；修改称呼后重载插件以更新框架前缀。" },
     empty_mention_mode: { desc: "碎片等待结束后，整批仍只有 @、没有具体内容时，选固定一句话或沿用当前会话人格生成；后补问题则合并判断。", ex: "先@、2秒后补「怎么加点」：不会先发「嗯？」；没有后补内容时再按所选方式回应。" },
     empty_mention_reply: { desc: "只在「固定文案」模式生效，不调用模型。", ex: "填「在呢，怎么啦？」：群友只 @ 机器人时直接发送这一句。" },
@@ -1994,8 +1996,7 @@
     classifier_needs_attention_retry_seconds: { desc: "进入「需处理」状态后，每隔多久自动重探一次上游；设 0 表示不再自动重探，只能靠管理员手动恢复。", ex: "设 300 秒：每 5 分钟悄悄试一次，上游恢复后立即回到正常判定。" },
     classifier_outage_self_heal_seconds: { desc: "故障持续超过这段时间仍不恢复时，放弃拦截直接放行判定，避免一条上游故障把整个群永久卡死。质量会降级，但不会全静默。", ex: "设 1800 秒：上游挂了半小时还没好，就先恢复对话，不再让所有消息静默。" },
     understand_hard_timeout_seconds: { desc: "解析加理解合计最多等多久；超过就按本次没看懂图片处理，并提醒回复模型不要猜画面。", ex: "设 20 秒：一张图解析加识别合计 20 秒仍未完成，本次按没看懂处理。" },
-    reply_typing_enabled: { desc: "按正文长度模拟打字耗时后再发送，让节奏接近真人；只延后发送时机，不改内容。", ex: "开启且速度 5 字/秒：100 字正文大约延迟 20 秒发出。" },
-    reply_typing_chars_per_second: { desc: "模拟打字的换算速度；数值越小，回复等得越久。", ex: "设 8 字/秒：60 字回复约等 7.5 秒。" },
+    reply_typing_chars_per_second: { desc: "模拟打字的换算速度；0=不模拟（默认），正文生成完立即发送。数值越大等待越短，模拟等待会从回复有效期里扣除。", ex: "设 8 字/秒：60 字回复约等 7.5 秒；设 0：完全不等待。" },
     expression_takeover_enabled: { desc: "本页接管回复的发送方式（引用、@、清理）；关闭则交给从绫或宿主原生方式，下面几项同时失效。", ex: "开启：可控制引用与@；关闭：完全沿用宿主原有发送行为。" },
     reply_quote_enabled: { desc: "首条回复引用你这条消息，群里能看清在回谁。", ex: "开启：回复挂在原消息下方；关闭：直接发正文。" },
     reply_mention_enabled: { desc: "在群聊回复开头 @ 当前发送者；私聊不适用。", ex: "开启：群消息显示 @某人；私聊仍直接发正文。" },
@@ -2052,6 +2053,8 @@
     classifier_outage_self_heal_seconds: "设 0：关闭自愈，故障期间所有消息一直静默，直到上游恢复或人工处理。",
     duplicate_window_seconds: "设 0：关闭相同文字去重，同群重复问题可再次触发回复。",
     gate_reply_max_age_seconds: "设 10 秒：生成较慢的主动回复更容易过期；明确呼叫不受此项限制。",
+    private_watermark_window_seconds: "设 0：恢复严格水位，生成期间只要来了新私聊就丢弃旧回复。",
+    reply_typing_chars_per_second: "设 0：关闭模拟打字，正文生成完立即发送。",
     bot_names: "填「小绫」：以「小绫，帮我看看」开头的群消息会被视为明确唤醒。",
     empty_mention_mode: "选择按人格生成：只有空 @ 时调用当前会话模型，若后续补了问题则合并正常处理。",
     empty_mention_reply: "填「我在，继续说」：只 @ 没有正文时直接发送，不产生模型费用。",
@@ -2569,7 +2572,7 @@
       empty_mention_reply: currentConfig("empty_mention_mode") === "fixed",
       empty_mention_persona_prompt: currentConfig("empty_mention_mode") === "persona",
       gate_main_fallback_timeout_seconds: currentConfig("gate_main_fallback_enabled") === true,
-      reply_typing_chars_per_second: currentConfig("expression_takeover_enabled") === true && currentConfig("reply_typing_enabled") === true,
+      reply_typing_chars_per_second: currentConfig("expression_takeover_enabled") === true,
       understand_image_provider_id: currentConfig("expression_takeover_enabled") === true && currentConfig("understand_image_enabled") === true,
       understand_voice_provider_id: currentConfig("expression_takeover_enabled") === true && currentConfig("understand_voice_enabled") === true,
       reply_quote_enabled: currentConfig("expression_takeover_enabled") === true,
