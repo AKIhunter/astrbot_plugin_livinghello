@@ -26,7 +26,7 @@ try:  # 作为插件包加载时走相对导入
     from .guard_media import image_target
     from .guard_reply_delivery import ReplyDelivery
     from .guard_reply_delivery import number
-    from .guard_reply_health import ReplyHealth
+    from .guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
     from .guard_reply_fallback import ReplyFallback
     from .guard_reasoning_retry import ReasoningRetry
     from .guard_fragments import FragmentWait
@@ -58,7 +58,7 @@ except ImportError:  # 单文件调试兜底
     from guard_media import image_target
     from guard_reply_delivery import ReplyDelivery
     from guard_reply_delivery import number
-    from guard_reply_health import ReplyHealth
+    from guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
     from guard_reply_fallback import ReplyFallback
     from guard_reasoning_retry import ReasoningRetry
     from guard_fragments import FragmentWait
@@ -1123,10 +1123,29 @@ class Main(Star):
         starts = event.get_extra("_livinghello_tool_started", {}) or {}
         started_at = starts.pop((id(tool), id(tool_args)), None)
         event.set_extra("_livinghello_tool_started", starts)
+        spent = 0.0
         if started_at is not None:
             spent = max(0.0, time.monotonic() - float(started_at))
             total = float(event.get_extra("_at_guard_tool_seconds", 0) or 0)
             event.set_extra("_at_guard_tool_seconds", total + spent)
+        # cron 主动任务没有最终回复包，send_message_to_user 是唯一的用户可见投递。
+        # 只认这一个工具；普通消息仍由带 token 的最终回复证明送达。
+        tool_name = str(getattr(tool, "name", "") or "")
+        if tool_name == "send_message_to_user":
+            delivered, result_text = tool_result_delivered(tool_name, tool_result)
+            target = str(tool_args.get("session") or "") if isinstance(tool_args, dict) else ""
+            target = target or str(getattr(event, "unified_msg_origin", "") or "")
+            if delivered:
+                self._reply_health().tool_delivered(event, target=target, elapsed=spent)
+                service.increment(event, "tool_delivered")
+            emit(event, "tool_delivery", "success" if delivered else "failed",
+                 tool=tool_name, ms=round(spent * 1000, 2))
+            self.logger.info(
+                "[LivingHello] send_message_to_user request_id=%s session=%s delivered=%r "
+                "elapsed=%.0fms result=%s",
+                event.get_extra("_livinghello_request_id") or "",
+                safe_excerpt(target, 80), delivered, spent * 1000,
+                safe_excerpt(result_text, 120))
         # MCP isError只用于受控结果类别，不保存参数、工具正文或模型思考。
         service.end(event, span, "uncollected" if tool_result is None else
                     "failed" if getattr(tool_result, "isError", False) else "success",
@@ -1190,7 +1209,12 @@ class Main(Star):
             service.end(event, span, "uncollected", reason="tool_end_missing")
         spans.clear()
         row = service.rows.get(service.identity(event)["request_id"], {})
-        if event.get_extra("_at_guard_delivery_blocked"):
+        health_row = event.get_extra("_livinghello_reply_health") or {}
+        if health_row.get("cron"):
+            # cron 主动任务没有 pipeline 最终投递：Agent结束即收尾，
+            # 有工具发送记完成，没有则立即记最终消息缺失，不占用 900 秒 watchdog。
+            self._reply_health().spawn(self._reply_health().finish_cron(event))
+        elif event.get_extra("_at_guard_delivery_blocked"):
             service.finish(event, "cancelled", str(event.get_extra("_at_guard_delivery_blocked")))
         elif row.get("state") not in {"cancelled", "failed", "silent"}:
             # Agent结束不是平台投递完成；工具的前置发送也不是最终回复。

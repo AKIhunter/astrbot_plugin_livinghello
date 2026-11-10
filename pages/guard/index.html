@@ -1841,8 +1841,9 @@
     configuration_error: "模型配置或请求参数有误",
     preparation_failed: "请求准备失败",
     model_reply_missing: "模型未产出回复",
-    completion_timeout: "生成阶段超时",
-    final_message_missing: "生成结果为空，没有可发送内容",
+    completion_timeout: "回复流程超时（未确认最终发送）",
+    final_message_missing: "最终回复未确认发送",
+    tool_delivery_confirmed: "工具已送达",
     send_unknown: "发送状态未知",
     not_waking: "未处于醒来窗口",
     already_read: "这一夜已读过",
@@ -2816,7 +2817,7 @@
       http_429:"上游限流",http_5xx:"上游服务异常",authentication_error:"认证或权限异常",
       empty_response:"返回为空",model_reply_missing:"未取得最终回复",
       final_message_missing:"未确认最终发送",send_unknown:"发送失败或未确认",
-      completion_timeout:"流程超时",preparation_failed:"准备失败",model_execution_error:"执行异常"};
+      completion_timeout:"流程超时（未确认最终发送）",preparation_failed:"准备失败",model_execution_error:"执行异常"};
     return (layers[fault.layer] || "回复") + " · " +
       (reasons[fault.category] || fault.category || "原因未采集");
   }
@@ -3011,7 +3012,7 @@
     embedding:"向量化",vector_index:"向量索引",memory_read:"文档读取",input_vision:"图片理解",
     speech_to_text:"语音转写",tools:"同步工具",image_tool_attachment:"生图工具挂载",image_tool:"生图工具",
     image_preflight:"生图预检",image_quota:"生图额度",image_api:"绘图API",image_download:"图片下载",
-    image_delivery:"图片投递",segments:"分段",expression:"排版 / 引用 / @",typing:"打字等待",
+    image_delivery:"图片投递",tool_delivery:"工具送达",segments:"分段",expression:"排版 / 引用 / @",typing:"打字等待",
     native_tts:"语音组件投递",native_text_image:"文本转图来源",context_revision:"上下文版本",
     delivery:"最终投递",lifecycle:"请求状态",llm_request:"回复请求入口",decision_attempt:"判定尝试"};
   const TRACE_PRIORITY=["failed","timeout","cancelled","incomplete","running","awaiting_delivery","active",
@@ -3058,9 +3059,9 @@
     context_changed: "生成期间群聊又进了新消息，但回复照常发出（只在历史记录中标注）",
     context_advanced_but_kept: "判定后群友又发言，本轮结论不变，照常回复",
     message_recalled: "消息在发送前被撤回",
-    final_message_missing: "上游没有返回可用正文，可能是空响应或被过滤掉了",
+    final_message_missing: "模型结束了，但没有可发送的最终回复；主动任务请检查是否调用了 send_message_to_user",
     model_reply_missing: "调用结束了但没有拿到正文",
-    completion_timeout: "主模型生成阶段超时，没有拿到完整回复",
+    completion_timeout: "流程在时限内没有确认最终发送：可能生成未完成，也可能回复包已发出但没有回执",
     empty_response: "上游返回了空内容，判定没有结论",
     timeout: "判定调用超时，没有得出结论",
     error: "判定调用异常，没有得出结论",
@@ -3074,6 +3075,9 @@
 
   function sendOutcome(trace, row) {
     if(!trace) return "";
+    const toolDelivered = Number(trace.summary?.tool_delivered ?? 0);
+    if(toolDelivered > 0)
+      return "最终发送：已通过 send_message_to_user 工具送达 "+toolDelivered+" 次。";
     const sent = Number(trace.summary?.sent_packets ?? 0);
     if(sent > 0) return "最终发送：已发出 "+sent+" 个消息包。";
     if(["active","awaiting_delivery"].includes(trace.state))

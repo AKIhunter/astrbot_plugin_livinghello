@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from astrbot.api.message_components import At, Plain
-from guard_reply_health import KEY, ReminderStore, ReplyHealth, qq_ids
+from guard_reply_health import KEY, ReminderStore, ReplyHealth, qq_ids, tool_result_delivered
 from guard_webui import _coerce, _outage_status
 from test_gate import plugin, gate_config
 from test_reply_delivery import Event, Chain
@@ -238,6 +238,78 @@ class ReplyHealthTests(unittest.IsolatedAsyncioTestCase):
         await self.health.finish(self.event, timed_out=True)
         self.assertEqual(self.health.summary["category"], "completion_timeout")
         self.assertEqual(len(self.sent), 1)
+
+    def cron_event(self):
+        event = self.event_for()
+        event.get_platform_name = lambda: "cron"
+        event.unified_msg_origin = "cron:active_agent"
+        return event
+
+    async def test_cron_tool_delivery_completes_without_waiting_timeout(self):
+        event = self.cron_event()
+        trace = SimpleNamespace(finish=Mock(), end=Mock(), record=Mock(),
+                                identity=lambda _event: {"request_id": "r1", "message_id": ""})
+        event.set_extra("_livinghello_trace", trace)
+        self.health.watch(event, expected=True)
+        self.health.model_done(event, object())
+        self.assertTrue(self.health.tool_delivered(
+            event, target="qq-bot:FriendMessage:9001", elapsed=0.12))
+        self.assertTrue(await self.health.finish_cron(event))
+        row = event.get_extra(KEY)
+        await asyncio.sleep(0)  # 让被取消的 watchdog 真正结束。
+        self.assertTrue(row["ended"])
+        # 工具送达即收尾：watchdog 必须被取消，不能再等 900 秒。
+        self.assertTrue(row["watchdog"].cancelled())
+        self.assertEqual(self.health.summary["state"], "healthy")
+        trace.finish.assert_called_once_with(event, "completed", "tool_delivery_confirmed")
+
+    async def test_cron_without_tool_reports_final_message_missing_immediately(self):
+        event = self.cron_event()
+        trace = SimpleNamespace(finish=Mock(), end=Mock(), record=Mock(),
+                                identity=lambda _event: {"request_id": "r2", "message_id": ""})
+        event.set_extra("_livinghello_trace", trace)
+        self.health.watch(event, expected=True)
+        self.health.model_done(event, object())
+        self.assertTrue(await self.health.finish_cron(event))
+        self.assertTrue(event.get_extra(KEY)["ended"])
+        self.assertEqual(self.health.summary["state"], "failed")
+        self.assertEqual(self.health.summary["category"], "final_message_missing")
+        trace.finish.assert_called_once_with(event, "failed", "final_message_missing")
+
+    async def test_non_cron_tool_delivery_is_not_final_send(self):
+        # 回归保护：普通消息的 send_message_to_user 不能代替带 token 的最终回复包。
+        self.health.watch(self.event, expected=True)
+        self.health.model_done(self.event, object())
+        self.health.tool_delivered(self.event, target="qq-bot:GroupMessage:1001", elapsed=0.1)
+        # finish_cron 只处理 cron 事件，普通消息仍走原有时序。
+        self.assertFalse(await self.health.finish_cron(self.event))
+        self.assertFalse(self.event.get_extra(KEY)["ended"])
+        await self.health.finish(self.event)
+        self.assertEqual(self.health.summary["state"], "failed")
+        self.assertEqual(self.health.summary["category"], "final_message_missing")
+        # 没有最终回复包时，watchdog 仍会把普通消息判成流程超时。
+        other = self.event_for()
+        self.health.watch(other, expected=True)
+        self.health.model_done(other, object())
+        self.health.tool_delivered(other, target="qq-bot:GroupMessage:1001", elapsed=0.1)
+        await self.health.finish(other, timed_out=True)
+        self.assertEqual(self.health.summary["category"], "completion_timeout")
+
+    async def test_tool_result_delivery_classification(self):
+        def result(text, is_error=False):
+            return SimpleNamespace(isError=is_error,
+                                   content=[SimpleNamespace(text=text)])
+
+        self.assertTrue(tool_result_delivered(
+            "send_message_to_user", result("Message sent to session qq-bot:FriendMessage:9001"))[0])
+        self.assertFalse(tool_result_delivered(
+            "send_message_to_user", result("error: failed to find platform for session x"))[0])
+        self.assertFalse(tool_result_delivered(
+            "send_message_to_user", result("boom", is_error=True))[0])
+        self.assertFalse(tool_result_delivered("send_message_to_user", None)[0])
+        # 只认这一个工具，泛化到其他工具等于放开普通消息判定。
+        self.assertFalse(tool_result_delivered(
+            "send_message", result("Message sent to session x"))[0])
 
     async def test_close_does_not_alert_or_cancel_real_task(self):
         release = asyncio.Event()

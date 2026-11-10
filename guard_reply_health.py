@@ -114,6 +114,38 @@ def substantive(chain):
                and (not isinstance(c, Plain) or c.text.strip()) for c in chain or [])
 
 
+def is_cron_event(event):
+    """宿主 CronMessageEvent 的平台名固定为 cron；只据此识别主动任务。"""
+    try:
+        return str(event.get_platform_name() or "") == "cron"
+    except Exception:
+        return False
+
+
+def tool_result_text(tool_result):
+    """工具结果只取文本；CallToolResult.content 是带 text 的分片列表。"""
+    if tool_result is None:
+        return ""
+    content = getattr(tool_result, "content", None)
+    if content is not None:
+        return "\n".join(str(getattr(part, "text", "") or "") for part in content)
+    if isinstance(tool_result, bytes):
+        return tool_result.decode("utf-8", "replace")
+    return str(tool_result)
+
+
+def tool_result_delivered(tool_name, tool_result):
+    """只认 send_message_to_user 的成功回执；异常返回和 error: 前缀都不算送达。"""
+    if str(tool_name or "") != "send_message_to_user" or tool_result is None:
+        return False, ""
+    text = tool_result_text(tool_result)
+    if getattr(tool_result, "isError", False):
+        return False, text
+    if text.strip().lower().startswith("error:"):
+        return False, text
+    return True, text
+
+
 class ReminderStore:
     """先原子认领再发送。崩溃/超时不释放额度，不重试未知写入。"""
     def __init__(self, directory):
@@ -250,8 +282,10 @@ class ReplyHealth:
         if len(self.active) >= self.MAX_ACTIVE:
             self.plugin.logger.warning("[LivingHello] 回复监测容量已满。")
             return None
+        # cron 主动任务没有 pipeline 最终投递，只能把工具发送当作送达证据。
         row = {"event": event, "service": self, "expected": expected, "model_done": False,
                "sent": 0, "failed": False, "fault": None, "ended": False,
+               "cron": is_cron_event(event), "tool_sent": 0,
                "token": object(), "owner": None, "started": self.clock()}
         event.set_extra(KEY, row)
         self.active[id(event)] = row
@@ -397,6 +431,25 @@ class ReplyHealth:
         else:
             row["failed"] = True
 
+    def tool_delivered(self, event, *, target="", elapsed=0.0):
+        """记录一次 send_message_to_user 成功发送；只对 cron 场景参与成功判定。"""
+        row = event.get_extra(KEY)
+        if not row or row["ended"]:
+            return False
+        row["tool_sent"] += 1
+        row["tool_sent_at"] = self.clock()
+        row["tool_target"] = safe_excerpt(target, 80)
+        row["tool_elapsed_ms"] = round(max(0.0, float(elapsed)) * 1000, 2)
+        return True
+
+    async def finish_cron(self, event):
+        """cron 任务在 Agent 结束时立即收尾，不再干等最终回复包。"""
+        row = event.get_extra(KEY)
+        if not row or row["ended"] or not row.get("cron"):
+            return False
+        await self.finish(event)
+        return True
+
     async def finish(self, event, *, pipeline_error=False, timed_out=False):
         row = event.get_extra(KEY)
         if not row or row["ended"] or self.closed:
@@ -411,7 +464,10 @@ class ReplyHealth:
         intentional = (blocked in INTENTIONAL or event.get_extra("_livinghello_intentional_silence")
                        or (policy and not policy.get("reply_allowed", True)))
         plan = event.get_extra("_at_guard_delivery_plan") or {}
-        success = (row["model_done"] and row["sent"] > 0 and not row["failed"]
+        # 普通消息仍要求带 token 的最终回复包；cron 主动任务才允许工具送达兜底。
+        cron_tool = bool(row.get("cron") and row.get("tool_sent", 0) > 0)
+        delivered = (row["model_done"] and row["sent"] > 0) or cron_tool
+        success = (delivered and not row["failed"]
                    and not plan.get("failed") and not pipeline_error and not timed_out)
         trace = event.get_extra("_livinghello_trace")
         if intentional or (not row["expected"] and not row["fault"]
@@ -422,7 +478,9 @@ class ReplyHealth:
             return
         if success:
             if trace:
-                trace.finish(event, "completed", "final_delivery_confirmed")
+                # cron 没有最终回复包，用「工具已送达」区别于普通消息的最终投递。
+                trace.finish(event, "completed", "tool_delivery_confirmed"
+                             if cron_tool and row["sent"] == 0 else "final_delivery_confirmed")
             async with self.state_lock:
                 if not self.summary.get("failed_at") or row["started"] >= self.summary["failed_at"]:
                     self.summary["recovered_at"] = self.clock()

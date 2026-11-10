@@ -308,6 +308,27 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["summary"]["tool_calls"], 1)
         self.assertFalse(event.get_extra("_livinghello_tool_spans"))
 
+    async def test_cron_agent_done_closes_health_on_tool_delivery(self):
+        # cron 主动任务没有 pipeline 最终投递，工具成功即代表本轮送达。
+        event = Event()
+        event.get_platform_name = lambda: "cron"
+        self.guard.evidence = SimpleNamespace(remember=lambda *args: None)
+        await self.guard.trace_agent_begin(event, None)
+        await self.guard.trace_tool_start(
+            event, SimpleNamespace(name="send_message_to_user"), {})
+        await self.guard.remember_tool_evidence(
+            event, SimpleNamespace(name="send_message_to_user"), {},
+            SimpleNamespace(isError=False, content=[SimpleNamespace(
+                text="Message sent to session cron:active_agent")]))
+        await self.guard.trace_agent_done(
+            event, None, SimpleNamespace(completion_text="正文"))
+        await asyncio.sleep(0)
+        # watchdog 会被主动取消，不能用 gather（取消态任务会抛出 CancelledError）。
+        await asyncio.wait(list(self.guard.reply_health.tasks), timeout=2)
+        row = await self.service.get(event.get_extra(ID_KEY))
+        self.assertEqual(row["state"], "completed")
+        self.assertEqual(row["summary"]["tool_delivered"], 1)
+
 
 def actual_host_namespace(guard):
     """执行当前宿主注册表、派发函数及MainAgentHooks方法体。"""

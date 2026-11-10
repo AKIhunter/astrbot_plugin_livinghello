@@ -143,7 +143,8 @@ class RequestTrace:
             "started_at": stamp, "updated_at": stamp, "instance_id": self.instance_id,
             "state": "active", "coverage": self.listeners()["coverage"], "events": [],
             "features": {}, "spans": {}, "next_span": 0, "source_ids": [],
-            "summary": {"tool_calls": 0, "image_api_calls": 0, "sent_packets": 0},
+            "summary": {"tool_calls": 0, "image_api_calls": 0, "sent_packets": 0,
+                        "tool_delivered": 0},
             "config_snapshot": self.listeners()["features"],
             "truncated": False,
         }
