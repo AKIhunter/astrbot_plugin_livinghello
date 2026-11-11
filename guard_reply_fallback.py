@@ -10,10 +10,16 @@ from astrbot.api.provider import LLMResponse
 from astrbot.core.platform.message_type import MessageType
 
 try:
-    from .guard_reply_health import KEY, error_category, ERROR_LABELS
+    from .guard_reply_health import (
+        ERROR_LABELS, FAIL_REPORT, KEY, NOT_AN_ERROR, RETRY_THEN_ROTATE,
+        ROTATE_NOW_REPORT, classify,
+    )
     from .guard_request_trace import emit
 except ImportError:
-    from guard_reply_health import KEY, error_category, ERROR_LABELS
+    from guard_reply_health import (
+        ERROR_LABELS, FAIL_REPORT, KEY, NOT_AN_ERROR, RETRY_THEN_ROTATE,
+        ROTATE_NOW_REPORT, classify,
+    )
     from guard_request_trace import emit
 
 
@@ -186,6 +192,16 @@ class ReplyFallback:
         if reason == "context_changed":
             group = self.plugin._group_key(event)
             judged = event.get_extra("_at_guard_judged_revision")
+            if judged is None:
+                # 只在旧闸门兼容路径出现：先留锚点，原有 TypeError 行为保持不变。
+                rid = str(event.get_extra("_livinghello_request_id") or "")
+                self.plugin.logger.warning(
+                    "[ReplyFault] code=CONTEXT_CHANGED_TYPEERROR stage=hello "
+                    "category=not_an_error disposition=not_an_error%s "
+                    "reason=cancel(context_changed) 缺少 _at_guard_judged_revision，"
+                    "下一行将抛 TypeError",
+                    f" request_id={rid}" if rid else "",
+                )
             bumps = int(event.get_extra("_at_guard_early_ack_bumps", 0) or 0)
             metadata = {"judged": judged, "before": judged + bumps,
                         "after": self.plugin.context_revision.get(group, 0),
@@ -215,7 +231,8 @@ class ReplyFallback:
             runner.provider = candidate
             self.plugin._reply_health().provider(event, candidate)
             started = self.clock()
-            has_output, final, category, valid = False, None, "empty_response", False
+            has_output, final, category, disposition, valid = (
+                False, None, "empty_response", RETRY_THEN_ROTATE, False)
             previous_retries = runner.request_max_retries
             stream = None
             try:
@@ -237,7 +254,8 @@ class ReplyFallback:
                             continue
                         final = response
                         if self.failed(response):
-                            category = error_category(getattr(response, "completion_text", ""))
+                            category, disposition = classify(
+                                getattr(response, "completion_text", ""))
                             break
                         runner._sanitize_malformed_tool_calls(response)
                         valid = True
@@ -246,7 +264,7 @@ class ReplyFallback:
                 self.cancel(event, runner, state, "agent_aborted")
                 raise
             except Exception as exc:
-                category = error_category(exc)
+                category, disposition = classify(exc)
             finally:
                 runner.request_max_retries = previous_retries
                 if stream is not None:
@@ -260,14 +278,29 @@ class ReplyFallback:
             self.account(event, started)
             state.update(state="failed", category=category)
             emit(event, "reply_retry", "failed", calls=1, count=state["retries"], reason=category)
+            if disposition == NOT_AN_ERROR:
+                # 业务性取消不是故障：不重试、不告警，按主动静默收尾。
+                self.cancel(event, runner, state, "no_reply")
+                return
             if has_output:
                 # 即使平台缓冲了片段也保守停止，不拼接重复的回复。
+                break
+            if disposition == FAIL_REPORT:
+                # 无可用上游/程序缺陷：换候选没有意义，直接失败并上报。
                 break
             retrying = True
             reason = self.stop_reason(event, runner, state, retrying=True)
             if reason:
                 self.cancel(event, runner, state, reason)
                 return
+            if disposition == ROTATE_NOW_REPORT:
+                # 认证/参数类错误重试不会变好：立即换候选，不占退避额度。
+                await self.plugin._reply_health().failure(
+                    "main_model", category, event=event)
+                attempt += 1
+                if attempt >= len(candidates):
+                    break
+                continue
             if state["retries"] < self.RETRIES:
                 state["retries"] += 1
                 delay = min(16, 2 ** (state["retries"] - 1)) + random.uniform(0, .25)

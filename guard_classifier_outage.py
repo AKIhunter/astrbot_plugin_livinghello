@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import math
 import re
-import socket
 import sqlite3
-import ssl
 import threading
 import time
 import uuid
@@ -14,18 +12,24 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
+try:
+    from .guard_reply_health import (
+        DISPOSITION_BY_CATEGORY, NOT_AN_ERROR, RETRY_THEN_ROTATE, classify,
+    )
+except ImportError:
+    from guard_reply_health import (
+        DISPOSITION_BY_CATEGORY, NOT_AN_ERROR, RETRY_THEN_ROTATE, classify,
+    )
+
 
 COOLDOWN_SECONDS = 10 * 60
 # 偶发抖动（超时、限流、5xx）不值得冻住十分钟；真正需要人看的故障才用长冷却。
 SHORT_COOLDOWN_SECONDS = 2 * 60
-_SHORT_COOLDOWN_CATEGORIES = frozenset({
-    "timeout",
-    "connection_error",
-    "http_429",
-    "http_5xx",
-    "empty_response",
-    "protocol_error",
-})
+# 冷却档位只由统一处置决定：可重试类短冷却，需人工类长冷却。
+_SHORT_COOLDOWN_CATEGORIES = frozenset(
+    category for category, disposition in DISPOSITION_BY_CATEGORY.items()
+    if disposition == RETRY_THEN_ROTATE
+)
 
 
 def cooldown_for(category: str, *, short: float | None = None,
@@ -114,19 +118,6 @@ class ClassifierFailure:
         )
 
 
-_RECOVERABLE_CATEGORIES = frozenset({
-    "timeout",
-    "connection_error",
-    "http_429",
-    "http_5xx",
-    "empty_response",
-    "protocol_error",
-})
-_ATTENTION_CATEGORIES = frozenset({
-    "authentication_error",
-    "provider_missing",
-    "configuration_error",
-})
 _IGNORED_REASONS = frozenset({
     "allowed",
     "budget",
@@ -155,46 +146,9 @@ FAILURE_CATEGORY_LABELS = {
     "authentication_error": "认证失败",
     "provider_missing": "Provider 缺失",
     "configuration_error": "配置错误",
+    "quota_exhausted": "额度不足",
+    "model_execution_error": "模型执行异常",
 }
-
-
-_HTTP_STATUS_IN_TEXT = re.compile(
-    r"(?:HTTP|status[ _]?code)\s*[=:]?\s*([1-5]\d{2})", re.IGNORECASE
-)
-
-
-def _status_from_text(text: str) -> int | None:
-    """从被包装过的异常文案里取回 HTTP 状态码。
-
-    多上游/中转插件常把上游异常裹成裸 RuntimeError 再抛出，原始异常既不在
-    __cause__ 也不在 __context__ 上，只能靠文案里的 "RateLimitError (HTTP 429)"
-    这类片段识别，否则限流会被当成无法归类的未知错误。
-    """
-    for match in _HTTP_STATUS_IN_TEXT.finditer(text or ""):
-        try:
-            status = int(match.group(1))
-        except (TypeError, ValueError):
-            continue
-        if 100 <= status <= 599:
-            return status
-    return None
-
-
-def _http_status(exc: BaseException) -> int | None:
-    for candidate in _exception_chain(exc):
-        value = getattr(candidate, "status_code", None)
-        if value is None:
-            response = getattr(candidate, "response", None)
-            value = getattr(response, "status_code", None)
-            if value is None:
-                value = getattr(response, "status", None)
-        try:
-            status = int(value)
-        except (TypeError, ValueError):
-            continue
-        if 100 <= status <= 599:
-            return status
-    return _status_from_text(str(exc))
 
 
 def _exception_chain(exc: BaseException):
@@ -227,101 +181,32 @@ def classify_classifier_failure(
         "http_422": "configuration_error",
     }
     normalized = aliases.get(normalized, normalized)
-    if normalized in _RECOVERABLE_CATEGORIES:
-        return ClassifierFailure(normalized, FailureDisposition.RECOVERABLE)
-    if normalized in _ATTENTION_CATEGORIES:
-        return ClassifierFailure(normalized, FailureDisposition.NEEDS_ATTENTION)
     if normalized in _IGNORED_REASONS:
         return None
-    if exception is None:
+    # 判定层自己抛的未分类失败（如 role=err）没有真实异常可查，
+    # 保持旧行为：不单独开熔断，避免把一次空回复放大成十分钟静默。
+    if not normalized and exception is None:
         return None
-
-    status = _http_status(exception)
-    if status in {401, 403}:
-        return ClassifierFailure(
-            "authentication_error", FailureDisposition.NEEDS_ATTENTION
-        )
-    if status == 429:
-        return ClassifierFailure("http_429", FailureDisposition.RECOVERABLE)
-    if status is not None and 500 <= status <= 599:
-        return ClassifierFailure("http_5xx", FailureDisposition.RECOVERABLE)
-    if status in {400, 404, 422}:
+    if normalized == "error" and exception is None:
+        return None
+    if exception is not None and any(
+        isinstance(item, (KeyError, ValueError))
+        for item in _exception_chain(exception)
+    ):
+        # 判定层原有契约：解析/枚举类错误属于配置问题，需要人工处理。
         return ClassifierFailure(
             "configuration_error", FailureDisposition.NEEDS_ATTENTION
         )
-
-    chain = tuple(_exception_chain(exception))
-    names = {type(item).__name__.lower() for item in chain}
-    if (
-        any(isinstance(item, (TimeoutError, socket.timeout)) for item in chain)
-        or any("timeout" in name or "timedout" in name for name in names)
-    ):
-        return ClassifierFailure("timeout", FailureDisposition.RECOVERABLE)
-    if any(
-        isinstance(item, (ConnectionError, socket.gaierror, ssl.SSLError))
-        for item in chain
-    ) or any(
-        any(token in name for token in (
-            "connection",
-            "connecterror",
-            "networkerror",
-            "dnserror",
-            "sslerror",
-            "tlserror",
-        ))
-        for name in names
-    ):
-        return ClassifierFailure("connection_error", FailureDisposition.RECOVERABLE)
-    if any(
-        any(token in name for token in (
-            "authentication",
-            "unauthorized",
-            "permissiondenied",
-            "forbidden",
-        ))
-        for name in names
-    ):
-        return ClassifierFailure(
-            "authentication_error", FailureDisposition.NEEDS_ATTENTION
-        )
-    if any("ratelimit" in name or "toomanyrequests" in name for name in names):
-        return ClassifierFailure("http_429", FailureDisposition.RECOVERABLE)
-    if any(
-        any(token in name for token in (
-            "serviceunavailable",
-            "internalserver",
-            "badgateway",
-        ))
-        for name in names
-    ):
-        return ClassifierFailure("http_5xx", FailureDisposition.RECOVERABLE)
-    if any(
-        any(token in name for token in (
-            "configuration",
-            "configerror",
-            "badrequest",
-            "invalidrequest",
-            "providernotfound",
-        ))
-        for name in names
-    ) or any(isinstance(item, (KeyError, ValueError)) for item in chain):
-        return ClassifierFailure(
-            "configuration_error", FailureDisposition.NEEDS_ATTENTION
-        )
-
-    # 兜底：异常链已被上游插件抹平，只剩中文文案可读。
-    text = str(exception).lower()
-    if "超过总时限" in text or "route timeout" in text or "route_timeout" in text:
-        return ClassifierFailure("timeout", FailureDisposition.RECOVERABLE)
-    if "没有可调用的上游" in text or "无可用上游" in text or "no upstream" in text:
-        return ClassifierFailure("provider_missing", FailureDisposition.NEEDS_ATTENTION)
-    if "ratelimit" in text or "too many requests" in text:
-        return ClassifierFailure("http_429", FailureDisposition.RECOVERABLE)
-    if "badrequest" in text or "invalidrequest" in text:
-        return ClassifierFailure(
-            "configuration_error", FailureDisposition.NEEDS_ATTENTION
-        )
-    return None
+    resolved, disposition = classify(exception if exception is not None else normalized)
+    # 无法归类的未知异常仍按「不处理」收尾，只有能识别的上游故障才熔断。
+    if resolved == "model_execution_error" or disposition == NOT_AN_ERROR:
+        return None
+    return ClassifierFailure(
+        resolved,
+        FailureDisposition.RECOVERABLE
+        if disposition == RETRY_THEN_ROTATE
+        else FailureDisposition.NEEDS_ATTENTION,
+    )
 
 
 def failure_category_label(category: str) -> str:

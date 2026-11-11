@@ -43,6 +43,166 @@ CATEGORIES = {"timeout", "connection_error", "http_429", "http_5xx", "empty_resp
               "model_reply_missing", "completion_timeout", "preparation_failed",
               "quota_exhausted", "model_execution_error",
               "tool_call_failed", "tool_not_called"}
+
+# 统一处置口径：与 multi_api_router 的路由策略保持一致，各层只认这四个值。
+RETRY_THEN_ROTATE = "retry_then_rotate"
+ROTATE_NOW_REPORT = "rotate_now_report"
+NOT_AN_ERROR = "not_an_error"
+FAIL_REPORT = "fail_report"
+
+# 类别 -> 处置。429 与 5xx/超时/连接错误同属「上游暂时不可用」，
+# 走同一条「原地重试一次 -> 仍失败换候选」的路径，不再按状态码单独特判。
+DISPOSITION_BY_CATEGORY = {
+    "http_429": RETRY_THEN_ROTATE,
+    "http_5xx": RETRY_THEN_ROTATE,
+    "timeout": RETRY_THEN_ROTATE,
+    "connection_error": RETRY_THEN_ROTATE,
+    "empty_response": RETRY_THEN_ROTATE,
+    "protocol_error": RETRY_THEN_ROTATE,
+    "model_execution_error": RETRY_THEN_ROTATE,
+    "quota_exhausted": ROTATE_NOW_REPORT,
+    "authentication_error": ROTATE_NOW_REPORT,
+    "configuration_error": ROTATE_NOW_REPORT,
+    "provider_missing": FAIL_REPORT,
+    # 以下类别由投递/收尾阶段显式写入，不是可重试的上游故障。
+    "send_unknown": FAIL_REPORT,
+    "final_message_missing": FAIL_REPORT,
+    "model_reply_missing": FAIL_REPORT,
+    "completion_timeout": FAIL_REPORT,
+    "preparation_failed": FAIL_REPORT,
+    "tool_call_failed": FAIL_REPORT,
+    "tool_not_called": FAIL_REPORT,
+}
+
+_QUOTA_WORDS = ("not enough quota", "insufficient_quota", "insufficient balance",
+                "quota exceeded", "余额不足", "额度不足")
+_PROTOCOL_WORDS = ("protocol", "invalid response format")
+# 从被包装过的文案里取状态码；前后不能再接数字，避免把毫秒/端口当状态码。
+_STATUS_IN_TEXT = re.compile(r"(?<!\d)([1-5]\d{2})(?!\d)")
+
+
+def _status_of(value):
+    """从 int、异常链的 status_code 或文案里取 HTTP 状态码。"""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value if 100 <= value <= 599 else None
+    if isinstance(value, BaseException):
+        seen, current = set(), value
+        for _ in range(5):
+            if current is None or id(current) in seen:
+                break
+            seen.add(id(current))
+            status = getattr(current, "status_code", None)
+            if status is None:
+                response = getattr(current, "response", None)
+                status = getattr(response, "status_code", None)
+                if status is None:
+                    status = getattr(response, "status", None)
+            try:
+                status = int(status)
+            except (TypeError, ValueError):
+                status = None
+            if status is not None and 100 <= status <= 599:
+                return status
+            current = current.__cause__ or current.__context__
+        text = str(value)
+    else:
+        text = str(value or "")
+    match = _STATUS_IN_TEXT.search(text)
+    return int(match.group(1)) if match else None
+
+
+def _type_names(value):
+    if not isinstance(value, BaseException):
+        return set()
+    names, seen, current = set(), set(), value
+    for _ in range(5):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        names.add(type(current).__name__.casefold())
+        current = current.__cause__ or current.__context__
+    return names
+
+
+def classify(value):
+    """全链路唯一的错误分类入口：返回 (category, disposition)。
+
+    disposition 只有四种：retry_then_rotate / rotate_now_report /
+    not_an_error / fail_report。router 与 LivingHello 各层必须共用这一口径，
+    禁止再按单个状态码写分支。
+    """
+    text = str(value or "").strip()
+    folded = text.casefold()
+    # 已经归一化的类别（含判定层原因码）直接查表，避免二次误判。
+    if folded == NOT_AN_ERROR:
+        return NOT_AN_ERROR, NOT_AN_ERROR
+    if folded in DISPOSITION_BY_CATEGORY:
+        return folded, DISPOSITION_BY_CATEGORY[folded]
+    if folded in INTENTIONAL:
+        return NOT_AN_ERROR, NOT_AN_ERROR
+    # 配额类必须先于状态码判断：403/429 既可能是限流，也可能是欠费。
+    if any(word in folded for word in _QUOTA_WORDS):
+        return "quota_exhausted", ROTATE_NOW_REPORT
+    if any(word in folded for word in _PROTOCOL_WORDS):
+        return "protocol_error", RETRY_THEN_ROTATE
+    status = _status_of(value)
+    if status is not None:
+        if status == 402:
+            return "quota_exhausted", ROTATE_NOW_REPORT
+        if status in {401, 403}:
+            return "authentication_error", ROTATE_NOW_REPORT
+        if status in {400, 404, 422}:
+            return "configuration_error", ROTATE_NOW_REPORT
+        if status == 408:
+            return "timeout", RETRY_THEN_ROTATE
+        if status == 429:
+            return "http_429", RETRY_THEN_ROTATE
+        if 500 <= status <= 599:
+            return "http_5xx", RETRY_THEN_ROTATE
+    if isinstance(value, TimeoutError):
+        return "timeout", RETRY_THEN_ROTATE
+    if isinstance(value, ConnectionError):
+        return "connection_error", RETRY_THEN_ROTATE
+    names = _type_names(value)
+    if any("timeout" in name or "timedout" in name for name in names):
+        return "timeout", RETRY_THEN_ROTATE
+    if any(any(token in name for token in (
+            "connection", "connecterror", "networkerror", "dnserror",
+            "sslerror", "tlserror")) for name in names):
+        return "connection_error", RETRY_THEN_ROTATE
+    if any("ratelimit" in name or "toomanyrequests" in name for name in names):
+        return "http_429", RETRY_THEN_ROTATE
+    if any(any(token in name for token in (
+            "serviceunavailable", "internalserver", "badgateway")) for name in names):
+        return "http_5xx", RETRY_THEN_ROTATE
+    if any(any(token in name for token in (
+            "authentication", "unauthorized", "permissiondenied", "forbidden"))
+           for name in names):
+        return "authentication_error", ROTATE_NOW_REPORT
+    if any(any(token in name for token in (
+            "configuration", "configerror", "badrequest", "invalidrequest",
+            "providernotfound")) for name in names):
+        return "configuration_error", ROTATE_NOW_REPORT
+    # 上游插件常把异常抹成裸 RuntimeError，只剩中文文案可读。
+    if "超过总时限" in text or "route timeout" in folded or "route_timeout" in folded:
+        return "timeout", RETRY_THEN_ROTATE
+    if "没有可调用的上游" in text or "无可用上游" in text or "no upstream" in folded:
+        return "provider_missing", FAIL_REPORT
+    if "no provider" in folded or "provider not found" in folded:
+        return "provider_missing", FAIL_REPORT
+    if "rate limit" in folded or "too many requests" in folded:
+        return "http_429", RETRY_THEN_ROTATE
+    if "timeout" in folded or "timed out" in folded:
+        return "timeout", RETRY_THEN_ROTATE
+    if "connection" in folded:
+        return "connection_error", RETRY_THEN_ROTATE
+    if re.search(r"\b50[0-9]\b", folded):
+        return "http_5xx", RETRY_THEN_ROTATE
+    if re.search(r"\b(?:401|403)\b", folded):
+        return "authentication_error", ROTATE_NOW_REPORT
+    return "model_execution_error", RETRY_THEN_ROTATE
+
+
 ERROR_LABELS = {
     "quota_exhausted": "上游账户余额或额度不足",
     "timeout": "模型请求超时", "connection_error": "上游连接失败",
@@ -76,24 +236,8 @@ def safe_excerpt(value, limit=160):
 
 
 def error_category(value):
-    text = str(value or "").casefold()
-    if any(word in text for word in ("not enough quota", "insufficient_quota",
-                                     "insufficient balance", "余额不足", "额度不足")):
-        return "quota_exhausted"
-    # 判定模型返回非法枚举/不符合约定格式，不能落到通用执行异常。
-    if "protocol" in text or "invalid response format" in text:
-        return "protocol_error"
-    if "429" in text or "rate limit" in text:
-        return "http_429"
-    if "timeout" in text or "timed out" in text:
-        return "timeout"
-    if re.search(r"\b50[0-9]\b", text):
-        return "http_5xx"
-    if "connection" in text:
-        return "connection_error"
-    if re.search(r"\b(?:401|403)\b", text):
-        return "authentication_error"
-    return "model_execution_error"
+    """兼容旧调用：只返回类别；处置统一由 classify() 给出。"""
+    return classify(value)[0]
 
 
 def qq_ids(raw):
@@ -522,6 +666,21 @@ class ReplyHealth:
                     self.summary["recovered_at"] = self.clock()
                     self.summary["state"] = "healthy"
                     await self.storage_call(self.store.save, dict(self.summary))
+            failed_at = self.summary.get("failed_at")
+            if (self.summary.get("state") == "failed" and failed_at
+                    and row["started"] < failed_at):
+                # 本轮内先失败后成功：告警已发，summary 不会被同一请求的成功覆盖。
+                category = str(self.summary.get("category") or "")
+                disposition = DISPOSITION_BY_CATEGORY.get(category, "")
+                rid = str(event.get_extra("_livinghello_request_id") or "")
+                self.plugin.logger.warning(
+                    "[ReplyFault] code=ALARM_STALE_SUMMARY stage=hello%s%s%s "
+                    "reason=本轮已投递成功但 summary 仍为 failed（本轮内先失败后成功，"
+                    "成功分支不覆盖；告警已按失败发出）",
+                    f" category={category}" if category else "",
+                    f" disposition={disposition}" if disposition else "",
+                    f" request_id={rid}" if rid else "",
+                )
             return
         self.plugin.logger.warning(
             "[LH-probe] health finish: model_done=%r sent=%r failed=%r fault=%r "
@@ -548,7 +707,18 @@ class ReplyHealth:
             return 0
         now = self.clock() if at is None else float(at)
         layer = layer if layer in LAYERS else "pipeline"
-        category = category if category in CATEGORIES else "model_reply_missing"
+        if category not in CATEGORIES:
+            if category == NOT_AN_ERROR:
+                # 预期静默关键字没被 finish 拦截：下一行会改判为失败并触发告警。
+                rid = (str(event.get_extra("_livinghello_request_id") or "")
+                       if event is not None else "")
+                self.plugin.logger.warning(
+                    "[ReplyFault] code=INTENTIONAL_COERCED_FAILED stage=hello "
+                    "category=not_an_error disposition=not_an_error%s "
+                    "reason=预期静默类别未被 finish 拦截，改判 model_reply_missing 并计失败",
+                    f" request_id={rid}" if rid else "",
+                )
+            category = "model_reply_missing"
         # 留痕独立于提醒开关和提醒节流，避免“群里没回复、列表仍显示放行”。
         self.record_failure(event, layer, category, now)
         async with self.state_lock:
