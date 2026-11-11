@@ -49,6 +49,26 @@ python3 -B run_offline_tests.py
 
 回归覆盖语义否决、视觉/记忆降级、碎片合并、撤回窗口、结果交付、分段、保存冲突、人格固定、记录恢复及配套交接。调整模型或提示词后仍需用脱敏实际案例验证语义；离线通过不证明真实准确率或线上 Token 节省比例。
 
+## UI 隔离回归
+
+[tests/ui](../tests/ui/) 下有四组控制台浏览器回归。`server.mjs` 把 `fixture-bridge.js` 注入真实页面，配置写入与模型响应都是内存替身，全程无外联、无真实发送。需要 Node.js 与本机 Playwright；`browser`、`save-latency`、`private-reply` 默认复用同级 `astrbot_plugin_livingemotion/tests/ui/node_modules/playwright`，可用 `PLAYWRIGHT_MODULE` 指向其他安装位置；`function-coupling.test.mjs` 写死了相对路径，不读该变量。
+
+```bash
+PLAYWRIGHT_MODULE=/path/to/playwright node tests/ui/browser.test.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright node tests/ui/save-latency.test.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright node tests/ui/private-reply.test.mjs
+node tests/ui/function-coupling.test.mjs
+```
+
+| 脚本 | 覆盖内容 | 产物 |
+| --- | --- | --- |
+| browser.test.mjs | 多分辨率与浅深主题、断线状态、判定详情、复制与草稿保留、无外联 | `evidence/` 下 29 张截图与 browser-results.json |
+| save-latency.test.mjs | 保存回执到提示的延迟、读取失败降级、部分成功、刷新竞态 | evidence/save-latency-results.json |
+| private-reply.test.mjs | 私聊沿用回复方式的开关、保存与回读 | evidence/private-reply-*.png 与结果 JSON |
+| function-coupling.test.mjs | 功能耦合卡片、键盘启用、断开草稿、紧凑布局 | `/tmp/lh-compact-coupling-20261110/local-ui` |
+
+产物统一写入 `tests/ui/evidence/` 或 `/tmp`，前者已在 `.gitignore` 中忽略，可随时重新生成，不作为历史证据提交。2026-11-11 实测：browser 4/8、function-coupling 4/6、save-latency 0/6、private-reply 0/3，失败集中在页面迭代后未同步的选择器与对比度基线，运行前先核对。
+
 ## 文档检查与发布
 
 `scripts/check_docs.py` 使用标准库检查 Markdown 本地路径与锚点、完整 schema 默认值表、独立生图默认值和原生字段保存路径、当前版本、图标尺寸及测试布局。源码常量通过AST读取，不导入或启动插件。每个 PR 及主分支推送执行文档检查和独立离线回归，不需要密钥。
