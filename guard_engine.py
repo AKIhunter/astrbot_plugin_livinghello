@@ -44,6 +44,11 @@ try:
 except ImportError:
     from guard_vision_choice import GATE_OVERRIDE_KEY, effective_vision_provider
 
+try:
+    from .guard_livingemotion import is_state_line
+except ImportError:
+    from guard_livingemotion import is_state_line
+
 GATE_MODES = ("enforce", "shadow")
 DEFAULT_MODE = "enforce"
 DEFAULT_THRESHOLD = 65
@@ -1123,6 +1128,7 @@ class GateEngine:
         resolve_provider: Callable[[], Awaitable[Any]],
         dry_run: bool = False,
         message_meta: dict[str, Any] | None = None,
+        emotion_lines: list[str] | None = None,
         resolve_memory: Callable[[], Awaitable[list[str]]] | None = None,
         resolve_vision_provider: Callable[[], Awaitable[Any]] | None = None,
         resolve_main_provider: Callable[[], Awaitable[Any]] | None = None,
@@ -1141,6 +1147,8 @@ class GateEngine:
         record = (lambda decision: None) if dry_run or not record_result else self._record
         cached = list(cached_image_summaries or [])[:3]
         available_sources = list(available_image_sources or [])[:3]
+        # 已校验的当前情绪/关系随首轮输入走，不等待模型索要历史记忆。
+        memory_lines: tuple[str, ...] = tuple(emotion_lines or ())
 
         def record_early(decision: Decision):
             # 规则/取模型失败没有实际发送流水；只保留当前候选消息，不能伪称模型看过。
@@ -1176,6 +1184,7 @@ class GateEngine:
             bot_line=bot_line,
             is_private=is_private,
             message_meta=message_meta,
+            memory_lines=list(memory_lines),
             cached_image_summaries=cached, available_image_sources=available_sources,
             background_snapshot=probe_background if dry_run else None,
         )
@@ -1216,7 +1225,6 @@ class GateEngine:
 
         model_calls = 0
         format_retries = 0  # 整条事件的文字、记忆复判、视觉及兜底共用一次格式修正。
-        memory_lines: tuple[str, ...] = ()
         stage = "text"
         # 自动路由 provider 拆成「按上游逐个短超时」的调用器：判定等不起 45 秒。
         if self.upstream_fanout_enabled():
@@ -1420,7 +1428,11 @@ class GateEngine:
                     metric = {"calls": 1, "status": "ok"}
                     try:
                         lines = await bounded(resolve_memory(), self.memory_timeout())
-                        memory_lines = tuple(str(line)[:400] for line in lines[:3] if str(line).strip())
+                        # 状态尾部含关系字段，沿用状态接口的6000字符上限；普通记忆仍限400。
+                        memory_lines = tuple(
+                            str(line)[:6000 if is_state_line(str(line)) else 400]
+                            for line in lines[:3] if str(line).strip()
+                        )
                         if not memory_lines:
                             metric["status"] = "empty"
                     except asyncio.TimeoutError:

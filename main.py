@@ -90,6 +90,7 @@ MEANINGFUL_TEXT_RE = re.compile(r"[\w\u4e00-\u9fff]")
 PLUGIN_NAME = "astrbot_plugin_LivingHello"
 BOT_LINE_PREFIX = "[我]: "
 CONGLING_RECOVERY_CONTRACT = "congling.classifier-recovery.v1"
+FACE_COMPONENT_NAMES = frozenset({"face", "mface"})
 
 
 class Main(Star):
@@ -279,10 +280,14 @@ class Main(Star):
                     "reason": "gate_unavailable"}
 
     def _block_message_policy(self, event, reason):
-        # 名单层就把消息拦了，也必须留下「哪一条」，
-        # 否则详情里只能看到一个 gray_silent，看不出影响了哪句话。
+        # 只读静默保留消息定位；黑名单拒读时禁止诊断快照绕过名单读取正文。
         try:
-            self._trace().judged_input(event, self._judged_snapshot(event))
+            policy = event.get_extra("_livinghello_message_policy") or {}
+            if policy.get("read_allowed"):
+                self._trace().judged_input(event, self._judged_snapshot(event))
+            elif hasattr(self, "request_trace"):
+                # 运行中变黑只关闭既有请求，不为首次被拒的消息创建诊断记录。
+                self.request_trace.finish(event, "silent", reason)
         except Exception:
             pass
         result = event.get_result() if callable(getattr(event, "get_result", None)) else None
@@ -1433,7 +1438,7 @@ class Main(Star):
             explicit = self._policy_explicit(event)
         snapshot = {
             **self._message_meta(event),
-            "text": event.message_str or "",
+            "text": self._text_or_face(event),
             "mention_targets": sorted(targets),
             "concrete": self._has_concrete_content(event),
             "images": self._event_images(event),
@@ -1493,15 +1498,15 @@ class Main(Star):
         if congling_for(self.context, event):
             sources = event.get_extra("_at_guard_fragment_sources", ()) or (event,)
             return "\n".join(str(getattr(getattr(source, "_congling_msg", None), "text", "")
-                                 or source.message_str) for source in sources)
+                                 or self._text_or_face(source)) for source in sources)
         if takeover(self.config):
             sources = event.get_extra("_at_guard_fragment_sources", ()) or (event,)
             observations = [source.get_extra("_at_guard_understanding") for source in sources]
             if any(observations):
-                return "\n".join(o.text if o else source.message_str
+                return "\n".join((o.text if o else "") or self._text_or_face(source)
                                  for source, o in zip(sources, observations))
         rows = event.get_extra("_at_guard_fragments", [])
-        return "\n".join(row["text"] for row in rows) if rows else event.message_str
+        return "\n".join(row["text"] for row in rows) if rows else self._text_or_face(event)
 
     def _attach_fragments(self, event, req):
         rows = event.get_extra("_at_guard_fragments")
@@ -1902,12 +1907,15 @@ class Main(Star):
                 # 留在 event 上、没进观察缓存。判定不该在「没看到像素」的前提下
                 # 说 context_missing，这里直接复用本轮观察。
                 cached = self._understanding_image_summaries(event)
+            # 复用当前请求中经过会话/发送者校验的状态，首轮即可参考关系。
+            emotion_lines = await state_lines(self.context, event, req, config=self.config)
             result = await self.engine.decide(
                 group_key=group_key, current_text=self._fragment_text(event),
                 context_lines=context_lines, bot_line=self._fresh_bot_line(group_key),
                 is_private=not is_group,
                 resolve_provider=lambda: self._resolve_classifier_provider(event),
-                message_meta=message_meta, resolve_memory=lambda: self._recall_gate_memory(event, req),
+                message_meta=message_meta, emotion_lines=emotion_lines,
+                resolve_memory=lambda: self._recall_gate_memory(event, req),
                 resolve_vision_provider=self._resolve_vision_provider,
                 resolve_main_provider=lambda: self._resolve_main_vision_provider(event),
                 resolve_images=resolve_images, record_result=False,
@@ -2788,7 +2796,7 @@ class Main(Star):
         event.set_extra("_livinghello_bypass_recorded", True)
         meta = self._message_meta(event)
         meta["explicit_call"] = reason in {"at_call", "wake", "gray_explicit"}
-        meta["text"] = (event.message_str or "").strip()[:800]
+        meta["text"] = self._text_or_face(event).strip()[:800]
         # 旁路（@直通/私聊/@唤醒）也要留下判定对象，详情里才有据可查。
         self._trace().judged_input(event, meta)
         # 直通同样要生成回复，主模型慢时也要能给一句垫场。
@@ -2897,10 +2905,32 @@ class Main(Star):
             return ""
         return self.last_bot_line.get(group_key, "")
 
+    @staticmethod
+    def _text_or_face(event: AstrMessageEvent) -> str:
+        """纯 QQ 表情补占位文本：适配器只把 text/at 拼进 message_str，
+        纯 Face/Mface 消息正文是空串，规则层会当作无内容直接静默。
+        这里补 [表情]（带 id 时一并带上，便于判定模型理解是哪个表情），
+        仅处理正文为空的情况；有文字的消息保持原样，不动灰名单等前置门禁。
+        """
+        text = str(getattr(event, "message_str", "") or "")
+        if text.strip():
+            return text
+        getter = getattr(event, "get_messages", None)
+        components = getter() if callable(getter) else []
+        if not components:
+            components = getattr(getattr(event, "message_obj", None), "message", []) or []
+        faces = []
+        for component in components:
+            if type(component).__name__.lower() not in FACE_COMPONENT_NAMES:
+                continue
+            face_id = getattr(component, "id", None)
+            faces.append(f"[表情:{face_id}]" if face_id not in (None, "") else "[表情]")
+        return "".join(faces) if faces else text
+
     def _judged_snapshot(self, event: AstrMessageEvent) -> dict:
         """判定快照：消息元数据 + 正文，供详情展示「判定的是哪一条」。"""
         data = dict(self._message_meta(event))
-        data["text"] = (getattr(event, "message_str", "") or "").strip()[:800]
+        data["text"] = self._text_or_face(event).strip()[:800]
         if not data["text"] and data.get("unread_media"):
             data["text"] = "[媒体消息，内容未解析]"
         return data
@@ -2965,7 +2995,7 @@ class Main(Star):
         now = event.get_extra("_at_guard_received_at", time.monotonic())
         event.set_extra("_at_guard_recorded_at", now)
         data = self._message_meta(event)
-        data = {"text": (event.message_str or "").strip()[:800], **data}
+        data = {"text": self._text_or_face(event).strip()[:800], **data}
         if not data["text"] and data["unread_media"]:
             data["text"] = "[媒体消息，内容未解析]"
         self.recent_messages[group_key].append((now, json.dumps(data, ensure_ascii=False)))
