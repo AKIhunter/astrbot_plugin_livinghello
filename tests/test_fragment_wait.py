@@ -58,9 +58,10 @@ class QueueTest(unittest.IsolatedAsyncioTestCase):
         self.clock = Clock()
         self.queue = FragmentWait(self.clock)
 
-    def observe(self, mid, key=("qq:group:1001", "alice"), explicit=False, text="问"):
+    def observe(self, mid, key=("qq:group:1001", "alice"), explicit=False, text="问",
+                max_wait=0):
         return self.queue.observe(object(), key, {"text": text, "message_id": mid}, 3,
-                                  explicit, mid)
+                                  explicit, mid, max_wait=max_wait)
 
     async def test_three_seconds_restart_after_each_same_user_message(self):
         a = self.observe("a", explicit=True)
@@ -78,6 +79,46 @@ class QueueTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.queue.wait(c), (a, b, c))
         self.assertIsNone(await self.queue.wait(c))
         self.assertFalse(self.queue.batches)
+
+    async def test_total_cap_stops_extension_when_user_keeps_talking(self):
+        a = self.observe("a", max_wait=5)
+        self.assertEqual(a.batch.deadline, 3)
+        self.clock.now = 2
+        b = self.observe("b", max_wait=5)
+        # 静默期本应到 5，但总上限从首条起算也是 5，两者取小。
+        self.assertEqual(b.batch.deadline, 5)
+        self.clock.now = 4
+        c = self.observe("c", max_wait=5)
+        self.assertEqual(c.batch.deadline, 5)
+        self.assertIsNone(await self.queue.wait(a))
+        self.assertIsNone(await self.queue.wait(b))
+        self.clock.now = 5
+        self.assertEqual(await self.queue.wait(c), (a, b, c))
+
+    async def test_total_cap_shorter_than_quiet_window_ends_first(self):
+        a = self.observe("a", max_wait=2)
+        self.assertEqual(a.batch.deadline, 2)
+        self.clock.now = 1
+        b = self.observe("b", max_wait=2)
+        self.assertEqual(b.batch.deadline, 2)
+        self.clock.now = 2
+        self.assertEqual(await self.queue.wait(b), (a, b))
+        # 到点后再来消息属于下一批，总上限从新的首条重新起算。
+        c = self.observe("c", max_wait=2)
+        self.assertIsNot(b.batch, c.batch)
+        self.assertEqual(c.batch.deadline, 4)
+
+    async def test_zero_total_cap_keeps_extending(self):
+        a = self.observe("a", max_wait=0)
+        self.clock.now = 2
+        b = self.observe("b", max_wait=0)
+        self.assertEqual(b.batch.deadline, 5)
+        self.clock.now = 4
+        c = self.observe("c", max_wait=0)
+        # 0=不限：续发继续重置静默期，不产生总上限。
+        self.assertEqual(c.batch.deadline, 7)
+        self.clock.now = 7
+        self.assertEqual(await self.queue.wait(c), (a, b, c))
 
     async def test_other_user_and_other_scope_never_reset_deadline(self):
         a = self.observe("a")
@@ -436,6 +477,44 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("我想问", req.extra_user_content_parts[0].text)
         self.assertEqual(self.provider.prompts, [])
 
+    async def test_group_batch_honors_total_cap(self):
+        self.guard.config["fragment_max_wait_seconds"] = 5
+        a = await self.incoming(FragmentEvent("我想问"))
+        first_deadline = a.extra["_at_guard_fragment_ticket"].batch.deadline
+        b = await self.incoming(FragmentEvent("再补充", mid="2"), 2)
+        second_deadline = b.extra["_at_guard_fragment_ticket"].batch.deadline
+        c = await self.incoming(FragmentEvent("还有", mid="3"), 4)
+        third_deadline = c.extra["_at_guard_fragment_ticket"].batch.deadline
+        # 同一批次对象会随续发更新 deadline，因此逐个当场取值。
+        self.assertEqual(first_deadline, 3)
+        self.assertEqual(second_deadline, 5)
+        self.assertEqual(third_deadline, 5)
+        await self.finish(a)
+        await self.finish(b)
+        await self.finish(c)
+        self.assertEqual(len(c.extra["_at_guard_fragments"]), 3)
+
+    async def test_private_batch_honors_total_cap_only_when_switch_is_on(self):
+        self.guard.config.update(fragment_wait_private=True, fragment_max_wait_seconds=5)
+        a = await self.incoming(FragmentEvent("我想问", group=""))
+        first_deadline = a.extra["_at_guard_fragment_ticket"].batch.deadline
+        b = await self.incoming(FragmentEvent("再补充", group="", mid="2"), 2)
+        second_deadline = b.extra["_at_guard_fragment_ticket"].batch.deadline
+        self.assertEqual(first_deadline, 3)
+        self.assertEqual(second_deadline, 5)
+        await self.finish(a)
+        await self.finish(b)
+        self.assertTrue(a.stopped)
+        self.assertFalse(b.stopped)
+        self.assertIn("我想问", b.extra["_at_guard_fragments"][0]["text"])
+
+    async def test_private_without_switch_has_no_fragment_batch(self):
+        self.guard.config["fragment_max_wait_seconds"] = 5
+        a = await self.incoming(FragmentEvent("我想问", group=""))
+        b = await self.incoming(FragmentEvent("再补充", group="", mid="2"), 2)
+        self.assertIsNone(a.get_extra("_at_guard_fragment_ticket"))
+        self.assertIsNone(b.get_extra("_at_guard_fragment_ticket"))
+
     async def test_private_filter_and_fragment_wait_can_both_be_enabled(self):
         self.guard.config.update(fragment_wait_private=True, apply_to_private=True)
         event = await self.incoming(FragmentEvent("我想问任务怎么做", group=""))
@@ -599,3 +678,19 @@ class SettingsTest(unittest.TestCase):
         for value in (6, -1, float("nan")):
             with self.assertRaises(ValueError):
                 _coerce("fragment_wait_seconds", value)
+
+    def test_total_cap_default_range_and_engine_clamp(self):
+        schema = _load_schema_subset()
+        field = schema["fragment_max_wait_seconds"]
+        self.assertEqual(field["default"], 10)
+        self.assertEqual(field["slider"]["min"], 0)
+        self.assertEqual(field["slider"]["max"], 30)
+        self.assertIn("fragment_max_wait_seconds", EDITABLE)
+        self.assertEqual(_coerce("fragment_max_wait_seconds", 10), 10)
+        for value in (31, -1, float("nan")):
+            with self.assertRaises(ValueError):
+                _coerce("fragment_max_wait_seconds", value)
+        # 运行时与调试入口统一走 engine 夹取：超上限取30，负数取0。
+        self.assertEqual(plugin(gate_config()).engine.fragment_max_wait(), 10)
+        self.assertEqual(plugin(gate_config(fragment_max_wait_seconds=99)).engine.fragment_max_wait(), 30)
+        self.assertEqual(plugin(gate_config(fragment_max_wait_seconds=-3)).engine.fragment_max_wait(), 0)

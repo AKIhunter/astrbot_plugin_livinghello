@@ -630,6 +630,14 @@ class GateEngine:
     def reply_max_age(self) -> float:
         return self._float("gate_reply_max_age_seconds", 30, 5, 300)
 
+    def fragment_wait(self) -> float:
+        # 碎片静默期：续发只重置这段安静计时；范围与 schema、控制台校验一致。
+        return self._float("fragment_wait_seconds", 3, 0, 5)
+
+    def fragment_max_wait(self) -> float:
+        # 碎片批次总上限：从该批第一条消息起算；0=不限制，范围与 schema 一致。
+        return self._float("fragment_max_wait_seconds", 10, 0, 30)
+
     def private_watermark_window(self) -> float:
         # 私聊水位宽限：0 保留旧的严格相等校验，>0 时由 LivingEmotion 按时间窗放行连发。
         return self._float("private_watermark_window_seconds", 15, 0, 60)

@@ -25,7 +25,6 @@ try:  # 作为插件包加载时走相对导入
     from .guard_image_cache import ImageObservationCache
     from .guard_media import image_target
     from .guard_reply_delivery import ReplyDelivery
-    from .guard_reply_delivery import number
     from .guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
     from .guard_reply_fallback import ReplyFallback
     from .guard_reasoning_retry import ReasoningRetry
@@ -57,7 +56,6 @@ except ImportError:  # 单文件调试兜底
     from guard_image_cache import ImageObservationCache
     from guard_media import image_target
     from guard_reply_delivery import ReplyDelivery
-    from guard_reply_delivery import number
     from guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
     from guard_reply_fallback import ReplyFallback
     from guard_reasoning_retry import ReasoningRetry
@@ -1404,7 +1402,11 @@ class Main(Star):
                 return 0
         elif kind != MessageType.GROUP_MESSAGE:
             return 0
-        return number(self.config, "fragment_wait_seconds", 3, 0, 5)
+        return self.engine.fragment_wait()
+
+    def _fragment_max_wait(self):
+        # 批次总等待上限（从第一条消息起算，0=不限）；夹取统一放在 engine。
+        return self.engine.fragment_max_wait()
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 30)
     async def observe_message_fragments(self, event: AstrMessageEvent):
@@ -1449,7 +1451,8 @@ class Main(Star):
             if image["source"] == "current":
                 image["message_id"] = mid
         ticket = self._fragment_queue().observe(
-            event, (scope, str(sender)), snapshot, seconds, explicit, mid)
+            event, (scope, str(sender)), snapshot, seconds, explicit, mid,
+            max_wait=self._fragment_max_wait())
         event.set_extra("_at_guard_fragment_ticket", ticket)
         emit(event, "fragments", "running")
         if ticket.batch is not None and event.get_message_type() == MessageType.GROUP_MESSAGE:

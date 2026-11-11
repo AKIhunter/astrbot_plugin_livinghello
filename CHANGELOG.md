@@ -2,6 +2,23 @@
 
 记录当前独立维护仓库可核对的变化。历史版本以 Git 及迁移档案为准，不补造旧版本编号。
 
+## 2.7.2 — 2026-11-11
+
+### 新增
+
+- 回复错误分类统一为 `classify(value) -> (category, disposition)`：`category` 只用于展示与日志，`disposition` 收敛为 `retry_then_rotate`、`rotate_now_report`、`not_an_error`、`fail_report` 四种处置，主模型重试层直接按处置分支，不再逐个状态码写判断。
+- 配额关键字先于状态码判断，避免 403/429 同时可能是欠费时被误当成限流；4xx/5xx、超时、连接错误与协议异常分别映射到固定处置。
+- `[ReplyFault]` 异常锚点，共 3 个调用点、3 个场景码：`ALARM_STALE_SUMMARY`（本轮已投递成功但 summary 仍为 failed）、`INTENTIONAL_COERCED_FAILED`（预期静默类别未被 finish 拦截、被改判为失败）、`CONTEXT_CHANGED_TYPEERROR`（旧闸门缺少 `_at_guard_judged_revision`，下一行将抛 TypeError）。每条带 category、disposition 与 request_id。
+- `fragment_max_wait_seconds` 碎片批次总等待上限：从该批第一条消息到达时刻起算，默认 10 秒，范围 0–30 秒，`0` 表示不限制。续发只重置静默计时，不再延长总时长；到点即使用户仍在续发，也用当前已合并内容进入判断。
+- 私聊水位宽限 `private_watermark_window_seconds`：默认 15 秒，生成开始后窗口内到达的新消息视为同一轮连发，已生成的回复照常发送；超过窗口才按新话题丢弃，`0` 恢复严格水位。该配置经 `livinghello.reply-freshness.v1` 契约下发给 LivingEmotion。
+
+### 调整
+
+- 控制台在碎片总上限与回复有效期不匹配时给出联动警告：有效期小于「静默等待 + 总上限 + 40 秒」时提示整批回复可能在发送前过期；只提示，不阻止保存，也不改写用户已保存的值。
+- 碎片总上限为 `0` 时单独提示“续发可无限延长整批”，并建议设置有限上限。
+
+验证为离线模型和平台替身；真实宿主路径由 `ASTRBOT_HOST_SOURCE` 可选检查。不以离线成功替代线上投递证据。[回复闭环说明](docs/reply-health.md)、[碎片说明](docs/fragments.md)。
+
 ## 2.7.1 — 2026-11-09
 
 ### 新增

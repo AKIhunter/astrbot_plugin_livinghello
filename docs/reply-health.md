@@ -2,6 +2,48 @@
 
 启用入口：LivingHello 控制台 → 回复与私聊 → 断线恢复。
 
+## 错误分类与处置
+
+所有回复链路的错误先经过 `guard_reply_health.py` 的 `classify(value)`，返回
+`(category, disposition)`。`category` 用于页面、日志和提醒文案；
+`disposition` 只有四个值，各层按它决定动作，不再逐个状态码写分支：
+
+| disposition | 判定来源 | 处理 |
+| --- | --- | --- |
+| `retry_then_rotate` | 空响应、协议错误、超时、连接错误、HTTP 408/429/5xx | 原地重试一次，仍失败换候选 |
+| `rotate_now_report` | 配额耗尽、认证失败、配置错误 | 立即换候选并记录 |
+| `not_an_error` | 撤回、上下文过期、策略取消、主动静默 | 不重试、不告警，按主动静默收尾 |
+| `fail_report` | 无可用上游、模型缺失、投递/收尾类失败 | 直接记录并上报 |
+
+判定顺序固定：先识别已归一化的类别与预期静默原因，再匹配配额关键字，最后才看 HTTP 状态码。
+这样才能避免 403/429 同时可能是欠费时被误当成普通限流。`DISPOSITION_BY_CATEGORY`
+是类别到处置的唯一映射表，新增类别必须同时补表。
+
+## 异常锚点 `[ReplyFault]`
+
+无法归类、但需要留下证据的异常会打一条单行 WARNING，字段为
+`code`、`stage`、`category`、`disposition`，有请求 ID 时追加 `request_id`。
+当前共 3 个调用点、3 个场景码：
+
+| 场景码 | 触发条件 | 目的 |
+| --- | --- | --- |
+| `ALARM_STALE_SUMMARY` | 本轮已投递成功，但 summary 仍是 `failed`（本轮内先失败后成功） | 说明告警已按失败发出，成功分支不覆盖 |
+| `INTENTIONAL_COERCED_FAILED` | 预期静默类别没有被 `finish` 拦截，即将被改判为 `model_reply_missing` | 暴露静默判定与失败收尾的边界错位 |
+| `CONTEXT_CHANGED_TYPEERROR` | `cancel(context_changed)` 缺少 `_at_guard_judged_revision`，下一行会抛 `TypeError` | 标记旧闸门兼容路径，保留原异常行为 |
+
+锚点只增加诊断信息，不改变分类结果、重试次数或投递行为。
+
+## 私聊水位宽限
+
+私聊里生成回复期间收到新消息时，是否丢弃已生成的回复由
+`private_watermark_window_seconds`（默认 15 秒）决定：
+
+- 生成开始后窗口内到达的新消息视为同一轮连发，旧回复照常发送。
+- 超过窗口视为新话题，旧回复按 `superseded_by_new_message` 取消。
+- `0` 恢复严格水位，任何新消息都丢弃旧回复。
+- 只影响私聊；群聊仍由发送前复核处理。该值经 `livinghello.reply-freshness.v1`
+  契约下发给 LivingEmotion，不让它直接读取本插件配置。
+
 ## 状态与不变量
 
 | 规则 | 代码位置 | 检验 |

@@ -62,6 +62,7 @@
     gate_vision_hourly_budget: 20,
     gate_total_timeout_seconds: 18,
     fragment_wait_seconds: 3,
+    fragment_max_wait_seconds: 10,
     fragment_wait_private: false,
     proactive_cooldown_seconds: 8,
     duplicate_window_seconds: 60,

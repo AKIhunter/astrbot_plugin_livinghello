@@ -56,6 +56,7 @@
 | `gate_min_length` | `2` | 最短参与长度（字） |
 | `gate_context_max_age_seconds` | `300` | 上下文最长保留时间（秒） |
 | `gate_reply_max_age_seconds` | `30` | 自主回复机会有效期（秒） |
+| `private_watermark_window_seconds` | `15` | 私聊水位时间（秒） |
 | `gate_congling_prepare_compat` | `true` | 适配从绫爬楼准备耗时 |
 | `gate_memory_timeout_seconds` | `1.5` | 背景记忆检索超时（秒） |
 | `gate_hourly_budget` | `60` | 每群每小时判定上限 |
@@ -66,6 +67,7 @@
 | `apply_to_private` | `false` | 是否作用于私聊 |
 | `participation_context_messages` | `12` | 参与回复的上下文条数 |
 | `fragment_wait_seconds` | `3` | 碎片消息等待时间（秒） |
+| `fragment_max_wait_seconds` | `10` | 碎片批次总等待上限（秒） |
 | `fragment_wait_private` | `false` | 私聊也等待碎片消息 |
 | `proactive_cooldown_seconds` | `8` | 主动回复冷却（秒） |
 | `duplicate_window_seconds` | `120` | 相同消息去重窗口（秒） |
@@ -79,6 +81,10 @@
 
 文字/视觉时限约束单层，整条判定时限含记忆检索；碎片等待和主回复不属于该判定总时限。自主回复机会有效期从收消息到发送计时，配套开启时仅扣除当前事件有效的从绫准备耗时。模拟打字等待另行处理，新消息与已触发取消仍有效。
 
+碎片等待还有一层批次总上限：`fragment_max_wait_seconds` 从该批第一条消息起算，默认 10 秒，`0` 不限制；续发只重置 `fragment_wait_seconds` 的静默计时，不延长总上限。回复有效期小于「静默等待 + 总上限 + 40 秒」时，控制台会在保存栏提示整批回复可能在发送前过期；只提示，不阻止保存。
+
+私聊水位由 `private_watermark_window_seconds` 单独控制，默认 15 秒：生成开始后窗口内到达的新消息视为同一轮连发，已生成的回复照常发送；超过窗口才按新话题丢弃。`0` 表示严格水位。群聊不使用该开关。
+
 ### 0的含义
 
 | 设置 | 0表示 |
@@ -86,6 +92,7 @@
 | 上下文有效期 gate_context_max_age_seconds | 关闭时间过滤，条数和字符上限保留 |
 | 判定流水条数 gate_context_messages | 不提供近期流水 |
 | 碎片等待 fragment_wait_seconds | 不等待碎片，也没有该等待批次的撤回窗口 |
+| 碎片总上限 fragment_max_wait_seconds | 不限制批次总时长，续发可无限延长整批 |
 | 最多分几段 max_segments | 不额外限制文本段数，仍遵守宿主发送限制 |
 | 每小时判定预算 gate_hourly_budget / gate_vision_hourly_budget | 关闭对应预算限制 |
 | 图片观察缓存 gate_image_cache_ttl_seconds | 关闭观察缓存 |

@@ -1,7 +1,25 @@
 name: astrbot_plugin_LivingHello
 display_name: LivingHello
-desc: 以0-100参与适合度判断机器人是否接话；支持文字/多模态分层判断、图片摘要传给回复模型、静默否决、预算时限、可读判定详情及参数控制台。
-author: WorkBuddy
+short_desc: 在生成回复前判断群聊话题是否适合参与，再管理碎片合并、回复兜底与原生发送。
+desc: >-
+  以 0-100 参与适合度判断机器人是否接话，支持文字/多模态分层判断、
+  图片摘要传给回复模型、静默否决、预算时限与可读判定详情。
+  回复阶段统一错误分类与处置，按类别重试、切换或直接上报；
+  碎片批次可设总等待上限，私聊新消息按水位宽限决定是否保留已生成回复。
+author: AKIhunter
 repo: https://github.com/AKIhunter/astrbot_plugin_livinghello
-version: 2.7.1
+version: 2.7.2
 astrbot_version: ">=4.29.1"
+social_link: https://github.com/AKIhunter
+tags:
+  - 群聊
+  - 参与判断
+  - 回复兜底
+  - WebUI
+views:
+  - name: guard
+    description: 运行概览、判定设置、回复与私聊、流程与试跑
+help: >-
+  功能：1. 参与适合度判定与硬闸门 2. 碎片消息合并与批次总等待上限
+  3. 回复错误统一分类与处置 4. 主模型失败重试、提醒与最后尝试
+  5. 私聊水位宽限 6. 独立生图工具与每日额度 7. 四页控制台与文字试跑

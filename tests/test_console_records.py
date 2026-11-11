@@ -154,6 +154,40 @@ class SaveTest(unittest.TestCase):
         _, result, _ = self.save({"participation_confidence_threshold": 65})
         self.assertNotIn("口径", result["data"]["save_notice"])
 
+    def test_fragment_wait_total_cap_warns_when_reply_age_too_short(self):
+        _, result, _ = self.save({
+            "fragment_wait_seconds": 4,
+            "fragment_max_wait_seconds": 10,
+            "gate_reply_max_age_seconds": 30,
+        })
+        # 4 + 10 + 40 = 54 > 30，只警告不阻止保存。
+        self.assertTrue(result["data"]["saved"])
+        self.assertIn("过期", result["data"]["warning"])
+
+    def test_fragment_wait_warning_clears_when_reply_age_is_enough(self):
+        _, result, _ = self.save({
+            "fragment_wait_seconds": 3,
+            "fragment_max_wait_seconds": 10,
+            "gate_reply_max_age_seconds": 300,
+        })
+        self.assertEqual(result["data"]["warning"], "")
+
+    def test_fragment_unlimited_total_wait_always_warns(self):
+        _, result, _ = self.save({
+            "fragment_wait_seconds": 3,
+            "fragment_max_wait_seconds": 0,
+            "gate_reply_max_age_seconds": 300,
+        })
+        self.assertIn("不限制", result["data"]["warning"])
+
+    def test_fragment_wait_disabled_does_not_warn(self):
+        _, result, _ = self.save({
+            "fragment_wait_seconds": 0,
+            "fragment_max_wait_seconds": 0,
+            "gate_reply_max_age_seconds": 5,
+        })
+        self.assertEqual(result["data"]["warning"], "")
+
     def test_outage_switch_uses_unified_save_and_syncs_runtime_state(self):
         guard, result, _ = self.save({"classifier_outage_recovery_enabled": True})
         self.assertIs(guard.config["classifier_outage_recovery_enabled"], True)

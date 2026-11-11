@@ -92,6 +92,7 @@ NUMERIC_FIELDS: dict[str, tuple[str, float, float]] = {
     "gate_memory_timeout_seconds": ("float", 0.2, 5),
     "participation_context_messages": ("int", 2, 30),
     "fragment_wait_seconds": ("float", 0, 5.0),
+    "fragment_max_wait_seconds": ("float", 0, 30.0),
     "proactive_cooldown_seconds": ("float", 0, 60.0),
     "duplicate_window_seconds": ("int", 0, 3600),
     "reply_health_timeout_seconds": ("int", 60, 7200),
@@ -888,7 +889,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     mark("最近判定")
 
     data = {
-        "version": "2.7.1",
+        "version": "2.7.2",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
         "config": config,
@@ -1045,6 +1046,32 @@ async def handle_state(plugin: Any):
         return _failure(str(exc), 500)
 
 
+def _fragment_age_warning(plugin: Any) -> str:
+    """碎片等待上限与回复有效期的联动提醒；只提示，不阻止保存。
+
+    一批碎片最迟要等到总上限才进入判定，再叠加两次保守的典型生成耗时
+    （40 秒）；回复有效期不够时，整批回复会在发送前被判过期而静默。
+    """
+    engine = getattr(plugin, "engine", None)
+    if engine is None:
+        return ""
+    wait = engine.fragment_wait()
+    if wait <= 0:
+        # 关闭碎片等待时没有批次等待，不能按公式误报。
+        return ""
+    cap = engine.fragment_max_wait()
+    age = engine.reply_max_age()
+    if cap <= 0:
+        return ("碎片批次总等待上限为0（不限制）：连续发言会持续延长整批等待，"
+                "连续发言可能让整批回复在发送前被判过期而静默。"
+                "建议设置有限的总上限，并保证回复机会有效期 ≥ 静默等待 + 总上限 + 40秒。")
+    if age < wait + cap + 40:
+        return (f"回复机会有效期 {age:g} 秒小于 碎片静默等待 {wait:g} 秒"
+                f" + 总等待上限 {cap:g} 秒 + 40 秒："
+                "连续发言可能让整批回复在发送前被判过期而静默。")
+    return ""
+
+
 async def handle_config(plugin: Any):
     try:
         body = await request.json(default={})
@@ -1136,6 +1163,8 @@ async def handle_config(plugin: Any):
         saved_policy = {key: policy_snapshot[key] for key in (
             "contract", "revision", "healthy", "active", "whitelist_active", "counts")}
         saved_policy["companion"] = companion
+        # 落盘后再按运行时夹取后的值做联动提醒，避免与配置层口径不一致。
+        warning = _fragment_age_warning(plugin)
 
     if "classifier_outage_recovery_enabled" in updates:
         try:
@@ -1157,6 +1186,7 @@ async def handle_config(plugin: Any):
         "mode": plugin.engine.mode(),
         "message_policy": saved_policy,
         "changed": changed,
+        "warning": warning,
         "save_notice": ("判定口径已变化，旧统计与运行记录仍保留，分析时请结合修改时间。"
                         if POLICY_FIELDS.intersection(changed)
                         else "运行统计与判定记录已保留。"),

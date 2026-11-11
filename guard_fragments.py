@@ -28,6 +28,9 @@ class Batch:
     characters: int = 0
     blocked: bool = False
     finished: bool = False
+    # 批次总等待上限：started 是首条消息到达时刻，max_wait<=0 表示不限制。
+    started: float = 0.0
+    max_wait: float = 0.0
 
 
 class FragmentWait:
@@ -44,7 +47,8 @@ class FragmentWait:
         self.tasks = set()
         self.closed = False
 
-    def observe(self, event, key, snapshot, seconds, explicit=False, message_id=""):
+    def observe(self, event, key, snapshot, seconds, explicit=False, message_id="",
+                max_wait=0):
         """同步登记到达时间，不能被撤回窗口、归档或模型耗时推迟。"""
         now = self.clock()
         ticket = Ticket(event, snapshot)
@@ -70,11 +74,12 @@ class FragmentWait:
             if len(self.batches) >= self.CAPACITY:
                 ticket.reason = "fragment_capacity"
                 return ticket
-            batch = Batch(key, now + seconds, seconds, clock=self.clock)
+            batch = Batch(key, self._deadline(now, seconds, max_wait, now), seconds,
+                          clock=self.clock, started=now, max_wait=max_wait)
             self.batches[key] = batch
         ticket.batch = batch
         batch.latest = ticket
-        batch.deadline = now + seconds
+        batch.deadline = self._deadline(now, seconds, batch.max_wait, batch.started)
         batch.explicit = batch.explicit or explicit
         batch.characters += len(snapshot.get("text", ""))
         if (len(batch.items) >= self.MAX_MESSAGES
@@ -92,6 +97,7 @@ class FragmentWait:
         batch = ticket.batch
         if batch is None:
             return None
+        # deadline 已在 observe 里按批次总上限夹取，这里只需等到该时刻。
         task = asyncio.current_task()
         self.tasks.add(task)
         try:
@@ -124,6 +130,14 @@ class FragmentWait:
     def _remove(self, batch):
         if self.batches.get(batch.key) is batch:
             self.batches.pop(batch.key)
+
+    @staticmethod
+    def _deadline(now, seconds, max_wait, started):
+        """续发只重置安静期；总上限从该批第一条消息起算，0 表示不限制。"""
+        quiet = now + seconds
+        if max_wait <= 0:
+            return quiet
+        return min(quiet, started + max_wait)
 
     async def close(self):
         self.closed = True
