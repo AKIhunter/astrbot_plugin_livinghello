@@ -146,7 +146,7 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(req.extra_user_content_parts, [])
         self.assertEqual(req.image_urls, [])
 
-    def test_stale_reply_never_injects_summary(self):
+    def test_context_advance_keeps_summary_without_cancelling_reply(self):
         p = plugin(gate_config(
             classifier_provider_id="text::Qwen/Qwen3-8B",
             vision_provider_id="vision::qwen3-vl-plus"))
@@ -161,8 +161,11 @@ class HandoffTest(unittest.TestCase):
         p.context = SimpleNamespace(get_provider_by_id=models.get)
         req = SimpleNamespace(image_urls=[], extra_user_content_parts=[])
         asyncio.run(p.guard_llm_request(event, req))
-        self.assertTrue(event.stopped)
-        self.assertEqual(req.extra_user_content_parts, [])
+        # 新设计：判定期间群友插话不撤销已生成的回复，摘要照常注入。
+        self.assertFalse(event.stopped)
+        self.assertTrue(event.get_extra("_at_guard_context_advanced"))
+        text = "\n".join(part.text for part in req.extra_user_content_parts)
+        self.assertIn("左边红色圆形", text)
 
     def test_text_only_reply_requires_complete_summary(self):
         for summary, expected_stop in [(visual_output(),False),(output(),True)]:

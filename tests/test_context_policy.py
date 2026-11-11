@@ -194,7 +194,7 @@ class ContextTest(unittest.TestCase):
         self.assertIn("媒体消息", self.instance.recent_messages["1001"][-1][1])
         self.assertTrue(self.instance._message_meta(self.event)["unread_media"])
 
-    def test_message_arriving_during_classification_cancels_reply(self):
+    def test_message_arriving_during_classification_keeps_reply_and_marks_context(self):
         instance = self.instance
 
         class Provider:
@@ -205,9 +205,13 @@ class ContextTest(unittest.TestCase):
         instance.context.provider = Provider()
         req = SimpleNamespace(extra_user_content_parts=[])
         asyncio.run(instance.guard_llm_request(self.event, req))
-        self.assertTrue(self.event.stopped)
-        self.assertEqual(self.event.get_extra("_at_guard_decision")["reason"], "context_changed")
-        self.assertEqual(instance.engine.stats["allowed"], 0)
+        # 新设计：判定期间新消息只刷新上下文，判定结论仍然生效。
+        self.assertFalse(self.event.stopped)
+        decision = self.event.get_extra("_at_guard_decision")
+        self.assertEqual(decision["action"], "reply")
+        self.assertEqual(decision["reason"], "allowed")
+        self.assertTrue(self.event.get_extra("_at_guard_context_advanced"))
+        self.assertEqual(instance.engine.stats["allowed"], 1)
 
     def test_message_arriving_during_generation_preserves_finished_group_response(self):
         self.event.set_extra("_at_guard_proactive", True)
@@ -220,7 +224,7 @@ class ContextTest(unittest.TestCase):
         self.assertEqual(response.completion_text, "过时回复")
         self.assertIsNone(self.event.get_extra("_at_guard_delivery_blocked"))
 
-    def test_final_decoration_recheck_blocks_a_late_message(self):
+    def test_final_decoration_recheck_keeps_reply_and_marks_a_late_message(self):
         self.event.set_extra("_at_guard_proactive", True)
         self.event.set_extra("_at_guard_recorded_at", time.monotonic())
         self.event.set_extra("_at_guard_judged_revision", 0)
@@ -228,8 +232,10 @@ class ContextTest(unittest.TestCase):
         result = SimpleNamespace(chain=[Plain("过时回复")])
         self.event.get_result = lambda: result
         asyncio.run(self.instance.recheck_before_send(self.event))
-        self.assertEqual(result.chain, [])
-        self.assertTrue(self.event.stopped)
+        # 新设计：装饰后复核发现新消息，只标记上下文已推进。
+        self.assertTrue(result.chain)
+        self.assertFalse(self.event.stopped)
+        self.assertTrue(self.event.get_extra("_at_guard_context_advanced"))
 
     def test_explicit_call_does_not_get_proactive_stale_filter(self):
         self.event.is_at_or_wake_command = True

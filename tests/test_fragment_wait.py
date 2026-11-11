@@ -308,24 +308,33 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(repeat.stopped)
         self.assertEqual(self.provider.prompts, [])
 
-    async def test_native_at_keeps_expiry_and_context_checks_before_sending(self):
-        for reason in ("message_expired", "context_changed"):
-            with self.subTest(reason=reason):
-                event = await self.incoming(FragmentEvent(
-                    "现在回我", mid=reason, components=[At(qq="bot"), Plain("现在回我")]))
-                await self.finish(event)
-                await self.judge(event)
-                self.assertFalse(event.stopped)
-                if reason == "message_expired":
-                    event.set_extra("_at_guard_recorded_at",
-                                    time.monotonic() - self.guard.engine.reply_max_age() - 1)
-                else:
-                    self.guard.context_revision["1001"] += 1
-                await self.guard.recheck_before_send(event)
-                self.assertTrue(event.stopped)
-                self.assertEqual(event.extra["_at_guard_delivery_blocked"], reason)
-                self.assertEqual(event.result.chain, [])
-                self.assertEqual(self.provider.prompts, [])
+    async def test_native_at_keeps_expiry_check_but_context_advance_only_marks(self):
+        expired = await self.incoming(FragmentEvent(
+            "现在回我", mid="expired", components=[At(qq="bot"), Plain("现在回我")]))
+        await self.finish(expired)
+        await self.judge(expired)
+        self.assertFalse(expired.stopped)
+        expired.set_extra("_at_guard_recorded_at",
+                          time.monotonic() - self.guard.engine.reply_max_age() - 1)
+        await self.guard.recheck_before_send(expired)
+        self.assertTrue(expired.stopped)
+        self.assertEqual(expired.extra["_at_guard_delivery_blocked"], "message_expired")
+        self.assertEqual(expired.result.chain, [])
+        self.assertEqual(self.provider.prompts, [])
+
+        advanced = await self.incoming(FragmentEvent(
+            "现在回我", mid="advanced", components=[At(qq="bot"), Plain("现在回我")]))
+        await self.finish(advanced)
+        await self.judge(advanced)
+        self.assertFalse(advanced.stopped)
+        # 新设计：群友插话只刷新上下文，已生成的回复照常发送。
+        self.guard.context_revision["1001"] += 1
+        await self.guard.recheck_before_send(advanced)
+        self.assertFalse(advanced.stopped)
+        self.assertTrue(advanced.result.chain)
+        self.assertTrue(advanced.get_extra("_at_guard_context_advanced"))
+        self.assertIsNone(advanced.get_extra("_at_guard_delivery_blocked"))
+        self.assertEqual(self.provider.prompts, [])
 
     async def test_native_at_ignores_recall_after_fragment_window(self):
         self.guard.config.update(reply_recall_group=True, reply_recall_private=True)

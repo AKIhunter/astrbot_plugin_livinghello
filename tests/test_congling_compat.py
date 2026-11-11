@@ -64,12 +64,15 @@ class PreparationTest(unittest.TestCase):
         self.event.set_extra("congling:wake_prepare_seconds", 45)
         self.assertEqual(self.reason(), "")
         self.guard.context_revision["1001"] = 1
-        self.assertEqual(self.reason(), "context_changed")
+        # 新设计：判定后群友继续说话只刷新上下文，不撤销已生成的回复。
+        self.assertEqual(self.reason(), "")
+        self.assertTrue(self.guard._context_advanced(self.event, "1001"))
 
-    def test_new_message_still_revokes_prepared_reply(self):
+    def test_new_message_marks_context_advanced_without_revoking_prepared_reply(self):
         self.event.set_extra("congling:wake_prepare_seconds", 45)
         self.guard.context_revision["1001"] = 1
-        self.assertEqual(self.reason(), "context_changed")
+        self.assertEqual(self.reason(), "")
+        self.assertTrue(self.guard._context_advanced(self.event, "1001"))
 
     def test_generation_hook_keeps_generated_group_reply_but_blocks_expiry(self):
         self.event.set_extra("congling:wake_prepare_seconds", 45)
@@ -84,7 +87,7 @@ class PreparationTest(unittest.TestCase):
                 self.assertEqual(response.completion_text, "" if expected else "旧回复")
                 self.assertEqual(self.event.get_extra("_at_guard_delivery_blocked"), expected)
 
-    def test_final_send_recheck_keeps_prepared_reply_and_cancels_new_context(self):
+    def test_final_send_recheck_keeps_prepared_reply_when_new_context_arrives(self):
         self.event.set_extra("congling:wake_prepare_seconds", 45)
         result = SimpleNamespace(chain=[Plain("当前答复")])
         self.event.get_result = lambda: result
@@ -93,8 +96,10 @@ class PreparationTest(unittest.TestCase):
             self.assertTrue(result.chain)
             self.guard.context_revision["1001"] = 1
             asyncio.run(self.guard.recheck_before_send(self.event))
-        self.assertEqual(result.chain, [])
-        self.assertTrue(self.event.stopped)
+        # 新设计：复核时群友插话只打标记，不清空 chain、不停止事件。
+        self.assertTrue(result.chain)
+        self.assertFalse(self.event.stopped)
+        self.assertTrue(self.event.get_extra("_at_guard_context_advanced"))
 
 
 class ConsoleCompatTest(unittest.TestCase):

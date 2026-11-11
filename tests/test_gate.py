@@ -64,6 +64,9 @@ class EmptyMentionEvent:
     def get_sender_name(self):
         return "tester"
 
+    def get_sender_id(self):
+        return "tester"
+
     def get_self_id(self):
         return "bot"
 
@@ -111,6 +114,9 @@ class GateEvent:
     def get_sender_name(self):
         return "tester"
 
+    def get_sender_id(self):
+        return "tester"
+
     def set_extra(self, key, value):
         self.extra[key] = value
 
@@ -154,6 +160,7 @@ def plugin(config=None, provider=None):
     instance.replied_fingerprints = {}
     instance.last_bot_line = {}
     instance.last_bot_line_at = {}
+    instance.early_ack_at = {}
     instance.context_revision = defaultdict(int)
     instance.recent_messages = defaultdict(lambda: deque(maxlen=30))
     instance.config = config if config is not None else {
@@ -199,6 +206,7 @@ def gate_config(**overrides):
         "proactive_cooldown_seconds": 0,
         "duplicate_window_seconds": 0,
         "apply_to_private": False,
+        "reply_early_ack_seconds": 0,
     }
     config.update(overrides)
     return config
@@ -370,7 +378,8 @@ class HardGateTest(unittest.TestCase):
         return instance, event, req
 
     def test_low_score_stops_event_before_generation(self):
-        provider = FakeProvider('{"act":"silent","conf":20,"ground":"none"}')
+        provider = FakeProvider(
+            '{"act":"silent","conf":20,"understood":true,"reason":"no_value","ground":"none"}')
         instance, event, req = self._ready("今天中午吃啥", provider)
 
         asyncio.run(instance.guard_llm_request(event, req))
@@ -408,7 +417,7 @@ class HardGateTest(unittest.TestCase):
     def test_shadow_mode_never_blocks(self):
         provider = FakeProvider(
             '{"act":"silent","conf":5,"understood":true,'
-            '"reason":"model_silent","ground":"none"}'
+            '"reason":"no_value","ground":"none"}'
         )
         instance, event, req = self._ready("随便说一句", provider, gate_mode="shadow")
 
@@ -425,7 +434,7 @@ class HardGateTest(unittest.TestCase):
 
     def test_shadow_mode_records_local_rules_without_blocking(self):
         output = ('{"act":"silent","conf":5,"understood":true,'
-                  '"reason":"model_silent","ground":"none"}')
+                  '"reason":"no_value","ground":"none"}')
         cases = ("mentions_other", "duplicate", "cooldown", "inflight")
         for reason in cases:
             with self.subTest(reason=reason):

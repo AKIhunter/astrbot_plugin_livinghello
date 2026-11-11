@@ -238,13 +238,15 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
         await self.event.send(self.event.result)
         self.assertEqual(len(self.event.sent), 1)
 
-    async def test_typing_excluded_from_ttl_but_context_revision_still_matters(self):
+    async def test_typing_excluded_from_ttl_and_context_advance_is_only_marked(self):
         self.event.set_extra("_at_guard_recorded_at", time.monotonic() - 80)
         self.event.set_extra("_at_guard_typing_seconds", 65)
         self.guard.config["gate_reply_max_age_seconds"] = 30
         self.assertEqual(self.guard._stale_reason(self.event, "1001"), "")
         self.event.set_extra("_at_guard_judged_revision", -1)
-        self.assertEqual(self.guard._stale_reason(self.event, "1001"), "context_changed")
+        # 新设计：上下文推进不再算过期原因，只单独打标记。
+        self.assertEqual(self.guard._stale_reason(self.event, "1001"), "")
+        self.assertTrue(self.guard._context_advanced(self.event, "1001"))
 
     async def test_generated_group_reply_survives_new_message_but_expiry_does_not(self):
         self.event.set_extra("_at_guard_judged_revision", -1)
@@ -263,11 +265,13 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.completion_text, "这是一条已经生成的完整回答")
         self.assertTrue(self.event.get_extra("_livinghello_response_ready"))
 
-    async def test_generated_private_reply_keeps_strict_context_protection(self):
+    async def test_generated_private_reply_marks_context_advance_without_cancelling(self):
         self.event._group = ""
         self.event.set_extra("_at_guard_judged_revision", -1)
         self.event.set_extra("_livinghello_response_ready", True)
-        self.assertEqual(self.guard._stale_reason(self.event, ""), "context_changed")
+        # 私聊也走同一套新规则：新消息只标记，不再按“上下文已变”撤销。
+        self.assertEqual(self.guard._stale_reason(self.event, ""), "")
+        self.assertTrue(self.guard._context_advanced(self.event, ""))
 
     async def test_recall_only_protects_direct_send_without_owner(self):
         self.guard.config["reply_recall_group"] = True

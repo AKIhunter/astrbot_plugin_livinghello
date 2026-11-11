@@ -253,7 +253,7 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(row["features"]["context_revision"]["synced"])
         await images.close()
 
-    async def test_external_change_other_request_recall_and_expiry_still_cancel(self):
+    async def test_external_change_marks_context_but_recall_and_expiry_still_cancel(self):
         event, other = Event(), Event(mid="external")
         event.extra.update(_at_guard_fragment_judged=True, _at_guard_judged_revision=12,
                            _at_guard_recorded_at=time.monotonic())
@@ -262,7 +262,9 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
         await self.guard.track_sent_message(event)
         self.assertEqual(event.get_extra("_at_guard_judged_revision"), 12)
         self.assertEqual(other.get_extra("_at_guard_judged_revision"), 12)
-        self.assertEqual(self.guard._stale_reason(event, self.guard._group_key(event)), "context_changed")
+        # 新设计：外部新消息只标记，不进入 stale 原因集合。
+        self.assertEqual(self.guard._stale_reason(event, self.guard._group_key(event)), "")
+        self.assertTrue(self.guard._context_advanced(event, self.guard._group_key(event)))
         event.extra["_at_guard_source_recalled"] = True
         self.assertEqual(self.guard._stale_reason(event, self.guard._group_key(event)), "message_recalled")
         event.extra["_at_guard_source_recalled"] = False
