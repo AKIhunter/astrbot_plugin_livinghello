@@ -15,7 +15,8 @@ pages/guard/index.html       四页控制台
 docs/                       使用、配置、流程、维护、历史档案
 tests/test_*.py              独立回归与可选配套测试
 scripts/check_docs.py        标准库文档校验
-run_offline_tests.py         根目录兼容运行入口
+scripts/run_offline_tests.py 离线回归实现
+run_offline_tests.py         根目录兼容入口，转发到 scripts/
 .github/img/Banner.png       README Banner
 .github/workflows/checks.yml 文档和离线回归
 ```
