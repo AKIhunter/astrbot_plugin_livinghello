@@ -8,7 +8,7 @@ desc: >-
   碎片批次可设总等待上限，私聊新消息按水位宽限决定是否保留已生成回复。
 author: AKIhunter
 repo: https://github.com/AKIhunter/astrbot_plugin_livinghello
-version: 2.7.2
+version: 2.7.3
 astrbot_version: ">=4.29.1"
 social_link: https://github.com/AKIhunter
 tags:

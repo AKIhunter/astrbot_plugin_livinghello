@@ -7,7 +7,7 @@
 ![LivingHello Banner](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.2-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.3-3a8060)](CHANGELOG.md)
 [![Docs](https://img.shields.io/badge/docs-%E4%B8%AD%E6%96%87-66736c)](docs/README.md)
 
 </div>
@@ -136,7 +136,7 @@ flowchart LR
 
 **为什么私聊里来了新消息，上一条回复仍然发出了？**
 
-私聊水位有宽限：生成开始后 `private_watermark_window_seconds`（默认15秒）内到达的新消息视为同一轮连发，旧回复照常发送；超过窗口才视为新话题并丢弃旧回复。设为 `0` 恢复严格水位，任何新消息都会丢弃旧回复。群聊不受该开关影响。
+水位从消息到达时刻起算：`private_watermark_window_seconds`（默认15秒）内又收到新消息时，尚未发送的旧回复会被顶替，停止剩余分段气泡，已发出的不回收；窗口外旧回复照发。设为 `0` 关闭水位顶替，旧回复一律发送。默认只作用于私聊，把「水位生效范围」改为 `private` 以外的 `all` 才会同时管群聊；300 秒回复有效期优先级高于水位，超期一律丢弃。
 
 **文生图、文本转图和图生图有何区别？**
 
@@ -174,4 +174,4 @@ WebUI 路由和开发验证入口见[开发与维护](docs/development.md)。
 
 ## 更新日志
 
-当前 **2.7.2**：回复错误统一分类与 `[ReplyFault]` 锚点、碎片批次总等待上限、私聊水位宽限；此前为四页控制台与流程试跑、原生模型/回退/固定人格、上下文0不限时间，以及文生图和图生图统一工具、持久每日额度。[完整更新日志](CHANGELOG.md)。
+当前 **2.7.3**：水位语义改为窗口内顶替旧回复（含首条为图片）、`watermark_scope` 控制是否作用于群聊，300 秒有效期优先；此前为回复错误统一分类与 `[ReplyFault]` 锚点、碎片批次总等待上限、私聊水位宽限。[完整更新日志](CHANGELOG.md)。

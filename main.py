@@ -116,6 +116,8 @@ class Main(Star):
         self.last_bot_line: dict[str, str] = {}
         self.last_bot_line_at: dict[str, float] = {}
         self.context_revision: dict[str, int] = defaultdict(int)
+        # 水位轮次：按会话记录仍在生成/待发送的事件，供新消息顶替旧回复。
+        self.active_reply_turns: dict[str, dict] = {}
         self.recent_images = defaultdict(lambda: deque(maxlen=30))
         self.image_cache = ImageObservationCache()
         self.engine = GateEngine(self.config, self.data_dir, self.logger)
@@ -182,11 +184,35 @@ class Main(Star):
         }
         return result
 
+    def _freeze_emotion_snapshot(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
+        """同一轮内复用最先拿到的情绪状态，重跑主模型不重新读。
+
+        快照键就是事件本身：状态挂在 extras 上，随这一轮结束释放，跨轮不缓存。
+        本轮上游没有再次注入时不强行补旧情绪（例如被睡眠或可用性检查拦下）。
+        """
+        parts = getattr(req, "extra_user_content_parts", None)
+        if not isinstance(parts, list):
+            return
+        snapshot = event.get_extra("_at_guard_emotion_snapshot")
+        fresh = [part for part in parts if is_state_line(getattr(part, "text", ""))]
+        if snapshot is None:
+            if fresh:
+                event.set_extra("_at_guard_emotion_snapshot", fresh[0])
+                event.set_extra("_at_guard_emotion_snapshot_at", time.monotonic())
+            return
+        if not fresh:
+            return
+        parts[:] = [part for part in parts
+                    if not is_state_line(getattr(part, "text", ""))]
+        parts.append(snapshot)
+
     @filter.on_llm_request(priority=10500)
     async def listen_livingemotion(self, event: AstrMessageEvent, req: ProviderRequest):
         touch(event, "livingemotion")
         enabled = coupling_enabled(self.context, self.config, "livingemotion")
         clean_request(req, emotion=enabled, memory=True)
+        if enabled:
+            self._freeze_emotion_snapshot(event, req)
         lines = await state_lines(self.context, event, req, config=self.config) if enabled else []
         emit(event, "livingemotion", "completed" if lines else "skipped",
              enabled=enabled, source="LivingEmotion", count=len(lines))
@@ -1027,6 +1053,8 @@ class Main(Star):
                 self._record_incoming(event, self._group_key(event))
             return
         touch(event, "input_parse")
+        # 先登记本轮起点，再解析图片：首条是图片时也要能被后续新消息顶替。
+        self._note_reply_turn(event)
         if (takeover(self.config) and not ReplyDelivery.raw(event).get("post_type") == "notice"
                 and not self._delivery().recalled(event)):
             if (event.get_message_type() == MessageType.GROUP_MESSAGE
@@ -1209,6 +1237,10 @@ class Main(Star):
     @filter.on_agent_done()
     async def trace_agent_done(self, event, run_context, response):
         self._cancel_early_ack(event)
+        if (response is None or event.get_extra("_at_guard_delivery_blocked")
+                or event.get_extra("_at_guard_superseded")):
+            # 失败/已阻断/已顶替的轮次不再需要被顶替；正常完成要留到发送确认。
+            self._clear_reply_turn(event)
         service = self._trace(event)
         # 只回思考不回正文时先补一次，再按补答后的响应判定送达。
         await self._reasoning_retry().recover(event, run_context, response)
@@ -2679,10 +2711,24 @@ class Main(Star):
                  count=len(result.chain or []))
             delivery.arm(event, result)
             self._reply_health().arm(event, result)
-        # 每条气泡仍需复核原有的新消息撤销/有效期保护。
-        if self._judged_event(event) and self._gate_mode() == "enforce":
+        # 每条气泡仍需复核原有的新消息撤销/有效期保护；被顶替也要武装，
+        # 这样分段发送时后续气泡能读到 superseded 并停止。
+        superseded = bool(event.get_extra("_at_guard_superseded"))
+        if superseded or (self._judged_event(event) and self._gate_mode() == "enforce"):
             event.set_extra("_at_guard_send_check", lambda: self._stale_reason(
                 event, self._group_key(event)))
+        if superseded:
+            # 私聊旁路（apply_to_private=false）也会走到这里：先清空再返回。
+            reason = self._stale_reason(event, self._group_key(event)) \
+                or "superseded_by_new_message"
+            blocked = event.get_result()
+            if blocked is not None:
+                blocked.chain = []
+            self._record_delivery_block(event, str(reason))
+            if event.get_extra("_at_guard_proactive", False):
+                self.proactive_inflight_until.pop(self._group_key(event), None)
+            event.stop_event()
+            return
         if not self._applies_to_event(event) or self._gate_mode() != "enforce":
             return
         if not self._judged_event(event):
@@ -2721,6 +2767,18 @@ class Main(Star):
     @filter.after_message_sent()
     async def track_sent_message(self, event: AstrMessageEvent):
         touch(event, "send")
+        # 分段发送中途保留轮次，剩余气泡仍可能被新消息顶替；整轮发完才释放。
+        plan = event.get_extra("_at_guard_delivery_plan")
+        if plan:
+            result = event.get_result()
+            chain = getattr(result, "chain", None) or []
+            remaining = [component for component in chain
+                         if not isinstance(component, (Reply, At))
+                         and id(component) not in plan.get("attempted", {})]
+            if plan.get("failed") or not remaining:
+                self._clear_reply_turn(event)
+        else:
+            self._clear_reply_turn(event)
         if not event.get_extra("_at_guard_send_patched", False):
             result = event.get_result()
             if getattr(result, "chain", None):
@@ -2775,6 +2833,7 @@ class Main(Star):
             self.replied_fingerprints[(group_key, str(fingerprint))] = now
 
     def _record_delivery_block(self, event: AstrMessageEvent, reason: str):
+        self._clear_reply_turn(event)
         self._trace(event).finish(event, "cancelled", reason)
         if event.get_extra("_at_guard_delivery_blocked"):
             return
@@ -2885,11 +2944,88 @@ class Main(Star):
         bumps = int(event.get_extra("_at_guard_early_ack_bumps", 0) or 0)
         return revision + bumps != self.context_revision.get(group_key, 0)
 
+    def _watermark_scope(self) -> str:
+        engine = getattr(self, "engine", None)
+        return engine.watermark_scope() if engine is not None else "private"
+
+    def _watermark_applies(self, event: AstrMessageEvent) -> bool:
+        """水位只接管本插件负责发送的会话；关闭表达接管时不拦别人的回复。"""
+        if not takeover(self.config):
+            return False
+        message_type = event.get_message_type()
+        if message_type == MessageType.FRIEND_MESSAGE:
+            return True
+        return message_type == MessageType.GROUP_MESSAGE and self._watermark_scope() == "all"
+
+    def _clear_reply_turn(self, event: AstrMessageEvent) -> None:
+        turns = getattr(self, "active_reply_turns", None)
+        if not turns:
+            return
+        key = self._group_key(event)
+        row = turns.get(key)
+        if row is not None and row.get("event") is event:
+            turns.pop(key, None)
+
+    def _prune_reply_turns(self, now: float) -> None:
+        turns = getattr(self, "active_reply_turns", None)
+        if not turns:
+            return
+        engine = getattr(self, "engine", None)
+        window = engine.private_watermark_window() if engine is not None else 15.0
+        max_age = engine.reply_max_age() if engine is not None else 300.0
+        limit = max(window, max_age, 60.0)
+        for key, row in list(turns.items()):
+            received = float(row.get("received_at") or 0)
+            if now - received > limit:
+                turns.pop(key, None)
+
+    def _note_reply_turn(self, event: AstrMessageEvent) -> None:
+        """登记本轮回复，并顶替同一会话窗口内尚未发送的旧回复。
+
+        起点是消息到达时间 `_at_guard_received_at`，不是 lease、也不是主模型开始；
+        因此首条是图片、还卡在视觉理解前也能被后续新消息顶替。
+        这里只打标记，不打断生成：真正的丢弃发生在发送前复核与分段发送处。
+        """
+        if not self._watermark_applies(event):
+            return
+        if ReplyDelivery.raw(event).get("post_type") == "notice":
+            return
+        if self._delivery().recalled(event):
+            return
+        sender_id = str(event.get_sender_id() or "")
+        self_id = str(event.get_self_id() or "")
+        if sender_id and self_id and sender_id == self_id:
+            return
+        turns = getattr(self, "active_reply_turns", None)
+        if turns is None:
+            turns = {}
+            self.active_reply_turns = turns
+        key = self._group_key(event)
+        now = float(event.get_extra("_at_guard_received_at") or time.monotonic())
+        self._prune_reply_turns(now)
+        previous = turns.get(key)
+        if previous is not None and previous.get("event") is not event:
+            window = self.engine.private_watermark_window()
+            age = max(0.0, now - float(previous.get("received_at") or now))
+            # 0=关闭水位顶替；300 秒总有效期优先，超期旧回复本来就会被丢弃。
+            if window > 0 and age <= window:
+                old = previous.get("event")
+                if old is not None and not old.get_extra("_at_guard_superseded"):
+                    old.set_extra("_at_guard_superseded", True)
+                    old.set_extra("_at_guard_superseded_at", now)
+                    emit(old, "watermark", "superseded", age_ms=round(age * 1000, 1))
+                    self.logger.debug(
+                        "[LivingHello] 水位内新消息顶替旧回复: key=%s age=%.2fs window=%.1fs",
+                        key, age, window)
+        # 强引用事件本体：生成/视觉批次还在跑时，靠这条记录找到旧事件打标记。
+        turns[key] = {"event": event, "received_at": now}
+
     def _stale_reason(self, event: AstrMessageEvent, group_key: str) -> str:
-        """只返回「必须拦下」的原因：消息已撤回、或正文已经明显过期。
+        """只返回「必须拦下」的原因：消息已撤回、正文明显过期、或被新消息顶替。
 
         群里后来有人说话不算「必须拦」——那只是上下文刷新，
         这一轮的判断结论仍然成立，照常发出即可；新消息由下一轮判定重新理解。
+        300 秒总有效期的优先级高于水位顶替：超期一律按过期丢弃。
         """
         if self._delivery().recalled(event):
             return "message_recalled"
@@ -2900,6 +3036,8 @@ class Main(Star):
             and self._reply_timing(event)["effective_seconds"] > self.engine.reply_max_age()
         ):
             return "message_expired"
+        if event.get_extra("_at_guard_superseded"):
+            return "superseded_by_new_message"
         return ""
 
     def _fresh_bot_line(self, group_key: str) -> str:

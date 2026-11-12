@@ -107,6 +107,12 @@ LivingMemory 长期工具原默认关闭，须启用 `agent_tools.enable_memoriz
 
 配套从绫可共用本事件的感知解析和图片观察，避免归档、作息和生成分别理解。其当前图片观察可按会话/用户/人格缓存、最多 1200 字符；能力缓存遵守各自 TTL、隔离和并发合并约定。具体从绫缓存实现须核对配套版本，不能将这些要求视为 LivingHello 自动修改了另一插件。
 
+### LivingEmotion 情绪快照
+
+LivingEmotion 每次 `on_llm_request` 都会先删除旧状态块，再重新读取当前情绪并注入（`runtime/application.py` 的 `on_llm_request`）。若同一轮因思考补答、工具后续步骤或失败重跑而再次请求主模型，情绪可能已经被重新采样。
+
+LivingHello 在 `listen_livingemotion`（优先级 10500，位于 LivingEmotion 的 11000 之后）把本轮第一次看到的状态块存入事件 extras：后续请求若又注入了状态块，就替换回这份快照。缓存键是事件本身，随轮次结束释放；跨轮不缓存，因此下一轮仍读取最新情绪。本轮上游没有再次注入时不补旧情绪。该快照只冻结 `<!--livingemotion:state:v1-->` 状态块，爬楼历史与记忆块仍按各自逻辑刷新。
+
 ## 从绫配套
 
 当前事件是否启用从绫由其已激活实例 `enabled_for(event)` 决定。LivingHello 管理参与判定和发送格式，从绫感知、情绪、关系、记忆、作息仍按自身配置运行。不要用独立理解结果跳过其原生感知。

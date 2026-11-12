@@ -114,6 +114,7 @@ BOOL_FIELDS = {
 }
 STRING_FIELDS = {
     "gate_mode",
+    "watermark_scope",
     "classifier_provider_id",
     "vision_shared_provider_id",
     "vision_provider_id",
@@ -1015,6 +1016,8 @@ def _coerce(key: str, value: Any) -> Any:
         text = str(value or "").strip()
         if key == "gate_mode" and text not in {"enforce", "shadow"}:
             raise ValueError(f"未知模式: {text}")
+        if key == "watermark_scope" and text not in {"private", "all"}:
+            raise ValueError(f"未知的水位范围: {text}")
         if key == "empty_mention_mode" and text not in {"fixed", "persona"}:
             raise ValueError(f"未知的 @ 回复方式: {text}")
         if key == "empty_mention_reply":

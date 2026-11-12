@@ -639,8 +639,14 @@ class GateEngine:
         return self._float("fragment_max_wait_seconds", 10, 0, 30)
 
     def private_watermark_window(self) -> float:
-        # 私聊水位宽限：0 保留旧的严格相等校验，>0 时由 LivingEmotion 按时间窗放行连发。
+        # 水位窗口：窗口内到达的新消息顶替尚未发送的旧回复并停止剩余气泡；
+        # 窗口外旧回复照发。0=关闭顶替（旧回复一律发送）。
         return self._float("private_watermark_window_seconds", 15, 0, 60)
+
+    def watermark_scope(self) -> str:
+        # 水位生效范围：private=仅私聊；all=私聊+群聊。未知值回退 private。
+        value = str(self._raw("watermark_scope", "private") or "private").strip().lower()
+        return value if value in {"private", "all"} else "private"
 
     def memory_timeout(self) -> float:
         return self._float("gate_memory_timeout_seconds", 1.5, 0.2, 5)

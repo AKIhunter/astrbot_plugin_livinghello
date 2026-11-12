@@ -162,6 +162,7 @@ def plugin(config=None, provider=None):
     instance.last_bot_line_at = {}
     instance.early_ack_at = {}
     instance.context_revision = defaultdict(int)
+    instance.active_reply_turns = {}
     instance.recent_messages = defaultdict(lambda: deque(maxlen=30))
     instance.config = config if config is not None else {
         "participation_confidence_threshold": 65

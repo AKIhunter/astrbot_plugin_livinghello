@@ -102,7 +102,12 @@ class Understanding:
             nonlocal calls
             label = f"图片{start + 1}" if len(batch) == 1 else f"图片{start + 1}—{start + len(batch)}"
             try:
+                # 已被新消息顶替：排队中的批次不再调用视觉，已完成的摘要照常保留。
+                if event.get_extra("_at_guard_superseded"):
+                    raise ValueError("image_superseded")
                 async with self._vision_slots:
+                    if event.get_extra("_at_guard_superseded"):
+                        raise ValueError("image_superseded")
                     if self.plugin._policy_send_reason(event):
                         raise ValueError("image_policy_changed")
                     # 单张分别适配预算，保留原始编号，不能把被裁掉的图冒充已读。
@@ -138,7 +143,7 @@ class Understanding:
                 states.append(state)
                 observation.errors.append("vision:" + type(exc).__name__)
                 if str(exc) not in {"image_budget_exceeded", "image_call_budget_exhausted",
-                                    "image_policy_changed"}:
+                                    "image_policy_changed", "image_superseded"}:
                     report_model_fault(self.plugin, "understand_image", state,
                                        self._fault_detail(exc, "", "vision"), event)
             finally:

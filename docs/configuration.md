@@ -56,7 +56,8 @@
 | `gate_min_length` | `2` | 最短参与长度（字） |
 | `gate_context_max_age_seconds` | `300` | 上下文最长保留时间（秒） |
 | `gate_reply_max_age_seconds` | `30` | 自主回复机会有效期（秒） |
-| `private_watermark_window_seconds` | `15` | 私聊水位时间（秒） |
+| `private_watermark_window_seconds` | `15` | 水位时间（秒）；0=关闭水位顶替 |
+| `watermark_scope` | `"private"` | 水位生效范围：private / all |
 | `gate_congling_prepare_compat` | `true` | 适配从绫爬楼准备耗时 |
 | `gate_memory_timeout_seconds` | `1.5` | 背景记忆检索超时（秒） |
 | `gate_hourly_budget` | `60` | 每群每小时判定上限 |
@@ -83,7 +84,7 @@
 
 碎片等待还有一层批次总上限：`fragment_max_wait_seconds` 从该批第一条消息起算，默认 10 秒，`0` 不限制；续发只重置 `fragment_wait_seconds` 的静默计时，不延长总上限。回复有效期小于「静默等待 + 总上限 + 40 秒」时，控制台会在保存栏提示整批回复可能在发送前过期；只提示，不阻止保存。
 
-私聊水位由 `private_watermark_window_seconds` 单独控制，默认 15 秒：生成开始后窗口内到达的新消息视为同一轮连发，已生成的回复照常发送；超过窗口才按新话题丢弃。`0` 表示严格水位。群聊不使用该开关。
+水位规则由 `watermark_scope` + `private_watermark_window_seconds` 共同控制。窗口从消息到达时刻（不是生成开始）起算：窗口内同一会话又来新消息时，尚未发送的旧回复被顶替——丢弃正文、停止剩余分段气泡，已发出的不回收；窗口外旧回复照发。`watermark_scope=private`（默认）只作用于私聊，群聊保持原有发送前复核行为；设为 `all` 时该窗口同时用于群聊。`private_watermark_window_seconds=0` 表示关闭水位顶替，旧回复一律发送。300 秒回复机会有效期优先级高于水位，超期一律丢弃。
 
 ### 0的含义
 

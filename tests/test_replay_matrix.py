@@ -9,7 +9,7 @@
 - 时间虚拟化：FakeClock 驱动，watchdog 用显式 finish(timed_out=True) 代替真实等待。
 
 用法（无需安装 AstrBot，自动装最小替身）：
-    python3 插件/astrbot_plugin_at_guard/tests/test_replay_matrix.py
+    python3 插件/astrbot_plugin_livingHello/tests/test_replay_matrix.py
 """
 from __future__ import annotations
 
@@ -815,11 +815,15 @@ class ReplayMatrixTests(unittest.IsolatedAsyncioTestCase):
 class RealReplayDataTests(unittest.TestCase):
     """真实历史回放入口：文件未到位时明确跳过，不伪造结论。"""
 
-    REQUIRED = ["request_traces.sqlite3", "decisions.jsonl",
-                "astrbot_plugin_at_guard_config.json", "logs"]
+    REQUIRED = ["request_traces.sqlite3", "decisions.jsonl", "logs"]
+    # 配置文件名随插件改名变化：新导出用 LivingHello，旧导出仍是 at_guard。
+    CONFIG_FILES = ("astrbot_plugin_LivingHello_config.json",
+                    "astrbot_plugin_at_guard_config.json")
 
     def test_real_replay_data_ready(self):
         missing = [name for name in self.REQUIRED if not (REPLAY_DIR / name).exists()]
+        if not missing and not any((REPLAY_DIR / name).exists() for name in self.CONFIG_FILES):
+            missing.append(" 或 ".join(self.CONFIG_FILES))
         if missing:
             self.skipTest(f"真实回放数据未到位（{REPLAY_DIR}）：缺少 {', '.join(missing)}"
                           f"；本轮结论仅来自{DATA_SOURCE}数据")
