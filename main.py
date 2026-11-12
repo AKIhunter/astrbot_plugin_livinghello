@@ -3381,6 +3381,19 @@ class Main(Star):
         session_id = str(event.unified_msg_origin or "")
         if not persona_id or not session_id:
             return emotion_lines  # 身份不明时绝不能退到全库检索。
+        unified_path = callable(getattr(instance, "search_memories_for_event", None))
+        native_scope = None
+        native_access = None
+        if not unified_path and getattr(instance, "config_manager", None) is not None:
+            # 原生 2.12 的 session_id 参数是记忆作用域，不能直接传消息路由。
+            native_scope = importlib.import_module(f"{package}.core.memory_scope")
+            native_access = await native_scope.resolve_event_memory_access(
+                instance.config_manager, instance.context, event,
+            )
+            if not native_access.allowed or not native_access.scope:
+                return emotion_lines
+            if native_access.persona_id and native_access.persona_id != persona_id:
+                return emotion_lines
         # 请求局部采集器随async任务传播，避免跨会话或并发检索串用耗时。
         try:
             timing = importlib.import_module(f"{package}.core.retrieval.request_timing")
@@ -3401,11 +3414,17 @@ class Main(Star):
                     (self._fragment_text(event) or "")[:800],
                     event, persona_id=persona_id, k=3,
                 )
-            return await engine.search_memories(
-                query=(self._fragment_text(event) or "")[:800], k=3,
-                session_id=session_id, persona_id=persona_id,
-            )
-        unified_path = callable(getattr(instance, "search_memories_for_event", None))
+            if native_scope is None:
+                # 旧版没有原生作用域契约，继续使用原来的精确会话边界。
+                return await engine.search_memories(
+                    query=(self._fragment_text(event) or "")[:800], k=3,
+                    session_id=session_id, persona_id=persona_id,
+                )
+            with native_scope.adapter_access(instance.config_manager, event):
+                return await engine.search_memories(
+                    query=(self._fragment_text(event) or "")[:800], k=3,
+                    session_id=native_access.scope, persona_id=persona_id,
+                )
         if timing is None:
             results = await search()
             event.set_extra("_at_guard_memory_timings", {"retrieval_collected": False})
@@ -3426,6 +3445,12 @@ class Main(Star):
         if (not current or current.star_cls is not instance
                 or not coupling_enabled(self.context, self.config, "livingmemory")):
             return emotion_lines
+        if native_scope is not None:
+            checked = await native_scope.resolve_event_memory_access(
+                instance.config_manager, instance.context, event,
+            )
+            if checked != native_access:
+                return emotion_lines  # 检索期间修改作用域或白名单，丢弃旧授权结果。
         lines = []
         for result in results:
             meta = result.metadata or {}
@@ -3436,11 +3461,14 @@ class Main(Star):
             if persona_id and meta.get("persona_id") != persona_id:
                 continue
             if not unified_path and (
-                meta.get("session_id") != session_id
+                meta.get("session_id") != (native_access.scope if native_access else session_id)
                 or meta.get("persona_id") != persona_id
             ):
-                # 兼容旧版 LivingMemory：没有统一入口时仍按旧会话精确比对。
                 continue
+            if native_scope is not None:
+                with native_scope.adapter_access(instance.config_manager, event):
+                    if not native_scope.adapter_visible(meta):
+                        continue
             content = str(result.content or "").strip()
             if content:
                 lines.append(content[:400])
