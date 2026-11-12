@@ -471,6 +471,17 @@
     },
     "hint": "避免多人连续发送碎片消息时机器人连续抢话。"
   },
+  "proactive_group_judge": {
+    "description": "群消息主动判定范围",
+    "type": "string",
+    "default": "whitelist_empty",
+    "options": [
+      "off",
+      "whitelist_empty",
+      "all"
+    ],
+    "hint": "off=不补判定，普通群消息不@也不呼叫时不进入判定；whitelist_empty=群白名单为空时，除黑名单和灰名单外的普通群消息也进入判定；all=不依赖白名单是否为空，白名单内的群也补判定，名单外的群仍按既有规则只读静默。开启后每个群消息都会跑一次判定模型，成本随群消息量上升。仍受主动回复冷却约束，判定静默不会生成回复。"
+  },
   "duplicate_window_seconds": {
     "description": "相同消息去重窗口（秒）",
     "type": "int",

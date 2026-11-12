@@ -5,10 +5,11 @@ desc: >-
   以 0-100 参与适合度判断机器人是否接话，支持文字/多模态分层判断、
   图片摘要传给回复模型、静默否决、预算时限与可读判定详情。
   回复阶段统一错误分类与处置，按类别重试、切换或直接上报；
-  碎片批次可设总等待上限，私聊新消息按水位宽限决定是否保留已生成回复。
+  碎片批次可设总等待上限，私聊新消息按水位宽限决定是否保留已生成回复；
+  群白名单为空时普通群消息也会主动进入判定，可按开关关闭或放开到全部群消息。
 author: AKIhunter
 repo: https://github.com/AKIhunter/astrbot_plugin_livinghello
-version: 2.7.3
+version: 2.7.5
 astrbot_version: ">=4.29.1"
 social_link: https://github.com/AKIhunter
 tags:

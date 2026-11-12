@@ -648,6 +648,13 @@ class GateEngine:
         value = str(self._raw("watermark_scope", "private") or "private").strip().lower()
         return value if value in {"private", "all"} else "private"
 
+    def proactive_group_judge(self) -> str:
+        # 群消息主动判定范围：off=不补判定；whitelist_empty=仅群白名单为空时；
+        # all=除黑名单/灰名单外都补。未知值回退 whitelist_empty。
+        value = str(self._raw("proactive_group_judge", "whitelist_empty")
+                    or "whitelist_empty").strip().lower()
+        return value if value in {"off", "whitelist_empty", "all"} else "whitelist_empty"
+
     def memory_timeout(self) -> float:
         return self._float("gate_memory_timeout_seconds", 1.5, 0.2, 5)
 
@@ -1447,7 +1454,7 @@ class GateEngine:
                             str(line)[:6000 if is_state_line(str(line)) else 400]
                             for line in lines[:3] if str(line).strip()
                         )
-                        if not memory_lines:
+                        if not any(not is_state_line(line) for line in memory_lines):
                             metric["status"] = "empty"
                     except asyncio.TimeoutError:
                         metric["status"] = "timeout"
@@ -1460,7 +1467,8 @@ class GateEngine:
                         timings["memory"] = metric
             except Exception:
                 pass
-            if memory_lines:
+            # 情绪/关系状态是本轮背景，不能充当缺失的历史记忆或触发补查复判。
+            if any(not is_state_line(line) for line in memory_lines):
                 prompt = self._build_prompt(
                     context_lines=context_lines, current_text=(current_text or "")[:800],
                     bot_line=bot_line, is_private=is_private,

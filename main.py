@@ -1090,7 +1090,8 @@ class Main(Star):
         self._delivery()
         self._image_generation().attach(event, req)
         self.segments.attach(event, req)
-        if self._applies_to_event(event) and not self._policy_send_reason(event):
+        # 图片摘要与旧图补读属于输入理解；私聊跳过参与判定也必须保留。
+        if not self._policy_send_reason(event):
             if not hasattr(self, "image_history"):
                 try:
                     from .guard_image_history import ImageHistory
@@ -1500,7 +1501,13 @@ class Main(Star):
         """从绫原消息归档之后、作息/爬楼之前，认领本批唯一回复机会。"""
         touch(event, "fragments")
         ticket = event.get_extra("_at_guard_fragment_ticket")
-        if ticket is None or event.get_extra("_at_guard_fragments") is not None:
+        if event.get_extra("_at_guard_fragments") is not None:
+            return
+        if ticket is None:
+            # 没有碎片批次（等待关闭/私聊/通知）时合并已天然完成。
+            request = self._proactive_group_request(event)
+            if request is not None:
+                yield request
             return
         items = await self._fragment_queue().wait(ticket)
         if not items:
@@ -1528,6 +1535,58 @@ class Main(Star):
             else:
                 yield event.plain_result(str(self.config.get("empty_mention_reply", "嗯？有事就说。")))
             event.stop_event()
+            return
+        # 白名单为空时，宿主不会为普通群消息构造请求；这里补一次，
+        # 仍走 guard_llm_request，判定静默/冷却/名单规则全部照旧生效。
+        request = self._proactive_group_request(event)
+        if request is not None:
+            yield request
+
+    def _proactive_group_judge(self) -> str:
+        engine = getattr(self, "engine", None)
+        return engine.proactive_group_judge() if engine is not None else "whitelist_empty"
+
+    def _proactive_group_request(self, event: AstrMessageEvent):
+        """普通群消息的主动判定入口；返回 None 表示不补请求。
+
+        只做与门禁同口径的低成本预筛：名单、显式呼叫、自身消息与冷却。
+        真正的放行/静默仍由 `guard_llm_request` 决定，不在这里下结论。
+        """
+        judge = self._proactive_group_judge()
+        if judge == "off":
+            return None
+        if event.get_message_type() != MessageType.GROUP_MESSAGE:
+            return None
+        if ReplyDelivery.raw(event).get("post_type") == "notice":
+            return None
+        if event.get_extra("_at_guard_proactive_judge_requested"):
+            return None
+        if event.get_extra("_at_guard_fragment_blocked"):
+            return None
+        sender = str(getattr(event, "get_sender_id", lambda: "")() or "")
+        self_id = str(event.get_self_id() or "")
+        if not sender or not self_id or sender == self_id:
+            return None
+        if getattr(event, "is_at_or_wake_command", False):
+            return None
+        targets = self._mention_targets(event)
+        for row in event.get_extra("_at_guard_fragments", ()) or ():
+            targets.update(row["mention_targets"])
+        if self_id in targets:
+            return None
+        policy = self._event_policy(event)
+        if not policy["read_allowed"] or not policy["reply_allowed"]:
+            return None
+        if judge == "whitelist_empty" and self._policy().values["message_whitelist_groups"]:
+            return None
+        now = time.monotonic()
+        group_key = self._group_key(event)
+        cooldown = max(0.0, float(self.config.get("proactive_cooldown_seconds", 8)))
+        if now - self.last_proactive_reply.get(group_key, 0.0) < cooldown:
+            return None
+        # 在途状态只在 guard_llm_request 中提供谨慎接话提示，不能在入口吞掉新问题。
+        event.set_extra("_at_guard_proactive_judge_requested", True)
+        return event.request_llm(prompt=self._fragment_text(event))
 
     def _fragment_text(self, event):
         if congling_for(self.context, event):

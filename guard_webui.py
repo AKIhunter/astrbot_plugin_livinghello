@@ -115,6 +115,7 @@ BOOL_FIELDS = {
 STRING_FIELDS = {
     "gate_mode",
     "watermark_scope",
+    "proactive_group_judge",
     "classifier_provider_id",
     "vision_shared_provider_id",
     "vision_provider_id",
@@ -890,7 +891,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     mark("最近判定")
 
     data = {
-        "version": "2.7.2",
+        "version": "2.7.5",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
         "config": config,
@@ -1018,6 +1019,8 @@ def _coerce(key: str, value: Any) -> Any:
             raise ValueError(f"未知模式: {text}")
         if key == "watermark_scope" and text not in {"private", "all"}:
             raise ValueError(f"未知的水位范围: {text}")
+        if key == "proactive_group_judge" and text not in {"off", "whitelist_empty", "all"}:
+            raise ValueError(f"未知的群消息主动判定范围: {text}")
         if key == "empty_mention_mode" and text not in {"fixed", "persona"}:
             raise ValueError(f"未知的 @ 回复方式: {text}")
         if key == "empty_mention_reply":

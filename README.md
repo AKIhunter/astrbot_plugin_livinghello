@@ -7,12 +7,16 @@
 ![LivingHello Banner](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.3-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.5-3a8060)](CHANGELOG.md)
 [![Docs](https://img.shields.io/badge/docs-%E4%B8%AD%E6%96%87-66736c)](docs/README.md)
 
 </div>
 
-LivingHello 在 AstrBot 主回复生成前判断群聊消息是否适合参与：先检查本地规则，再按需使用文字、记忆和图片背景。通过后由原生主模型及人格生成回复，并管理碎片等待、分段、引用与 @；需要配图时可调用独立生图工具。可独立使用，也可与从绫配套。正式名称已由 AtGuard 更改为 LivingHello，既有插件 ID、接口和数据目录继续兼容。
+LivingHello 在 AstrBot 主回复生成前判断群聊消息是否适合参与：先检查本地规则，再按需使用文字、记忆和图片背景。通过后由原生主模型及人格生成回复，并管理碎片等待、分段、引用与 @；需要配图时可调用独立生图工具。可独立使用，也可接入 LivingMemory 和 LivingEmotion。正式名称已由 AtGuard 更改为 LivingHello，既有插件 ID、接口和数据目录继续兼容。
+
+**看完整流程：** [HTML 图解](docs/flow/index.html) · [四种插件组合](docs/integrations-and-flow.md) · [合成数据验证报告](docs/validation-20261112.md)。
+
+GitHub 文件页展示 HTML 源码。下载整个仓库后，用浏览器打开 `docs/flow/index.html` 即可查看，图表和字体均可离线加载；也可自行用 GitHub Pages 托管 `docs` 目录，访问 `flow/`。
 
 ## 能做什么
 
@@ -61,10 +65,10 @@ LivingHello 在 AstrBot 主回复生成前判断群聊消息是否适合参与�
 | --- | --- | --- |
 | `enforce`（默认） | 静默时停止主回复生成；图片异常兜底仍可能调用主模型做判定 | 日常运行 |
 | `shadow` | 记录判定结果，继续原生生成流程 | 对比新模型或阈值；不能用来验证“静默时不生成” |
-| `legacy` | 先判定，仍生成主回复，再清空应静默的正文 | 兼容旧行为，会消耗生成用量 |
-| `off` | 关闭参与判定及称呼前缀注册 | 回复方式、撤回和私聊等待仍由独立开关控制 |
 
-原生 @ 当前机器人有直接放行路径，不需要小模型评分。私聊参与过滤默认关闭。普通群消息仍依赖 AstrBot 已启用的主动回复策略进入生成链路，插件不保证每条消息都有判定记录。
+当前只支持这两种模式。存量 `legacy` / `off` 会归一到 `enforce`，不能当成关闭插件的办法。
+
+原生 @ 当前机器人有直接放行路径，不需要小模型评分。私聊参与过滤默认关闭。普通群消息由 `proactive_group_judge` 控制：默认 `whitelist_empty` 在群白名单为空时也补一次判定，`all` 不依赖白名单是否为空（名单外群仍只读静默），`off` 则完全沿用 AstrBot 已启用的主动回复策略。开启后每个群消息都会跑一次判定模型，成本随群消息量上升。
 
 ## 控制台与配置
 
@@ -111,8 +115,9 @@ flowchart LR
 
 ## 配套插件
 
-- **从绫**：保持其感知、情绪、关系和记忆设置；配套版本须在门禁后执行人格准备，并上报当前事件爬楼耗时。[配套约定](docs/architecture.md#从绫配套)。
-- **LivingMemory**：可提供按会话/人格检索的背景。长期写入须实际启用 `agent_tools.enable_memorize_tool`，确认存在 `memorize_long_term_memory`，并由主模型调用。
+- **LivingMemory**：开关默认关闭。接入后按身份、会话、人格和受众检索历史；长期写入须实际启用 `agent_tools.enable_memorize_tool`，由主模型成功调用 `memorize_long_term_memory`。关闭 Hello 的接入开关只关闭召回，不会关闭 Memory 的原生归档或写工具。
+- **LivingEmotion**：开关默认关闭。接入后提供当轮情绪、关系和可用性；睡眠等明确禁聊状态可以拦截默认直接回复的私聊，主动行为暂不可用只限制主动插话。插件失联时降级为本地规则。
+- **从绫兼容**：保留感知与固定人格适配；动态情绪、关系和记忆统一由功能耦合控制，不能理解为旧动态功能仍全部生效。[配套约定](docs/architecture.md#从绫配套)。
 - **多 API 模型路由**：下拉可选择已注册 provider，判定列表支持相应上游选择。原生回退模型列表只接受真实注册的 provider。
 - **独立AI生图**：不依赖 BiliBot；选择 AstrBot 已注册模型或多 API 路由具体上游，确认上游支持标准图片接口或对话生图接口。主模型通过 `livinghello_generate_image` 按需生成或编辑图片。
 
@@ -174,4 +179,4 @@ WebUI 路由和开发验证入口见[开发与维护](docs/development.md)。
 
 ## 更新日志
 
-当前 **2.7.3**：水位语义改为窗口内顶替旧回复（含首条为图片）、`watermark_scope` 控制是否作用于群聊，300 秒有效期优先；此前为回复错误统一分类与 `[ReplyFault]` 锚点、碎片批次总等待上限、私聊水位宽限。[完整更新日志](CHANGELOG.md)。
+当前 **2.7.5**：普通群消息判定入口、私聊图片摘要与旧图工具、历史记忆补查、旧图权限复核已覆盖合成反例；公开 HTML 说明从收消息到发送的分支及四种接入组合。[完整更新日志](CHANGELOG.md)。

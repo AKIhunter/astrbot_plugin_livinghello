@@ -1,6 +1,9 @@
 test_*.py export-ignore
 tests/ export-ignore
-docs/ export-ignore
 scripts/ export-ignore
 .github/workflows/ export-ignore
 run_offline_tests.py export-ignore
+# Include public HTML and documentation in downloadable repository archives.
+# Preserve vendored offline resources, including their upstream whitespace.
+docs/flow/_shared/js/mermaid.min.js whitespace=-blank-at-eol
+docs/flow/_shared/fonts/InstrumentSans-OFL.txt whitespace=-blank-at-eol
