@@ -32,13 +32,6 @@ except ImportError:
 
 TOOL_NAME = "livinghello_generate_image"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
-# 私聊只在消息明显涉及图片时挂载生图工具，减少无关工具定义进入请求。
-IMAGE_INTENT_WORDS = (
-    "生图", "文生图", "图生图", "配图", "配张图", "修图", "改图", "p图",
-    "换脸", "画一", "画个", "画张", "画幅", "画只", "画一下", "帮我画", "给我画",
-    "生成图片", "生成图像", "生成照片", "生成头像", "生成壁纸", "表情包",
-    "draw", "paint", "generate an image", "generate a picture",
-)
 IMAGE_EVENT = ContextVar("livinghello_image_event", default=None)
 FIELDS = {
     "enabled": ("启用AI生图", "bool", "主模型可按需要调用文生图或图生图工具，关闭后不提供工具。"),
@@ -246,14 +239,13 @@ class ImageSettings:
         return self._tool
 
     def needed(self, event):
-        """群聊保持原行为；私聊仅在当前消息需要生图时才挂工具。"""
-        if getattr(event, "get_group_id", lambda: "")():
-            return True
-        observation = event.get_extra("_at_guard_understanding")
-        if observation is not None and getattr(observation, "images", None):
-            return True
-        text = str(getattr(event, "message_str", "") or "").lower()
-        return any(word in text for word in IMAGE_INTENT_WORDS)
+        """生图工具对群聊和私聊一律挂载，是否真的画图交给主模型判断。
+
+        关键词表只能覆盖穷举出来的说法：「拍个自拍」「看看你的睡相」这类
+        自然表达必然漏网，等于替模型做了「本轮不用画」的决定，而它手里
+        根本没有工具可用。工具描述已经写明调用边界，选择权交回模型。
+        """
+        return True
 
     def attach(self, event, req):
         if self._closed or self.error or not self.values["enabled"] or self.values["daily_limit"] == 0:
@@ -274,7 +266,10 @@ class ImageSettings:
         if not any(t.name == TOOL_NAME for t in tools.tools):
             tools.add_tool(tool)
         req.func_tool = tools
-        emit(event, "image_tool_attachment", "success", tool=TOOL_NAME)
+        # 标记本次请求挂过生图工具，供最晚钩子复核它是否被后续插件覆盖。
+        event.set_extra("_livinghello_image_tool_attached", True)
+        emit(event, "image_tool_attachment", "success", tool=TOOL_NAME,
+             count=len(tools.tools), types=[t.name for t in tools.tools])
 
     def blocked(self, event):
         if self._closed or event.get_extra("_at_guard_delivery_blocked"):
@@ -379,25 +374,35 @@ class ImageSettings:
                 return "本条消息已请求过相同生图，结果可能已发送或未知，请勿重复调用。"
             emit(event, "image_quota", "success", reason="reserved")
             emit(event, "image_preflight", "success")
-            image = await asyncio.wait_for(self._request(
-                values, connection, prompt.strip(), reference),values["timeout_seconds"])
+            image, revised = await asyncio.wait_for(self._request(
+                values, connection, prompt.strip(), reference), values["timeout_seconds"])
             if self.blocked(event) or not self.values["enabled"]:
                 self.mark(request_id, "cancelled")
                 terminal_status, terminal_reason = "cancelled", "reply_cancelled_after_generation"
                 emit(event, "image_delivery", "cancelled", reason=terminal_reason)
                 return "图片已生成但回复已取消，未发送；本次仍计额度。"
-            # 沿用事件原生发送；图片先发送，工具结果再回主模型组织简短说明。
-            from astrbot.api.message_components import Image
-            await event.send(event.chain_result([Image.fromFileSystem(str(image))]))
+            # 不在这里直接发图：先把图挂到本轮事件上，等主回复送出后再单独发一条。
+            # 「先承接需求、后给图」的两个气泡，比图先砸过去更像真人说话。
             if event.get_extra("_at_guard_delivery_blocked"):
                 self.mark(request_id, "cancelled")
                 terminal_status, terminal_reason = "cancelled", "reply_cancelled_before_image_send"
                 emit(event, "image_delivery", "cancelled", reason=terminal_reason)
                 return "发送前回复已取消，未发送图片；本次仍计额度。"
-            self.mark(request_id, "sent")
-            terminal_status, terminal_reason = "success", "image_sent"
-            emit(event, "image_delivery", "success")
-            return "图片已发送到当前会话。请简短回应，不要再次生成或伪造图片链接。"
+            event.set_extra("_livinghello_pending_image", {
+                "path": str(image),
+                "request_id": request_id,
+                "created": time.time(),
+                "revised": revised,
+            })
+            terminal_status, terminal_reason = "success", "image_queued"
+            # count 记录回传画法的字符数，0 表示上游没给 revised_prompt。
+            emit(event, "image_delivery", "queued", reason="after_reply", count=len(revised))
+            # 把服务端改写后的画法回传：主模型据此知道自己真正画了什么，
+            # 后续追问不至于全靠猜；明确禁止复述，避免把画法念给用户听。
+            drawn = f"服务端实际按「{revised}」绘制。" if revised else ""
+            return ("图片已生成。" + drawn
+                    + "会在本条回复发出之后作为独立消息自动发送。"
+                    "请用一句话承接用户的需求，不要复述画法，也不要再调用本工具。")
         except asyncio.CancelledError:
             terminal_status, terminal_reason = "cancelled", "task_cancelled"
             if request_id:
@@ -577,7 +582,37 @@ class ImageSettings:
         fd, filename = tempfile.mkstemp(prefix="image-", suffix="." + mime.split("/")[1], dir=folder)
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
-        return Path(filename)
+        return Path(filename), self.revised(payload)
+
+    @staticmethod
+    def revised(payload):
+        """取服务端实际使用的画法描述；拿不到就返回空串。
+
+        OpenAI 系把改写后的提示词放在 data[].revised_prompt，百炼兼容响应
+        放在 output.choices[].message。只用来告诉主模型「实际画的是什么」，
+        不写日志、不外发，也不改变生图行为。
+        """
+        if not isinstance(payload, dict):
+            return ""
+        out = payload.get("output")
+        if isinstance(out, dict) and not payload.get("data") and not payload.get("choices"):
+            payload = out
+        rows = payload.get("data")
+        if isinstance(rows, list):
+            for item in rows:
+                if isinstance(item, dict):
+                    value = item.get("revised_prompt")
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()[:600]
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            message = choices[0].get("message")
+            if isinstance(message, dict):
+                for key in ("revised_prompt", "prompt"):
+                    value = message.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()[:600]
+        return ""
 
     @staticmethod
     def extract(payload):

@@ -1156,6 +1156,30 @@ class Main(Star):
         # 复用线上最终装配钩子，避免新增重复监听或覆盖图片/思考清理。
         await self.fit_final_request_images(event, req)
 
+    @filter.on_llm_request(priority=-maxsize - 10)
+    async def verify_image_tool(self, event: AstrMessageEvent, req: ProviderRequest):
+        """诊断：最后一个请求钩子跑完时，核对生图工具是否还留在请求里。
+
+        生图工具在 attach_reply_contract(-maxsize) 挂上；若有更晚执行的插件
+        重置了 req.func_tool，模型会看不见它却不会有任何报错。这里只读不写，
+        结果写进请求轨迹的 image_tool_verify 事件。
+        """
+        if not event.get_extra("_livinghello_image_tool_attached"):
+            return
+        try:
+            try:
+                from .guard_image_settings import TOOL_NAME
+            except ImportError:
+                from guard_image_settings import TOOL_NAME
+            tool_set = getattr(req, "func_tool", None)
+            names = [str(getattr(tool, "name", "") or "")
+                     for tool in (getattr(tool_set, "tools", None) or [])]
+            emit(event, "image_tool_verify",
+                 "success" if TOOL_NAME in names else "lost",
+                 count=len(names), types=names)
+        except Exception as exc:
+            self.logger.warning("[LivingHello] 生图工具复核失败: %r", exc)
+
     @filter.on_llm_tool_respond()
     async def remember_tool_evidence(self, event, tool, tool_args, tool_result):
         service = self._trace(event)
@@ -2822,6 +2846,48 @@ class Main(Star):
                 component.text for component in chain if isinstance(component, Plain)
             ))
             event.set_extra("_at_guard_sent_has_content", bool(chain))
+
+    @filter.after_message_sent(priority=100)
+    async def deliver_pending_image(self, event: AstrMessageEvent):
+        """主回复送出之后再单独发一条图片，让「先说话、后给图」成为两个气泡。
+
+        生图工具只在事件上留下待发路径，不自己发图；顺序交给宿主：
+        文字回复先出去，这里补图，节奏更接近真人。发送失败不重试。
+        """
+        pending = event.get_extra("_livinghello_pending_image")
+        if not pending:
+            return
+        # 分段发送时等最后一个气泡，别让图卡在两段文字中间。
+        plan = event.get_extra("_at_guard_delivery_plan")
+        if plan and not plan.get("failed"):
+            chain = getattr(event.get_result(), "chain", None) or []
+            remaining = [component for component in chain
+                         if not isinstance(component, (Reply, At))
+                         and id(component) not in plan.get("attempted", {})]
+            if remaining:
+                return
+        # 先摘标记：无论后面成败都不重发，避免同一条图出去两遍。
+        event.set_extra("_livinghello_pending_image", None)
+        path = str(pending.get("path") or "")
+        request_id = pending.get("request_id")
+        service = self._image_generation()
+        if not path or not Path(path).is_file():
+            emit(event, "image_delivery", "failed", reason="pending_file_missing")
+            return
+        if event.get_extra("_at_guard_delivery_blocked") or self._delivery().recalled(event):
+            service.mark(request_id, "cancelled")
+            emit(event, "image_delivery", "cancelled", reason="reply_cancelled_after_text")
+            return
+        try:
+            await event.send(event.chain_result([Image.fromFileSystem(path)]))
+        except Exception as exc:
+            service.mark(request_id, "unknown")
+            emit(event, "image_delivery", "failed", reason="send_exception",
+                 error_type=type(exc).__name__)
+            self.logger.warning("[LivingHello] 生图发送失败: %r", exc)
+            return
+        service.mark(request_id, "sent")
+        emit(event, "image_delivery", "success", source="after_reply")
 
     @filter.after_message_sent()
     async def track_sent_message(self, event: AstrMessageEvent):

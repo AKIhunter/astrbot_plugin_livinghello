@@ -13,9 +13,10 @@ class GenerateImageTool(FunctionTool[AstrAgentContext]):
     service: Any = None
     name: str = "livinghello_generate_image"
     description: str = (
-        "根据本次用户请求生成或编辑一张图片，并发送到当前会话。"
-        "仅在用户请求或当前回复确需配图时调用；图生图必须使用本次消息或引用中的图片。"
-        "有每日共享额度，失败或结果未知不能自动重试。"
+        "根据本次用户请求生成或编辑一张图片，图片会在你这条回复发出之后作为独立消息自动发送；"
+        "所以你只需用一句话承接需求，不要描述画面细节，也不要声称看不到图或发不了图。"
+        "用户说「画一张」「拍一张」、描述某个画面长什么样、或让你以某个形象出镜时都可以调用；"
+        "图生图必须使用本次消息或引用中的图片。有每日共享额度，失败或结果未知不能自动重试。"
     )
     parameters: dict = field(default_factory=lambda: {
         "type": "object",
