@@ -530,6 +530,10 @@ class ReplyHealth:
         error = task.cancelled()
         if not error:
             error = task.exception() is not None
+        # 新消息顶替会主动 cancel 本任务：属预期取消，不能算 pipeline 故障，
+        # 否则会把「已按水位静默」的轮次又拖回失败告警。
+        if error and row["event"].get_extra("_at_guard_superseded"):
+            error = False
         self.spawn(self.finish(row["event"], pipeline_error=error))
 
     async def _watchdog(self, row):

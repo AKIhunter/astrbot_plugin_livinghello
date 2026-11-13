@@ -3152,6 +3152,12 @@ class Main(Star):
                 if old is not None and not old.get_extra("_at_guard_superseded"):
                     old.set_extra("_at_guard_superseded", True)
                     old.set_extra("_at_guard_superseded_at", now)
+                    # 顶替是主动取消：把原因写进阻断字段，finish() 才能按
+                    # INTENTIONAL 静默收尾，不再误报 final_message_missing /
+                    # model_reply_missing。已有更具体原因时不覆盖。
+                    if not old.get_extra("_at_guard_delivery_blocked"):
+                        old.set_extra("_at_guard_delivery_blocked",
+                                      "superseded_by_new_message")
                     emit(old, "watermark", "superseded", age_ms=round(age * 1000, 1))
                     self.logger.debug(
                         "[LivingHello] 水位内新消息顶替旧回复: key=%s age=%.2fs window=%.1fs",

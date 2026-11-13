@@ -299,15 +299,6 @@ class ReplyDelivery:
             task = asyncio.current_task()
             self.tasks.add(task)
             try:
-                _p = event.get_extra("_at_guard_delivery_plan") or {}
-                self.logger.warning(
-                    "[LH-probe] wrapped enter: chain=%d token_ok=%r plan_failed=%r "
-                    "attempted=%d",
-                    len(getattr(message, "chain", None) or []),
-                    getattr(message, "_at_guard_delivery_token", None) is _p.get("token"),
-                    bool(_p.get("failed")),
-                    len(_p.get("attempted") or {}),
-                )
                 async with lock:
                     if not await self.pause(event, 0):
                         return
