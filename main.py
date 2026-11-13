@@ -1104,6 +1104,7 @@ class Main(Star):
         self.evidence.attach(event, req)
         emit(event, "contracts", "success")
         # 放行、私聊与直接@路径共用理解要求；不让提前返回的路径漏掉工具/记忆交接。
+        # 去重只限制顺带复述其他事项，保留用户重说与进展追问的出口。
         if not event.get_extra("_at_guard_topic_contract"):
             req.extra_user_content_parts.append(TextPart(text=(
                 "回复前确认当前用户实际问什么、引用的是谁、话题中的对象是什么。"
@@ -1111,6 +1112,10 @@ class Main(Star):
                 "事实不足时使用本轮实际可用的查询工具，无法核实就追问，不凭印象接话。"
                 "稳定且有来源的事实通过可用长期记忆写入工具保存精简事实、来源和日期；"
                 "临时天气、价格和查询失败不写成长期事实。"
+                "先定位用户这条消息回应的是上一轮哪一个点，只谈那一个。"
+                "上一轮的其他承诺、画面描写和收尾话不要顺带重提；"
+                "指向不明时用一句确认接住，不要逐条列举。"
+                "用户明确要求重说或追问进展时，照常回答。"
             )).mark_as_temp())
             event.set_extra("_at_guard_topic_contract", True)
 
@@ -2764,6 +2769,10 @@ class Main(Star):
         if reason:
             self._block_message_policy(event, reason)
             return
+        gray_explicit = (
+            event.get_message_type() == MessageType.GROUP_MESSAGE
+            and (event.get_extra("_livinghello_message_policy") or {}).get("requires_explicit", False)
+        )
         touch(event, "decorate")
         delivery = self._delivery()
         if delivery.recalled(event):
@@ -2799,7 +2808,8 @@ class Main(Star):
         # 每条气泡仍需复核原有的新消息撤销/有效期保护；被顶替也要武装，
         # 这样分段发送时后续气泡能读到 superseded 并停止。
         superseded = bool(event.get_extra("_at_guard_superseded"))
-        if superseded or (self._judged_event(event) and self._gate_mode() == "enforce"):
+        # 灰名单显式群聊虽跳过判定，仍须交给 LivingEmotion 和逐包发送复核。
+        if gray_explicit or superseded or (self._judged_event(event) and self._gate_mode() == "enforce"):
             event.set_extra("_at_guard_send_check", lambda: self._stale_reason(
                 event, self._group_key(event)))
         if superseded:
@@ -2814,9 +2824,9 @@ class Main(Star):
                 self.proactive_inflight_until.pop(self._group_key(event), None)
             event.stop_event()
             return
-        if not self._applies_to_event(event) or self._gate_mode() != "enforce":
+        if not gray_explicit and (not self._applies_to_event(event) or self._gate_mode() != "enforce"):
             return
-        if not self._judged_event(event):
+        if not gray_explicit and not self._judged_event(event):
             return
         group_key = self._group_key(event)
         if self._context_advanced(event, group_key):
@@ -3082,7 +3092,9 @@ class Main(Star):
         message_type = event.get_message_type()
         if message_type == MessageType.FRIEND_MESSAGE:
             return True
-        return message_type == MessageType.GROUP_MESSAGE and self._watermark_scope() == "all"
+        # 灰名单群聊的明确呼叫各自完成；后续消息不顶替，水位时间计算保持原样。
+        return (message_type == MessageType.GROUP_MESSAGE and self._watermark_scope() == "all"
+                and not self._event_policy(event).get("requires_explicit", False))
 
     def _clear_reply_turn(self, event: AstrMessageEvent) -> None:
         turns = getattr(self, "active_reply_turns", None)

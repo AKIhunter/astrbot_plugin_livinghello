@@ -1,11 +1,12 @@
 """实际钩子和发送包装的名单副作用验证；合成 QQ 事件，无真实发送。"""
 from types import SimpleNamespace
+import time
 import unittest
 from unittest.mock import AsyncMock, Mock
 
 from astrbot.api.message_components import At, Plain, Reply, Image
 from test_gate import plugin, gate_config
-from test_reply_delivery import Event, Chain
+from test_reply_delivery import Event, Chain, recall
 
 
 class QQEvent(Event):
@@ -152,6 +153,108 @@ class RuntimePolicyTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(event.stopped)
             provider.text_chat.assert_not_called()
             await guard.terminate()
+
+    async def test_gray_group_reply_survives_ordinary_and_explicit_new_messages(self):
+        for field in ("message_graylist_qq", "message_graylist_groups"):
+            for mode in ("enforce", "shadow"):
+                for scope in ("private", "all"):
+                    for wake in ("at", "name"):
+                        with self.subTest(field=field, mode=mode, scope=scope, wake=wake):
+                            guard = plugin(gate_config(
+                                **{field: ["123" if field.endswith("qq") else "456"]},
+                                gate_mode=mode, watermark_scope=scope,
+                                expression_takeover_enabled=True,
+                                reply_typing_chars_per_second=0, bot_names=["恰比"],
+                            ))
+                            try:
+                                old = QQEvent(
+                                    text="帮我" if wake == "at" else "恰比 帮我",
+                                    components=[At(qq="999"), Plain("帮我")]
+                                    if wake == "at" else None,
+                                )
+                                await guard.check_incoming_message_policy(old)
+                                await guard.parse_reply_input(old)
+                                await guard.guard_llm_request(old, SimpleNamespace(
+                                    extra_user_content_parts=[], image_urls=[]))
+                                # 同一用户续话、其他群友插话和新的明确呼叫都不撤销旧任务。
+                                for sender, explicit in (("123", False), ("789", False),
+                                                         ("123", True), ("789", True)):
+                                    newer = QQEvent(
+                                        sender=sender, text="补充消息",
+                                        components=[At(qq="999"), Plain("补充消息")]
+                                        if explicit else None,
+                                    )
+                                    await guard.check_incoming_message_policy(newer)
+                                    await guard.parse_reply_input(newer)
+                                await guard.recheck_before_send(old)
+                                checker = old.get_extra("_at_guard_send_check")
+                                self.assertTrue(callable(checker))
+                                self.assertEqual(checker(), "")
+                                self.assertFalse(old.get_extra("_at_guard_superseded"))
+                                self.assertFalse(old.stopped)
+                                await old.send(old.result)
+                                self.assertTrue(old.sent)
+                            finally:
+                                await guard.terminate()
+
+    async def test_gray_group_reply_rechecks_expiry_without_emotion_plugin(self):
+        guard = plugin(gate_config(
+            message_graylist_groups=["456"], expression_takeover_enabled=True,
+            gate_reply_max_age_seconds=300,
+        ))
+        try:
+            event = QQEvent(components=[At(qq="999"), Plain("帮我")])
+            await guard.check_incoming_message_policy(event)
+            await guard.guard_llm_request(event, SimpleNamespace(
+                extra_user_content_parts=[], image_urls=[]))
+            event.set_extra("_at_guard_recorded_at", time.monotonic() - 400)
+            await guard.recheck_before_send(event)
+            self.assertTrue(event.stopped)
+            self.assertEqual(event.get_extra("_at_guard_delivery_blocked"), "message_expired")
+            self.assertFalse(event.result.chain)
+            self.assertFalse(event.sent)
+        finally:
+            await guard.terminate()
+
+    async def test_gray_group_reply_rechecks_protections_between_packets(self):
+        for case in ("recall", "expired", "blacklist", "policy_changed"):
+            with self.subTest(case=case):
+                guard = plugin(gate_config(
+                    message_graylist_groups=["456"], expression_takeover_enabled=True,
+                    reply_recall_group=True, reply_typing_chars_per_second=0,
+                    gate_reply_max_age_seconds=300,
+                ))
+                try:
+                    event = QQEvent(components=[At(qq="999"), Plain("帮我")])
+                    event.result = Chain([Plain("第一段"), Plain("第二段")])
+                    event.set_extra("_at_guard_fragment_ticket", SimpleNamespace(
+                        batch=SimpleNamespace(deadline=time.monotonic() + 60,
+                                              clock=time.monotonic)))
+                    await guard.check_incoming_message_policy(event)
+                    guard._record_incoming(event, guard._group_key(event))
+                    await guard.guard_llm_request(event, SimpleNamespace(
+                        extra_user_content_parts=[], image_urls=[]))
+                    await guard.recheck_before_send(event)
+                    parts = list(event.result.chain)
+                    await event.send(event.result.derive([parts[0]]))
+                    self.assertEqual(len(event.sent), 1)
+                    if case == "recall":
+                        notice = recall(event)
+                        notice.unified_msg_origin = event.unified_msg_origin
+                        guard._delivery().notice(notice)
+                    elif case == "expired":
+                        event.set_extra("_at_guard_recorded_at", time.monotonic() - 400)
+                    elif case == "blacklist":
+                        guard.config["message_blacklist_qq"] = ["123"]
+                    else:
+                        guard.config["message_blacklist_qq"] = ["789"]
+                    await event.send(event.result.derive([parts[1]]))
+                    self.assertEqual(len(event.sent), 1)
+                    expected = {"recall": "message_recalled", "expired": "message_expired",
+                                "blacklist": "blacklist", "policy_changed": "policy_changed"}[case]
+                    self.assertEqual(event.get_extra("_at_guard_delivery_blocked"), expected)
+                finally:
+                    await guard.terminate()
 
     async def test_only_other_all_and_quoted_at_do_not_wake(self):
         for components in ([At(qq="555")], [At(qq="all")], [Reply(sender_id="789", chain=[At(qq="999")])]):
