@@ -23,6 +23,25 @@ except ImportError:
     from observability.guard_request_trace import emit
 
 
+def find_current_runner(run_context):
+    """只定位当前上下文的运行器；不依赖重试开关，也不保留栈帧。"""
+    frame = sys._getframe(1)
+    try:
+        for _ in range(24):
+            if frame is None:
+                break
+            runner = frame.f_locals.get("self")
+            if (frame.f_code.co_filename.replace("\\", "/").endswith(
+                    "/agent/runners/tool_loop_agent_runner.py")
+                    and frame.f_code.co_name == "step"
+                    and getattr(runner, "run_context", None) is run_context):
+                return runner
+            frame = frame.f_back
+    finally:
+        del frame
+    return None
+
+
 class ReplyFallback:
     RETRIES = 5
     COOLDOWN = 60
@@ -43,20 +62,9 @@ class ReplyFallback:
         """宿主钩子未公开runner；只沿当前栈定位同一上下文的本地runner实例。"""
         if not self.enabled or not event.get_extra("_livinghello_reply_approved"):
             return False
-        frame = sys._getframe(1)
-        try:
-            for _ in range(24):
-                if frame is None:
-                    break
-                filename = frame.f_code.co_filename.replace("\\", "/")
-                runner = frame.f_locals.get("self")
-                if (filename.endswith("/agent/runners/tool_loop_agent_runner.py")
-                        and frame.f_code.co_name == "step"
-                        and getattr(runner, "run_context", None) is run_context):
-                    return self.bind(event, runner)
-                frame = frame.f_back
-        finally:
-            del frame  # 不保留栈帧、消息正文或其他会话的引用。
+        runner = find_current_runner(run_context)
+        if runner is not None:
+            return self.bind(event, runner)
         emit(event, "reply_retry", "uncollected", reason="unsupported_runner")
         return False
 

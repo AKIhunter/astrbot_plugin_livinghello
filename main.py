@@ -26,7 +26,8 @@ try:  # 作为插件包加载时走相对导入
     from .images.guard_media import image_target
     from .reply.guard_reply_delivery import ReplyDelivery
     from .reply.guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
-    from .reply.guard_reply_fallback import ReplyFallback
+    from .reply.guard_reply_fallback import ReplyFallback, find_current_runner
+    from .input.guard_history_view import HistoryView
     from .reply.guard_reasoning_retry import ReasoningRetry
     from .input.guard_fragments import FragmentWait
     from .reply.guard_expression import Expression, congling_for, takeover
@@ -57,7 +58,8 @@ except ImportError:  # 单文件调试兜底
     from images.guard_media import image_target
     from reply.guard_reply_delivery import ReplyDelivery
     from reply.guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
-    from reply.guard_reply_fallback import ReplyFallback
+    from reply.guard_reply_fallback import ReplyFallback, find_current_runner
+    from input.guard_history_view import HistoryView
     from reply.guard_reasoning_retry import ReasoningRetry
     from input.guard_fragments import FragmentWait
     from reply.guard_expression import Expression, congling_for, takeover
@@ -137,6 +139,11 @@ class Main(Star):
             self.reply_fallback = ReplyFallback(self)
         return self.reply_fallback
 
+    def _history_view(self):
+        if not hasattr(self, "history_view"):
+            self.history_view = HistoryView(self)
+        return self.history_view
+
     def _policy(self):
         if not hasattr(self, "message_policy"):
             self.message_policy = MessagePolicy(self.config)
@@ -195,6 +202,10 @@ class Main(Star):
             return
         snapshot = event.get_extra("_at_guard_emotion_snapshot")
         fresh = [part for part in parts if is_state_line(getattr(part, "text", ""))]
+        for part in fresh:
+            mark = getattr(part, "mark_as_temp", None)
+            if callable(mark):
+                mark()
         if snapshot is None:
             if fresh:
                 event.set_extra("_at_guard_emotion_snapshot", fresh[0])
@@ -1160,6 +1171,9 @@ class Main(Star):
 
         # 复用线上最终装配钩子，避免新增重复监听或覆盖图片/思考清理。
         await self.fit_final_request_images(event, req)
+        # 保留运行器原历史；只在 Provider 发送副本上精简旧附加内容。
+        self._freeze_emotion_snapshot(event, req)
+        self._history_view().prepare(event, req)
 
     @filter.on_llm_request(priority=-maxsize - 10)
     async def verify_image_tool(self, event: AstrMessageEvent, req: ProviderRequest):
@@ -1253,6 +1267,7 @@ class Main(Star):
     async def trace_agent_begin(self, event, run_context):
         service = self._trace(event)
         self._reply_health().watch(event, expected=True)
+        self._history_view().bind(event, find_current_runner(run_context))
         self._reply_fallback().bind_current(event, run_context)
         # 宿主已选择本轮provider；只取名称，后备切换的最终归属仍以宿主日志为准。
         try:
@@ -1666,6 +1681,9 @@ class Main(Star):
         await self._delivery().prepare(event)
 
     async def terminate(self):
+        history_view = getattr(self, "history_view", None)
+        if history_view is not None:
+            await history_view.close()
         fallback = getattr(self, "reply_fallback", None)
         if fallback is not None:
             await fallback.close()
