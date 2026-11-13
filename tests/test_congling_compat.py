@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from astrbot.api.message_components import Plain
-from guard_webui import EDITABLE, _coerce, _congling_compat, _load_schema_subset, _state
+from console.guard_webui import EDITABLE, _coerce, _congling_compat, _load_schema_subset, _state
 from test_gate import GateEvent, gate_config, plugin
 
 
@@ -120,7 +120,7 @@ class ConsoleCompatTest(unittest.TestCase):
     def test_disabled_or_absent_plugin_is_optional(self):
         self.guard.context = SimpleNamespace(get_registered_star=lambda _: None)
         self.assertEqual(_congling_compat(self.guard), {
-            "detected": False, "active": False, "order": "unknown", "prepare_accounting": True})
+            "detected": False, "active": False, "order": "unknown"})
         self.assertFalse(self.status(active=False)["active"])
 
     def test_priority_is_checked_from_loaded_module(self):
@@ -135,7 +135,7 @@ class ConsoleCompatTest(unittest.TestCase):
 
     def test_alias_lookup_and_disabled_accounting(self):
         self.assertTrue(self.status(alias=True)["detected"])
-        self.assertFalse(self.status(config=False)["prepare_accounting"])
+        self.assertNotIn("prepare_accounting", self.status(config=False))
 
     def test_registry_failure_does_not_break_console(self):
         def unavailable(_):
@@ -144,7 +144,7 @@ class ConsoleCompatTest(unittest.TestCase):
         self.assertFalse(_congling_compat(self.guard)["detected"])
 
     def test_schema_and_editable_fields_include_switch(self):
-        key = "gate_congling_prepare_compat"
+        key = "integrate_livingemotion_catchup"
         self.assertIn(key, EDITABLE)
         self.assertIs(_load_schema_subset()[key]["default"], True)
         self.assertIs(_coerce(key, "false"), False)
@@ -156,8 +156,8 @@ class ConsoleCompatTest(unittest.TestCase):
                                              get_all_providers=lambda: [])
         self.guard.config["gate_congling_prepare_compat"] = False
         state = asyncio.run(_state(self.guard))
-        self.assertIs(state["config"]["gate_congling_prepare_compat"], False)
-        self.assertIs(state["congling_compat"]["prepare_accounting"], False)
+        self.assertNotIn("gate_congling_prepare_compat", state["config"])
+        self.assertNotIn("prepare_accounting", state["congling_compat"])
         self.assertFalse(state["congling_compat"]["detected"])
 
 

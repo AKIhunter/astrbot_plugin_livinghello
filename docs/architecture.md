@@ -1,6 +1,6 @@
 # 流程与集成说明
 
-面向希望理解执行链路的使用者和配套开发者。当前实现依据 [main.py](../main.py)、[guard_engine.py](../guard_engine.py) 及各 `guard_*` 模块，已核对源码：2026-11-12（2.7.5）。完整白话分支见 [HTML 图解](flow/index.html)，四种接入组合见 [集成说明](integrations-and-flow.md)，合成反例见 [验证报告](validation-20261112.md)。钩子、缓存、超时或配套约定改变时更新；以下图不能代替部署状态验证。
+面向希望理解执行链路的使用者和配套开发者。当前实现依据 [main.py](../main.py)、[gate/guard_engine.py](../gate/guard_engine.py) 及各 `guard_*` 模块，已核对源码：2026-11-12（2.7.5）。完整白话分支见 [HTML 图解](flow/index.html)，四种接入组合见 [集成说明](integrations-and-flow.md)，合成反例见 [验证报告](validation-20261112.md)。钩子、缓存、超时或配套约定改变时更新；以下图不能代替部署状态验证。
 
 ## 判定流程
 
@@ -52,13 +52,13 @@ flowchart TD
 
 判定放行只说明适合参与，不代表事实完整。主模型读取同会话临时背景，优先复用已有资料；实际可用的联网、记忆、向量或图片工具才能补充事实，不增加一轮固定“理解模型”调用。长期写入依赖真实工具成功，流程页计划不能证明执行过。
 
-`guard_segments.py` 在结果修饰时准备文本段，原生流水线负责装饰、媒体与发送。结果身份和语义头由 `guard_reply_delivery.py` 传递，原生创建新 Plain、TTS 或转图片时不冻结旧全文。流式相邻 token 先缓冲为完整结果再交付，避免每个 token 单独断句。
+`reply/guard_segments.py` 在结果修饰时准备文本段，原生流水线负责装饰、媒体与发送。结果身份和语义头由 `reply/guard_reply_delivery.py` 传递，原生创建新 Plain、TTS 或转图片时不冻结旧全文。流式相邻 token 先缓冲为完整结果再交付，避免每个 token 单独断句。
 
 每条发送进入事件局部锁，只模拟一次打字耗时。成功后才消费首条回复头并记账；部分失败、重复组件或流式结束不自动补发全文。图片、语音、表情包由宿主及相应插件负责。
 
 ## 独立AI生图工具
 
-`guard_image_settings.py` 管理文生图和图生图能力，`guard_image_tool.py` 包装原生 `FunctionTool`。开启后在主模型请求阶段复制当前工具集并添加 `livinghello_generate_image`，不会修改共享人格工具集；关闭后不添加，已经拿到工具的在途请求也会在实际调用时检查开关。
+`images/guard_image_settings.py` 管理文生图和图生图能力，`images/guard_image_tool.py` 包装原生 `FunctionTool`。开启后在主模型请求阶段复制当前工具集并添加 `livinghello_generate_image`，不会修改共享人格工具集；关闭后不添加，已经拿到工具的在途请求也会在实际调用时检查开关。
 
 工具从当前事件确定会话和参考图片，模型只能提供画面描述及是否使用本次图片，不能提交任意图片地址或本地路径。连接读取已注册原生提供者或多 API 路由的具体上游 client，模型名称可独立覆盖；不依赖 BiliBot。标准协议请求 `images/generations` 或 multipart `images/edits`；对话协议使用 `chat/completions` 的 image 模态。均只请求1张，响应图片需为PNG、JPEG或WebP且不超过10MiB。
 
@@ -68,13 +68,13 @@ flowchart TD
 
 ## 碎片与撤回窗口
 
-请求关联由 `guard_request_trace.py` 管理：入口将完整会话ID与UUID32请求ID绑定到事件extra，碎片合并使用取得回复权事件的规范ID，并保存来源ID关联。判定日志继续使用原文件，读取时批量关联独立SQLite追踪快照，不新增判定或预算消耗。
+请求关联由 `observability/guard_request_trace.py` 管理：入口将完整会话ID与UUID32请求ID绑定到事件extra，碎片合并使用取得回复权事件的规范ID，并保存来源ID关联。判定日志继续使用原文件，读取时批量关联独立SQLite追踪快照，不新增判定或预算消耗。
 
 接收、输入解析、碎片、撤回、理解、判定、要求挂载、Agent开始、模型响应、工具开始/结束、Agent完成、结果装饰和发送完成共14项监听，核对真实激活注册表及当前实例；历史请求保存开始时的覆盖快照。生图内部预检、额度、实际HTTP请求、下载和投递另外记录步骤，与宿主工具span关联并避免重复计数。原生TTS/文本转图来源没有足够证据时标为未采集，流程试跑的生成节点仍是计划。
 
 自己的发送照常更新群上下文版本，只有当前请求的判定版本等于发送前版本时才同步该请求快照；已有外部变化时不更新，其他请求快照也不更新。Agent完成与前置文字成功均不能代替最终投递证据。
 
-`guard_fragments.py` 以 `(unified_msg_origin, sender_id)` 分批，用单调时钟测量安静期。同用户续发重置倒计时，只有最后触发认领整批；其他用户消息可作背景，不加入这一批。原文仍逐条由配套归档，较早分片的图片也可传给主回复。
+`input/guard_fragments.py` 以 `(unified_msg_origin, sender_id)` 分批，用单调时钟测量安静期。同用户续发重置倒计时，只有最后触发认领整批；其他用户消息可作背景，不加入这一批。原文仍逐条由配套归档，较早分片的图片也可传给主回复。
 
 最多 256 个活动批次，每批最多 128 条、总文本 65536 字符。超限整批静默，不截断后判断。缺少用户或完整会话标识时不聚合；重载取消等待，不持久化或自动重放。同平台会话重复消息 ID 不重置安静期，机器人自身消息和通知不入批。
 
@@ -104,7 +104,7 @@ sequenceDiagram
 | 长期记忆 | 实际记忆插件的统一身份、受众和隐私规则 | 仅稳定事实、来源和日期；失败结果、推测、网页指令和判定理由不能作事实 |
 | 原生历史图片摘要与旧图工具 | 当前授权会话；旧于近端保留窗口的历史图 | 私聊跳过参与判定也挂载；本轮最多补读一次，调用前后复核授权 |
 
-`guard_evidence.py` 收集 `on_llm_tool_respond` 的成功查询；不复用写入/发送工具、错误结果或完整回答，不强制拦截原生搜索。身份、人格、话题或 provider 改变以及过期均不复用。长期事实由主模型调用现有 `memorize_long_term_memory` 等工具，时效内容过期后重查。
+`integrations/guard_evidence.py` 收集 `on_llm_tool_respond` 的成功查询；不复用写入/发送工具、错误结果或完整回答，不强制拦截原生搜索。身份、人格、话题或 provider 改变以及过期均不复用。长期事实由主模型调用现有 `memorize_long_term_memory` 等工具，时效内容过期后重查。
 
 LivingMemory 长期工具原默认关闭，须启用 `agent_tools.enable_memorize_tool` 并重载，确认工具列表存在后才能写入。不能仅凭提示词宣称已写入，也不建立绕过权限的另一份长期向量库。
 
@@ -160,7 +160,7 @@ AstrBot 请求钩子按优先级从高到低执行：
 
 ## 原生模型与固定人格
 
-`guard_native_settings.py` 按目标原生配置保存主模型、默认TTS模型、语音回复开关及排版等公开字段。聊天与TTS Provider按角色隔离；语音字段与模型字段共用revision、磁盘一致性检查、原子补丁和流水线刷新。AstrBot原生页面修改后重新读取即可同步，本页保存也直接写回同一原生配置。固定人格文件 `native_persona_pins.json` 保留在旧技术 ID 的数据目录。
+`integrations/guard_native_settings.py` 按目标原生配置保存主模型、默认TTS模型、语音回复开关及排版等公开字段。聊天与TTS Provider按角色隔离；语音字段与模型字段共用revision、磁盘一致性检查、原子补丁和流水线刷新。AstrBot原生页面修改后重新读取即可同步，本页保存也直接写回同一原生配置。固定人格文件 `native_persona_pins.json` 保留在旧技术 ID 的数据目录。
 
 插件生命周期包装 `PersonaManager.resolve_selected_persona`，先确定所属原生配置，再返回固定人格原生对象，使系统提示、开场、工具和技能一致；未固定时沿用宿主选择器。固定人格已删除或文件损坏时明确失败，不自动换人。重载清理自己的包装，避免叠加。
 

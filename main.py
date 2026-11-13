@@ -20,19 +20,19 @@ from astrbot.core.agent.message import TextPart
 from astrbot.core.platform.message_type import MessageType
 
 try:  # 作为插件包加载时走相对导入
-    from .guard_message_policy import MessagePolicy, event_source, HISTORY_CONTRACT
-    from .guard_engine import Decision, GateEngine, POLICY_VERSION
-    from .guard_image_cache import ImageObservationCache
-    from .guard_media import image_target
-    from .guard_reply_delivery import ReplyDelivery
-    from .guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
-    from .guard_reply_fallback import ReplyFallback
-    from .guard_reasoning_retry import ReasoningRetry
-    from .guard_fragments import FragmentWait
-    from .guard_expression import Expression, congling_for, takeover
-    from .guard_livingemotion import availability_reason, is_state_line, state_lines
-    from .guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
-    from .guard_classifier_outage import (
+    from .gate.guard_message_policy import MessagePolicy, event_source, HISTORY_CONTRACT
+    from .gate.guard_engine import Decision, GateEngine, POLICY_VERSION
+    from .images.guard_image_cache import ImageObservationCache
+    from .images.guard_media import image_target
+    from .reply.guard_reply_delivery import ReplyDelivery
+    from .reply.guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
+    from .reply.guard_reply_fallback import ReplyFallback
+    from .reply.guard_reasoning_retry import ReasoningRetry
+    from .input.guard_fragments import FragmentWait
+    from .reply.guard_expression import Expression, congling_for, takeover
+    from .integrations.guard_livingemotion import availability_reason, is_state_line, state_lines
+    from .integrations.guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
+    from .gate.guard_classifier_outage import (
         BackfillStatus,
         COOLDOWN_SECONDS,
         ClassifierFailure,
@@ -46,24 +46,24 @@ try:  # 作为插件包加载时走相对导入
         failure_category_label,
         redacted_provider_id,
     )
-    from .guard_understanding import Understanding
-    from .guard_segments import ReplySegments
-    from .guard_evidence import EvidenceMemory
-    from .guard_request_trace import RequestTrace, emit, touch
+    from .input.guard_understanding import Understanding
+    from .reply.guard_segments import ReplySegments
+    from .integrations.guard_evidence import EvidenceMemory
+    from .observability.guard_request_trace import RequestTrace, emit, touch
 except ImportError:  # 单文件调试兜底
-    from guard_message_policy import MessagePolicy, event_source, HISTORY_CONTRACT
-    from guard_engine import Decision, GateEngine, POLICY_VERSION
-    from guard_image_cache import ImageObservationCache
-    from guard_media import image_target
-    from guard_reply_delivery import ReplyDelivery
-    from guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
-    from guard_reply_fallback import ReplyFallback
-    from guard_reasoning_retry import ReasoningRetry
-    from guard_fragments import FragmentWait
-    from guard_expression import Expression, congling_for, takeover
-    from guard_livingemotion import availability_reason, is_state_line, state_lines
-    from guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
-    from guard_classifier_outage import (
+    from gate.guard_message_policy import MessagePolicy, event_source, HISTORY_CONTRACT
+    from gate.guard_engine import Decision, GateEngine, POLICY_VERSION
+    from images.guard_image_cache import ImageObservationCache
+    from images.guard_media import image_target
+    from reply.guard_reply_delivery import ReplyDelivery
+    from reply.guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
+    from reply.guard_reply_fallback import ReplyFallback
+    from reply.guard_reasoning_retry import ReasoningRetry
+    from input.guard_fragments import FragmentWait
+    from reply.guard_expression import Expression, congling_for, takeover
+    from integrations.guard_livingemotion import availability_reason, is_state_line, state_lines
+    from integrations.guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
+    from gate.guard_classifier_outage import (
         BackfillStatus,
         COOLDOWN_SECONDS,
         ClassifierFailure,
@@ -77,10 +77,10 @@ except ImportError:  # 单文件调试兜底
         failure_category_label,
         redacted_provider_id,
     )
-    from guard_understanding import Understanding
-    from guard_segments import ReplySegments
-    from guard_evidence import EvidenceMemory
-    from guard_request_trace import RequestTrace, emit, touch
+    from input.guard_understanding import Understanding
+    from reply.guard_segments import ReplySegments
+    from integrations.guard_evidence import EvidenceMemory
+    from observability.guard_request_trace import RequestTrace, emit, touch
 
 
 NO_REPLY_TOKEN = "[[ASTRBOT_NO_REPLY]]"
@@ -399,9 +399,9 @@ class Main(Star):
     def _image_generation(self):
         if not hasattr(self, "image_generation"):
             try:
-                from .guard_image_settings import ImageSettings
+                from .images.guard_image_settings import ImageSettings
             except ImportError:
-                from guard_image_settings import ImageSettings
+                from images.guard_image_settings import ImageSettings
             self.image_generation = ImageSettings(self)
         return self.image_generation
 
@@ -1094,9 +1094,9 @@ class Main(Star):
         if not self._policy_send_reason(event):
             if not hasattr(self, "image_history"):
                 try:
-                    from .guard_image_history import ImageHistory
+                    from .images.guard_image_history import ImageHistory
                 except ImportError:
-                    from guard_image_history import ImageHistory
+                    from images.guard_image_history import ImageHistory
                 self.image_history = ImageHistory(self)
             self.image_history.attach(event, req)
         if not hasattr(self, "evidence"):
@@ -1120,9 +1120,9 @@ class Main(Star):
             event.set_extra("_livinghello_image_budget_done", True)
             try:
                 try:
-                    from .guard_image_budget import fit_images
+                    from .images.guard_image_budget import fit_images
                 except ImportError:
-                    from guard_image_budget import fit_images
+                    from images.guard_image_budget import fit_images
                 count_before = len(getattr(req, "image_urls", None) or [])
                 dropped, before, after = await fit_images(req)
                 if dropped or before != after:
@@ -1142,9 +1142,9 @@ class Main(Star):
             event.set_extra("_at_guard_thinking_contexts_done", True)
             try:
                 try:
-                    from .guard_thinking_filter import strip_thinking_contexts
+                    from .reply.guard_thinking_filter import strip_thinking_contexts
                 except ImportError:
-                    from guard_thinking_filter import strip_thinking_contexts
+                    from reply.guard_thinking_filter import strip_thinking_contexts
                 cleaned = strip_thinking_contexts(getattr(req, "contexts", None))
                 if cleaned:
                     self.logger.info(
@@ -1168,9 +1168,9 @@ class Main(Star):
             return
         try:
             try:
-                from .guard_image_settings import TOOL_NAME
+                from .images.guard_image_settings import TOOL_NAME
             except ImportError:
-                from guard_image_settings import TOOL_NAME
+                from images.guard_image_settings import TOOL_NAME
             tool_set = getattr(req, "func_tool", None)
             names = [str(getattr(tool, "name", "") or "")
                      for tool in (getattr(tool_set, "tools", None) or [])]
@@ -1207,8 +1207,10 @@ class Main(Star):
             else:
                 # 与「压根没调工具」区分：工具确实调了但结果是错误。
                 self._reply_health().tool_failed(event, result_text)
+            # 失败时保留脱敏后的错误原文，定位「session 发送失败」等宿主拒绝原因。
             emit(event, "tool_delivery", "success" if delivered else "failed",
-                 tool=tool_name, ms=round(spent * 1000, 2))
+                 tool=tool_name, ms=round(spent * 1000, 2),
+                 **({} if delivered else {"detail": safe_excerpt(result_text, 160)}))
             self.logger.info(
                 "[LivingHello] send_message_to_user request_id=%s session=%s delivered=%r "
                 "elapsed=%.0fms result=%s",
@@ -1754,7 +1756,7 @@ class Main(Star):
         self._normalize_gate_mode()
         self._normalize_typing_config()
         try:
-            from .guard_webui import register_webui
+            from .console.guard_webui import register_webui
 
             register_webui(self, self.context)
         except Exception as exc:
@@ -1763,9 +1765,9 @@ class Main(Star):
         try:
             if getattr(self.context, "persona_manager", None) is not None:
                 try:
-                    from .guard_webui import _native_settings
+                    from .console.guard_webui import _native_settings
                 except ImportError:
-                    from guard_webui import _native_settings
+                    from console.guard_webui import _native_settings
                 _native_settings(self).install()
         except Exception as exc:
             self.logger.warning(f"[LivingHello] 原生人格固定入口安装失败: {exc!r}")
@@ -2745,9 +2747,9 @@ class Main(Star):
     async def fit_final_request_images(self, event: AstrMessageEvent, req: ProviderRequest):
         """在其他插件装配完输入后，只压缩本次发送副本。"""
         try:
-            from .guard_image_budget import fit_images
+            from .images.guard_image_budget import fit_images
         except ImportError:
-            from guard_image_budget import fit_images
+            from images.guard_image_budget import fit_images
         if not event.get_extra("_livinghello_image_budget_done"):
             await fit_images(req)
         # 所有请求钩子跑完才认定放行；停止/私聊未过滤的请求不接入兜底。
@@ -2779,9 +2781,9 @@ class Main(Star):
                 _reasoning = event.get_extra("_at_guard_reasoning_text") or ""
                 if _reasoning and getattr(result, "chain", None):
                     try:
-                        from .guard_thinking_filter import strip_reasoning_chain
+                        from .reply.guard_thinking_filter import strip_reasoning_chain
                     except ImportError:
-                        from guard_thinking_filter import strip_reasoning_chain
+                        from reply.guard_thinking_filter import strip_reasoning_chain
                     _hit, _removed = strip_reasoning_chain(result.chain, _reasoning)
                     if _hit:
                         emit(event, "thinking_filter", "success",

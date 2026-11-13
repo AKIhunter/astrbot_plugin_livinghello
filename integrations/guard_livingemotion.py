@@ -7,7 +7,7 @@ from collections.abc import Mapping
 try:
     from .guard_coupling import enabled as coupling_enabled
 except ImportError:
-    from guard_coupling import enabled as coupling_enabled
+    from integrations.guard_coupling import enabled as coupling_enabled
 
 PLUGIN = "astrbot_plugin_livingemotion"
 STATE_MARKER = "<!--livingemotion:state:v1-->"

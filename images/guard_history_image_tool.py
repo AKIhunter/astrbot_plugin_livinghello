@@ -9,7 +9,7 @@ from astrbot.core.astr_agent_context import AstrAgentContext
 try:
     from .image_history import TOOL_NAME
 except ImportError:
-    from image_history import TOOL_NAME
+    from images.image_history import TOOL_NAME
 
 
 @dataclass

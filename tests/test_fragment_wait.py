@@ -6,8 +6,8 @@ import unittest
 from types import SimpleNamespace
 
 from astrbot.api.message_components import At, Image, Plain, Reply
-from guard_fragments import FragmentWait
-from guard_webui import EDITABLE, _coerce, _load_schema_subset
+from input.guard_fragments import FragmentWait
+from console.guard_webui import EDITABLE, _coerce, _load_schema_subset
 from test_context_policy import SequenceProvider, output
 from test_gate import gate_config, plugin
 from test_reply_delivery import Event, recall as delivery_recall

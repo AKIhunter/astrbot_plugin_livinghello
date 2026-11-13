@@ -4,8 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import guard_webui
-from guard_message_policy import FIELDS
+from console import guard_webui
+from gate.guard_message_policy import FIELDS
 from test_gate import gate_config, plugin
 
 
@@ -140,7 +140,7 @@ class ProviderCacheTest(unittest.IsolatedAsyncioTestCase):
     async def test_router_connection_change_invalidates_without_provider_replacement(self):
         connection = {"id": "router:upstream_1", "api_type": "chat", "model": "model-a",
                       "display": "A", "api_base": "https://fixture.invalid", "key": ["synthetic"]}
-        import guard_router_connections
+        from integrations import guard_router_connections
         with patch.object(guard_router_connections, "router_connections",
                           side_effect=lambda _: {"router:upstream_1": dict(connection)}):
             await guard_webui._providers(self.guard)

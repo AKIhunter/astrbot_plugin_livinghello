@@ -9,13 +9,13 @@ from astrbot.core.agent.message import TextPart
 try:
     from .guard_expression import forbid_phrases, strip_forbidden
     from .guard_native_reply import managed_options, second_period_regex
-    from .guard_request_trace import emit
+    from ..observability.guard_request_trace import emit
     from .guard_thinking_filter import strip_thinking
 except ImportError:
-    from guard_expression import forbid_phrases, strip_forbidden
-    from guard_native_reply import managed_options, second_period_regex
-    from guard_request_trace import emit
-    from guard_thinking_filter import strip_thinking
+    from reply.guard_expression import forbid_phrases, strip_forbidden
+    from reply.guard_native_reply import managed_options, second_period_regex
+    from observability.guard_request_trace import emit
+    from reply.guard_thinking_filter import strip_thinking
 
 
 # 上一段已用这些标点收口时，中文排版不再补空格，避免出现「。 画面」。

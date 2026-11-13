@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from guard_reply_health import ReplyHealth
-import guard_webui
+from reply.guard_reply_health import ReplyHealth
+from console import guard_webui
 
 
 class ClassifierRecoveryTests(unittest.IsolatedAsyncioTestCase):

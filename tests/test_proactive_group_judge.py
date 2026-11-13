@@ -3,7 +3,7 @@ import time
 import unittest
 
 from astrbot.api.message_components import At, Plain
-from guard_fragments import FragmentWait
+from input.guard_fragments import FragmentWait
 
 from test_context_policy import SequenceProvider, output
 from test_fragment_wait import Clock, FragmentEvent, request

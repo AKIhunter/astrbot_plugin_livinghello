@@ -5,9 +5,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import guard_webui
-from guard_probe_input import parse_probe, ProbeInputError
-from guard_message_policy import MessagePolicy
+from console import guard_webui
+from input.guard_probe_input import parse_probe, ProbeInputError
+from gate.guard_message_policy import MessagePolicy
 from test_gate import gate_config, plugin
 
 
@@ -101,7 +101,7 @@ class ReplayFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "ok")
         output = result["data"]
         self.assertTrue(output["replay"]["model_called"])
-        sent = list(__import__("guard_engine").response_objects(self.inputs[0]["prompt"]))[0]
+        sent = list(__import__("gate.guard_engine", fromlist=["*"]).response_objects(self.inputs[0]["prompt"]))[0]
         self.assertEqual(sent["current_message"]["text"], chat()["current_message"]["text"])
         self.assertEqual(sent["recent_messages_old_to_new"], chat()["recent_messages_old_to_new"])
         self.assertEqual(sent["recent_bot_message"], "  上一句  ")
@@ -117,7 +117,7 @@ class ReplayFlowTest(unittest.IsolatedAsyncioTestCase):
             ({"message_graylist_qq": ["123"]}, True, "reply"),
             ({"message_whitelist_qq": ["789"]}, True, "silence"),
         ):
-            self.guard.config.update({k: [] for k in __import__("guard_message_policy").FIELDS})
+            self.guard.config.update({k: [] for k in __import__("gate.guard_message_policy", fromlist=["*"]).FIELDS})
             self.guard.config.update(values, gate_mode="shadow")
             result = await self.run_probe(json.dumps(chat(explicit_call=explicit)))
             self.assertEqual(result["status"], "ok")

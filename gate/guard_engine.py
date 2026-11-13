@@ -24,7 +24,7 @@ from typing import Any, Awaitable, Callable
 try:
     from .guard_gate_parser import BLOCK_REASONS, MODEL_REASONS, parse_gate
 except ImportError:
-    from guard_gate_parser import BLOCK_REASONS, MODEL_REASONS, parse_gate
+    from gate.guard_gate_parser import BLOCK_REASONS, MODEL_REASONS, parse_gate
 
 try:
     from .guard_classifier_outage import (
@@ -33,21 +33,21 @@ try:
         classify_classifier_failure,
     )
 except ImportError:
-    from guard_classifier_outage import (
+    from gate.guard_classifier_outage import (
         ClassifierFailure,
         FailureDisposition,
         classify_classifier_failure,
     )
 
 try:
-    from .guard_vision_choice import GATE_OVERRIDE_KEY, effective_vision_provider
+    from ..images.guard_vision_choice import GATE_OVERRIDE_KEY, effective_vision_provider
 except ImportError:
-    from guard_vision_choice import GATE_OVERRIDE_KEY, effective_vision_provider
+    from images.guard_vision_choice import GATE_OVERRIDE_KEY, effective_vision_provider
 
 try:
-    from .guard_livingemotion import is_state_line
+    from ..integrations.guard_livingemotion import is_state_line
 except ImportError:
-    from guard_livingemotion import is_state_line
+    from integrations.guard_livingemotion import is_state_line
 
 GATE_MODES = ("enforce", "shadow")
 DEFAULT_MODE = "enforce"

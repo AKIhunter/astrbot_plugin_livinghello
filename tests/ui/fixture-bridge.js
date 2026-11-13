@@ -5,6 +5,12 @@
   const calls = [];
   let modelCalls = 0;
   let outageState = query.get("outage") || "healthy";
+  const connected = {
+    livingemotion: query.get("coupling") === "connected",
+    livingmemory: query.get("coupling") === "connected",
+  };
+  const policyFields = ["black", "white", "gray"].flatMap(color =>
+    ["qq", "groups"].map(kind => `message_${color}list_${kind}`));
   const clone = value => structuredClone(value);
   const ok = data => ({ status: "ok", data: clone(data) });
   const fail = message => Promise.reject(new Error(message));
@@ -70,6 +76,9 @@
     gate_congling_prepare_compat: true,
     reply_typing_chars_per_second: 4,
     expression_takeover_enabled: true,
+    expression_private_reuse: false,
+    coupling_livingemotion_enabled: false,
+    coupling_livingmemory_enabled: false,
     reply_quote_enabled: true,
     reply_mention_enabled: false,
     expression_strip_emoji: true,
@@ -227,8 +236,16 @@
   function stateData() {
     return {
       version: "fixture-task9",
-      mode: "enforce",
+      mode: config.gate_mode || "enforce",
       config,
+      function_coupling: { integrations: Object.fromEntries(
+        Object.entries(connected).map(([kind, ready]) => [kind, {
+          connected: ready, reason: ready ? "" : "插件未接入",
+        }])) },
+      message_policy: {
+        revision: "fixture-policy-1", healthy: true, whitelist_active: false,
+        companion: { active: false, supported: true },
+      },
       schema: {},
       fieldHelp: {},
       today: {
@@ -344,6 +361,17 @@
     },
     async apiPost(path, payload = {}) {
       calls.push({ method: "POST", path, payload: clone(payload) });
+      if (path === "console/message-policy/validate") {
+        if (payload.expected_revision !== "fixture-policy-1")
+          return fail("名单修订已变化");
+        const normalized = Object.fromEntries(policyFields.map(key => [key,
+          typeof payload.values[key] === "string"
+            ? payload.values[key].split(/[\s,，、;；]+/u).filter(Boolean)
+            : payload.values[key] || []]));
+        return ok({ valid: true, normalized_values: normalized, errors: [],
+          counts: Object.fromEntries(policyFields.map(key => [key, normalized[key].length])),
+          companion: { active: false, supported: true } });
+      }
       if (path === "console/native-profile") return ok({ saved: true, config_id: "default" });
       if (path === "console/config") {
         Object.assign(config, payload);
@@ -382,6 +410,7 @@
       legacyFull,
       requestId,
       setOutageState(value) { outageState = value; },
+      setConnected(kind, value) { connected[kind] = value; },
       get modelCalls() { return modelCalls; },
       get state() { return clone(stateData()); },
     },

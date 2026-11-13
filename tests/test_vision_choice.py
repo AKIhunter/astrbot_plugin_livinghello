@@ -1,7 +1,7 @@
 """视觉模型共用选择项的解析顺序与向后兼容。"""
 import unittest
 
-from guard_vision_choice import (
+from images.guard_vision_choice import (
     GATE_OVERRIDE_KEY,
     SHARED_KEY,
     UNDERSTAND_OVERRIDE_KEY,

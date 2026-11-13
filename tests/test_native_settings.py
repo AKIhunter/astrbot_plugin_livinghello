@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock
 import unittest
 import threading
 
-from guard_native_settings import NativeSettings
-from guard_native_reply import NativeReplyError
+from integrations.guard_native_settings import NativeSettings
+from reply.guard_native_reply import NativeReplyError
 import test_native_reply as fixture
 
 
@@ -65,7 +65,7 @@ class NativeSettingsTests(unittest.IsolatedAsyncioTestCase):
         replacement = NativeSettings(self.plugin, self.bridge)
         self.assertEqual(replacement.selected_profile(), {"config_id": "other", "saved": True})
         self.assertEqual(before, {key: dict(conf) for key, conf in self.mgr.confs.items()})
-        self.assertEqual(replacement.pins, {})
+        self.assertEqual(replacement.fixed_persona_id("other"), "persona-a")
         with self.assertRaises(NativeReplyError):
             await replacement.select_profile({"config_id": "missing"})
         self.assertEqual(replacement.selected_profile()["config_id"], "other")
@@ -118,12 +118,12 @@ class NativeSettingsTests(unittest.IsolatedAsyncioTestCase):
     async def test_fixed_persona_overrides_old_conversation_and_survives_reload(self):
         await self.settings.save(self.request,self.settings_body(persona_id="persona-b"),self.providers)
         self.assertEqual((await self.resolve())[:1], ("persona-b",))
-        self.assertEqual((await self.resolve("other"))[:1], ("conversation-old",))
+        self.assertEqual((await self.resolve("other"))[:1], ("persona-a",))
         self.conf["agent_runner"]["config"]["persona"]["persona_id"]="persona-a"
-        self.assertEqual((await self.resolve())[:1], ("persona-b",))
+        self.assertEqual((await self.resolve())[:1], ("persona-a",))
         self.settings.close()
         replacement=NativeSettings(self.plugin,self.bridge); replacement.install()
-        self.assertEqual((await self.resolve())[:1], ("persona-b",))
+        self.assertEqual((await self.resolve())[:1], ("persona-a",))
         replacement.close()
         self.assertIs(self.persona_mgr.resolve_selected_persona,self.resolver)
 
@@ -140,30 +140,36 @@ class NativeSettingsTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(NativeReplyError,"不存在"):
             await self.resolve()
 
-    async def test_refresh_failure_restores_disk_memory_and_pin(self):
+    async def test_refresh_failure_restores_disk_memory_and_native_persona(self):
         self.reload.side_effect=[OSError("refresh failed"),None]
         with self.assertRaisesRegex(NativeReplyError,"已恢复"):
             await self.settings.save(self.request,self.settings_body(persona_id="persona-b",provider_id="chat-b"),self.providers)
         self.assertEqual(self.settings.read()["values"]["provider_id"],"chat-a")
-        self.assertIsNone(self.settings.fixed_persona_id("default"))
+        self.assertEqual(self.settings.fixed_persona_id("default"), "persona-a")
         self.assertEqual(json.loads(Path(self.conf.config_path).read_text(encoding="utf-8-sig"))["agent_runner"]["config"]["persona"]["persona_id"],"persona-a")
 
-    async def test_pin_write_failure_never_activates_draft(self):
-        self.settings._write_pins=lambda _: (_ for _ in ()).throw(OSError("pin disk"))
+    async def test_native_write_failure_never_activates_draft(self):
+        original = self.conf._write_config_snapshot
+        attempts = []
+        def fail_once(*args):
+            attempts.append(args)
+            if len(attempts) == 1:
+                raise OSError("native disk")
+            return original(*args)
+        self.conf._write_config_snapshot = fail_once
         with self.assertRaisesRegex(NativeReplyError,"已恢复"):
             await self.settings.save(self.request,self.settings_body(persona_id="persona-b"),self.providers)
-        self.assertIsNone(self.settings.fixed_persona_id("default"))
-        self.assertEqual((await self.resolve())[0],"conversation-old")
+        self.assertEqual(self.settings.fixed_persona_id("default"), "persona-a")
+        self.assertEqual((await self.resolve())[0],"persona-a")
 
-    async def test_corrupted_pin_data_never_silently_unfixes_persona(self):
+    async def test_legacy_pin_file_cannot_override_native_persona(self):
         self.settings.close()
-        self.settings.pin_path.write_text("{broken")
+        (Path(self.folder.name) / "native_persona_pins.json").write_text("{broken")
         replacement = NativeSettings(self.plugin,self.bridge); replacement.install()
-        with self.assertRaisesRegex(NativeReplyError,"文件损坏"):
-            await self.resolve()
-        with self.assertRaises(NativeReplyError):
-            await replacement.save(self.request,dict(config_id="default",
-                expected_revision=replacement.read()["revision"],values={"persona_id":"persona-b"}),self.providers)
+        self.assertEqual((await self.resolve())[0], "persona-a")
+        saved = await replacement.save(self.request, dict(config_id="default",
+            expected_revision=replacement.read()["revision"], values={"persona_id":"persona-b"}), self.providers)
+        self.assertEqual(saved["fixed_persona_id"], "persona-b")
         replacement.close()
 
     async def test_conflict_and_unknown_provider_fail_without_changes(self):

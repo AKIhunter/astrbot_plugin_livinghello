@@ -3,15 +3,17 @@ import asyncio
 import base64
 import importlib.util
 import json
+import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from astrbot.api.message_components import Image
-from guard_image_settings import ImageSettings, MAX_IMAGE_BYTES
-from guard_native_reply import NativeReplyError
+from astrbot.api.message_components import Image, Plain
+from main import Main
+from images.guard_image_settings import ImageSettings, MAX_IMAGE_BYTES
+from reply.guard_native_reply import NativeReplyError
 
 
 class Event:
@@ -26,6 +28,7 @@ class Event:
     def get_sender_id(self):return "user-one"
     def get_messages(self):return self.images
     def chain_result(self,chain):return SimpleNamespace(chain=chain)
+    def get_result(self):return self.result
 
 
 class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
@@ -47,7 +50,13 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.service.values.update(enabled=True,provider_id="native-image",daily_limit=2)
         self.output=Path(self.folder.name)/"generated.png"
         self.output.write_bytes(b"\x89PNG\r\n\x1a\n"+b"test-image")
-        self.service._request=AsyncMock(return_value=self.output)
+        self.service._request=AsyncMock(return_value=(self.output, "一只橙色猫"))
+        self.plugin._image_generation=lambda:self.service
+        self.plugin.logger=logging.getLogger("livinghello-image-offline")
+
+    async def deliver(self, event):
+        event.result=event.chain_result([Plain("文字已发")])
+        await Main.deliver_pending_image(self.plugin, event)
 
     def body(self,**values):
         return dict(expected_revision=self.service.read()["revision"],values=values)
@@ -124,7 +133,9 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_duplicate_event_does_not_call_or_send_twice(self):
         event=Event()
-        self.assertIn("已发送",await self.service.generate(event,"画一只猫"))
+        self.assertIn("图片已生成",await self.service.generate(event,"画一只猫"))
+        event.send.assert_not_awaited()
+        await self.deliver(event)
         self.assertIn("已请求过",await self.service.generate(event,"画一只猫"))
         self.assertEqual(self.service._request.await_count,1)
         self.assertEqual(event.send.await_count,1)
@@ -133,9 +144,53 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_calls_respect_global_daily_limit(self):
         self.service.values["daily_limit"]=1
         results=await asyncio.gather(*(self.service.generate(Event(str(i)),"画猫") for i in range(8)))
-        self.assertEqual(sum("已发送" in r for r in results),1)
+        self.assertEqual(sum("图片已生成" in r for r in results),1)
         self.assertEqual(self.service._request.await_count,1)
         self.assertEqual(self.service.used(),1)
+
+    async def test_pending_image_waits_for_last_text_and_is_sent_once(self):
+        event=Event()
+        await self.service.generate(event,"拍个自拍")
+        text=Plain("第二段")
+        event.result=event.chain_result([text])
+        event.set_extra("_at_guard_delivery_plan", {"failed":False,"attempted":{}})
+        await Main.deliver_pending_image(self.plugin,event)
+        event.send.assert_not_awaited()
+        self.assertIsNotNone(event.get_extra("_livinghello_pending_image"))
+        event.get_extra("_at_guard_delivery_plan")["attempted"][id(text)]=True
+        await Main.deliver_pending_image(self.plugin,event)
+        await Main.deliver_pending_image(self.plugin,event)
+        self.assertEqual(event.send.await_count,1)
+        self.assertIsNone(event.get_extra("_livinghello_pending_image"))
+
+    async def test_pending_image_is_cancelled_when_reply_is_recalled(self):
+        event=Event()
+        await self.service.generate(event,"画猫")
+        event.set_extra("_at_guard_delivery_blocked","message_recalled")
+        await self.deliver(event)
+        event.send.assert_not_awaited()
+        self.assertIsNone(event.get_extra("_livinghello_pending_image"))
+        self.assertEqual(self.service.used(),1)
+
+    async def test_pending_image_send_error_does_not_retry(self):
+        event=Event()
+        await self.service.generate(event,"画猫")
+        event.send.side_effect=OSError("offline-send-failure")
+        await self.deliver(event)
+        await self.deliver(event)
+        self.assertEqual(event.send.await_count,1)
+        self.assertIsNone(event.get_extra("_livinghello_pending_image"))
+        self.assertEqual(self.service.used(),1)
+
+    def test_revised_prompt_accepts_both_protocols_and_caps_length(self):
+        self.assertEqual(ImageSettings.revised(
+            {"data":[{"revised_prompt":" 橙色猫 "}]}),"橙色猫")
+        self.assertEqual(ImageSettings.revised(
+            {"output":{"choices":[{"message":{"prompt":"蓝色猫"}}]}}),"蓝色猫")
+        self.assertEqual(ImageSettings.revised({"choices":[None]}),"")
+        self.assertEqual(ImageSettings.revised(None),"")
+        self.assertEqual(len(ImageSettings.revised(
+            {"data":[{"revised_prompt":"猫"*1000}]})),600)
 
     def test_ledger_shared_across_instances_and_reload(self):
         self.service.values["daily_limit"]=1
@@ -164,7 +219,7 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
     async def test_reference_is_taken_from_current_event(self):
         event=Event(images=[Image(file=str(self.output))])
         result=await self.service.generate(event,"换成蓝色",True)
-        self.assertIn("已发送",result)
+        self.assertIn("图片已生成",result)
         reference=self.service._request.await_args.args[-1]
         self.assertEqual(reference[0],self.output.read_bytes())
 
@@ -172,7 +227,7 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         event=Event()
         async def generate(*_):
             event.set_extra("_at_guard_delivery_blocked","context_changed")
-            return self.output
+            return self.output, ""
         self.service._request.side_effect=generate
         self.assertIn("未发送",await self.service.generate(event,"画猫"))
         event.send.assert_not_awaited()
@@ -189,7 +244,7 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         event=Event()
         async def generate(*_):
             self.service.values["enabled"]=False
-            return self.output
+            return self.output, ""
         self.service._request.side_effect=generate
         self.assertIn("未发送",await self.service.generate(event,"画猫"))
         event.send.assert_not_awaited()
@@ -231,6 +286,7 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
 @unittest.skipUnless(importlib.util.find_spec("aiohttp"),"HTTP协议测试需宿主已有aiohttp")
 class ImageHttpTests(unittest.IsolatedAsyncioTestCase):
     setUp = ImageGenerationTests.setUp
+    deliver = ImageGenerationTests.deliver
     async def asyncSetUp(self):
         from aiohttp import web
         self.received=[]
@@ -264,8 +320,9 @@ class ImageHttpTests(unittest.IsolatedAsyncioTestCase):
         values=self.service.values
         connection=(self.base,"local-fixture-key","image-model")
         for reference in (None,(self.output.read_bytes(),"image/png")):
-            generated=await ImageSettings._request(self.service,values,connection,"画猫",reference)
+            generated,revised=await ImageSettings._request(self.service,values,connection,"画猫",reference)
             self.assertEqual(generated.read_bytes(),self.output.read_bytes())
+            self.assertEqual(revised, "")
         values={**values,"protocol":"chat_images"}
         await ImageSettings._request(self.service,values,connection,"换背景",
                                      (self.output.read_bytes(),"image/png"))
@@ -276,7 +333,7 @@ class ImageHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.received[2][1]["modalities"],["image"])
 
     async def test_trace_counts_real_http_api_and_successful_image_delivery(self):
-        from guard_request_trace import RequestTrace, ID_KEY
+        from observability.guard_request_trace import RequestTrace, ID_KEY
         trace = RequestTrace(self.plugin, self.plugin.data_dir)
         event = Event()
         trace.begin(event)
@@ -284,8 +341,10 @@ class ImageHttpTests(unittest.IsolatedAsyncioTestCase):
         self.service._request = lambda *args: ImageSettings._request(self.service, *args)
         try:
             result = await self.service.generate(event, "仅本地HTTP生图")
+            self.assertIn("图片已生成", result)
+            event.send.assert_not_awaited()
+            await self.deliver(event)
             row = await trace.get(event.get_extra(ID_KEY))
-            self.assertIn("图片已发送", result)
             self.assertEqual(row["summary"]["image_api_calls"], 1)
             self.assertEqual(row["summary"]["tool_calls"], 1)
             self.assertEqual(row["features"]["image_api"]["status"], "success")
@@ -295,7 +354,7 @@ class ImageHttpTests(unittest.IsolatedAsyncioTestCase):
             await trace.close()
 
     async def test_trace_distinguishes_http_failure_from_download_failure(self):
-        from guard_request_trace import RequestTrace, ID_KEY
+        from observability.guard_request_trace import RequestTrace, ID_KEY
         trace = RequestTrace(self.plugin, self.plugin.data_dir)
         self.service.connection = lambda values: (self.base, "fixture-key", "image-model")
         self.service._request = lambda *args: ImageSettings._request(self.service, *args)

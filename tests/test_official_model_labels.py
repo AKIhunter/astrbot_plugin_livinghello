@@ -3,7 +3,7 @@ import copy
 from types import SimpleNamespace
 import unittest
 
-from guard_webui import _native_model_display, _providers
+from console.guard_webui import _native_model_display, _providers
 
 
 class OfficialModelLabelTests(unittest.IsolatedAsyncioTestCase):

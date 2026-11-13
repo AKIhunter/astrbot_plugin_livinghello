@@ -47,7 +47,7 @@ batch_deadline = min(now + fragment_wait_seconds, first_seen + fragment_max_wait
 
 ## 代码顺序
 
-`guard_fragments.py` 管理短期 `Batch` 和每条消息的 `Ticket`，以
+`input/guard_fragments.py` 管理短期 `Batch` 和每条消息的 `Ticket`，以
 `(unified_msg_origin, sender_id)` 分批，用单调时钟计算最后到达后的安静期。
 `Batch.started` 记录首条消息时刻，`Batch.max_wait` 记录总上限；
 每次续发用 `min(now + 静默秒数, started + max_wait)` 重算 `deadline`，`max_wait<=0` 时只取安静期。

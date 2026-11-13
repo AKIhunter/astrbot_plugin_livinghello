@@ -36,11 +36,11 @@ LivingHello可独立使用，也可与从绫配套，仅管理回复判定与主
 ## 代码逻辑与职责
 
 1. `main.py`登记消息到达、碎片批次与判定版本，保留明确原生@放行。
-2. `guard_expression.py`只清理文本与决定引用/@；当前事件启用从绫时，`guard_understanding.py`不追加独立理解。
-3. `guard_reply_delivery.py.arm()`只登记结果身份及原语义头，在当前结果的`derive()`上传递发送标记。宿主可创建新Plain、分段、TTS或转图片，无需冻结旧全文。
+2. `reply/guard_expression.py`只清理文本与决定引用/@；当前事件启用从绫时，`input/guard_understanding.py`不追加独立理解。
+3. `reply/guard_reply_delivery.py.arm()`只登记结果身份及原语义头，在当前结果的`derive()`上传递发送标记。宿主可创建新Plain、分段、TTS或转图片，无需冻结旧全文。
 4. 实际发送包进入事件局部锁，检查撤回/有效期/上下文，每条仅模拟一次。发送成功才消费首条回复头并记录正文；重复组件、部分失败和流式结束不补发全文。
 5. 普通非流式回复由原生`ResultDecorateStage`和`RespondStage`唯一拆分、发送。流式保留缓冲后一次最终交付，不增加另一个断句器。
-6. `guard_native_reply.py`处理原生配置白名单、摘要版本、保存与恢复；`guard_webui.py`只对外返回分段字段和配置名称。
+6. `reply/guard_native_reply.py`处理原生配置白名单、摘要版本、保存与恢复；`console/guard_webui.py`只对外返回分段字段和配置名称。
 
 从绫当前事件是否负责由已激活实例的`enabled_for(event)`决定，重载后重新解析。其感知、记忆、人设和情绪钩子照常执行；LivingHello门禁需要背景时复用本次请求已有原生上下文，不额外查询/重复注入主回复记忆。未启用从绫的事件可独立使用LivingHello理解能力。
 

@@ -1,7 +1,7 @@
 import unittest
 
-from guard_engine import Decision
-from guard_flow import build_flow
+from gate.guard_engine import Decision
+from console.guard_flow import build_flow
 
 
 class FlowTests(unittest.TestCase):

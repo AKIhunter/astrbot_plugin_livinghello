@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from astrbot.api.message_components import Plain, Reply
-from guard_engine import GateEngine, POLICY_VERSION, parse_gate_details
+from gate.guard_engine import GateEngine, POLICY_VERSION, parse_gate_details
 from test_gate import FakeProvider, GateEvent, gate_config, plugin
 
 
@@ -70,7 +70,8 @@ class PolicyTest(unittest.TestCase):
         self.assertEqual(d.action, "silence")
 
     def test_string_false_is_not_truthy(self):
-        parsed = parse_gate_details('{"act":"reply","score":91,"understood":"false"}')
+        parsed = parse_gate_details('{"act":"reply","score":91,"understood":"false",'
+                                    '"reason":"context_missing","ground":"none"}')
         self.assertIs(parsed[3], False)
 
     def test_nonfinite_score_fails_closed(self):
@@ -270,6 +271,7 @@ class ContextTest(unittest.TestCase):
 
         self_event = self.event
         living = SimpleNamespace(initializer=SimpleNamespace(memory_engine=Engine()))
+        self.instance.config["coupling_livingmemory_enabled"] = True
         self.instance.context.get_registered_star = lambda _: SimpleNamespace(
             activated=True, star_cls=living)
 

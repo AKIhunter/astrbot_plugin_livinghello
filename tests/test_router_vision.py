@@ -3,7 +3,7 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
-import guard_webui
+from console import guard_webui
 
 
 class FakeProvider:

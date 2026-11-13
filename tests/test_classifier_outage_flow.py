@@ -8,9 +8,10 @@ from collections import deque
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from guard_classifier_outage import (
+from gate.guard_classifier_outage import (
     BackfillStatus,
     COOLDOWN_SECONDS,
+    SHORT_COOLDOWN_SECONDS,
     ClassifierOutageRecovery,
     NotificationPhase,
     OutageState,
@@ -22,6 +23,17 @@ VALID_PROBE_RESPONSE = (
     '{"act":"silent","conf":10,"understood":true,'
     '"reason":"no_value","ground":"none"}'
 )
+
+def persistent_guard(test, guard):
+    """真实提醒限频依赖持久存储；只在临时目录模拟，不放宽运行时保护。"""
+    folder = TemporaryDirectory()
+    test.addCleanup(folder.cleanup)
+    guard.data_dir = Path(folder.name)
+    if isinstance(test, unittest.IsolatedAsyncioTestCase):
+        test.addAsyncCleanup(guard.terminate)
+    else:
+        test.addCleanup(lambda: asyncio.run(guard.terminate()))
+    return guard
 
 
 class NotificationContext:
@@ -126,7 +138,7 @@ async def wait_until(predicate, timeout=1.0):
         await asyncio.sleep(0.005)
 
 
-class ClassifierOutageFlowTests(unittest.TestCase):
+class ClassifierOutageFlowTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def request():
         return SimpleNamespace(extra_user_content_parts=[], contexts=[])
@@ -139,21 +151,23 @@ class ClassifierOutageFlowTests(unittest.TestCase):
         )
         instance = plugin(config, provider)
         instance.context = NotificationContext(provider, admins)
-        return instance
+        return persistent_guard(self, instance)
 
     @staticmethod
     def event(text="这条消息需要判定", group="1001", explicit=False):
         event = GateEvent(text=text, group=group)
         event.get_platform_id = lambda: "qq-bot"
+        event.get_platform_name = lambda: "aiocqhttp"
         event.is_at_or_wake_command = explicit
         return event
 
-    def test_recoverable_failure_enters_cooling_notifies_and_redacts_log(self):
+    async def test_recoverable_failure_enters_cooling_notifies_and_redacts_log(self):
         provider = FakeProvider(HttpError(503))
         guard = self.ready(provider, admins=["10001", "10001", "10002"])
         event = self.event("正文 secret prompt response sk-secret")
 
-        asyncio.run(guard.guard_llm_request(event, self.request()))
+        await guard.guard_llm_request(event, self.request())
+        await guard._reply_health().finish(event)
 
         self.assertTrue(event.stopped)
         self.assertEqual(provider.calls, 1)
@@ -166,7 +180,8 @@ class ClassifierOutageFlowTests(unittest.TestCase):
             ["qq-bot:FriendMessage:10001", "qq-bot:FriendMessage:10002"],
         )
         payload = "\n".join(text for _, text in guard.context.sent)
-        for secret in ("正文 secret", "prompt", "response", "sk-secret"):
+        # 新统一提醒允许有限消息摘录，仍不得泄漏密钥或上游异常正文。
+        for secret in ("sk-secret", "upstream body"):
             self.assertNotIn(secret, payload)
         row = guard.engine.log.recent(1)[0]
         self.assertEqual(row["failure_category"], "http_5xx")
@@ -175,14 +190,14 @@ class ClassifierOutageFlowTests(unittest.TestCase):
         self.assertTrue(row["chat_data"]["outage_redacted"])
         self.assertNotIn("text", row["chat_data"]["current_message"])
 
-    def test_cooling_enforce_skips_api_and_tracks_each_session(self):
+    async def test_cooling_enforce_skips_api_and_tracks_each_session(self):
         provider = FakeProvider(HttpError(429))
         guard = self.ready(provider)
         first = self.event(group="1001")
-        asyncio.run(guard.guard_llm_request(first, self.request()))
+        await guard.guard_llm_request(first, self.request())
 
         second = self.event(group="1002")
-        asyncio.run(guard.guard_llm_request(second, self.request()))
+        await guard.guard_llm_request(second, self.request())
 
         self.assertTrue(second.stopped)
         self.assertEqual(provider.calls, 1)
@@ -196,14 +211,14 @@ class ClassifierOutageFlowTests(unittest.TestCase):
         self.assertNotIn("ctx", row)
         self.assertNotIn("chat_data", row)
 
-    def test_cooling_shadow_skips_api_and_never_queues_backfill(self):
+    async def test_cooling_shadow_skips_api_and_never_queues_backfill(self):
         provider = FakeProvider(ConnectionResetError("private upstream response"))
         guard = self.ready(provider, gate_mode="shadow")
         first = self.event(group="1001")
-        asyncio.run(guard.guard_llm_request(first, self.request()))
+        await guard.guard_llm_request(first, self.request())
         second = self.event(group="1002")
 
-        asyncio.run(guard.guard_llm_request(second, self.request()))
+        await guard.guard_llm_request(second, self.request())
 
         self.assertFalse(first.stopped)
         self.assertFalse(second.stopped)
@@ -214,15 +229,13 @@ class ClassifierOutageFlowTests(unittest.TestCase):
             second.get_extra("_at_guard_observation_rules"),
         )
 
-    def test_explicit_call_bypasses_cooling(self):
+    async def test_explicit_call_bypasses_cooling(self):
         provider = FakeProvider(HttpError(503))
         guard = self.ready(provider)
-        asyncio.run(
-            guard.guard_llm_request(self.event(group="1001"), self.request())
-        )
+        await guard.guard_llm_request(self.event(group="1001"), self.request())
         explicit = self.event(group="1002", explicit=True)
 
-        asyncio.run(guard.guard_llm_request(explicit, self.request()))
+        await guard.guard_llm_request(explicit, self.request())
 
         self.assertFalse(explicit.stopped)
         self.assertEqual(provider.calls, 1)
@@ -231,7 +244,7 @@ class ClassifierOutageFlowTests(unittest.TestCase):
             guard._outage().current_event.affected_sessions,
         )
 
-    def test_authentication_and_missing_provider_need_attention(self):
+    async def test_authentication_and_missing_provider_need_attention(self):
         for provider, category in (
             (FakeProvider(HttpError(401)), "authentication_error"),
             (FakeProvider(ValueError("private config value")), "configuration_error"),
@@ -240,13 +253,13 @@ class ClassifierOutageFlowTests(unittest.TestCase):
             with self.subTest(category=category):
                 guard = self.ready(provider)
                 event = self.event()
-                asyncio.run(guard.guard_llm_request(event, self.request()))
+                await guard.guard_llm_request(event, self.request())
                 self.assertEqual(guard._outage().state, OutageState.NEEDS_ATTENTION)
                 self.assertEqual(
                     guard._outage().current_event.error_category, category
                 )
 
-    def test_empty_timeout_and_protocol_failures_are_recoverable(self):
+    async def test_empty_timeout_and_protocol_failures_are_recoverable(self):
         for provider, category in (
             (FakeProvider(""), "empty_response"),
             (FakeProvider("not valid classifier json"), "protocol_error"),
@@ -255,19 +268,19 @@ class ClassifierOutageFlowTests(unittest.TestCase):
             with self.subTest(category=category):
                 guard = self.ready(provider)
                 event = self.event()
-                asyncio.run(guard.guard_llm_request(event, self.request()))
+                await guard.guard_llm_request(event, self.request())
                 self.assertEqual(guard._outage().state, OutageState.COOLING)
                 self.assertEqual(
                     guard._outage().current_event.error_category, category
                 )
 
-    def test_unknown_code_error_fails_closed_without_creating_outage(self):
+    async def test_unknown_code_error_fails_closed_without_creating_outage(self):
         provider = FakeProvider("unused")
         guard = self.ready(provider)
         guard.context = ResolverFailureContext(provider)
         event = self.event()
 
-        asyncio.run(guard.guard_llm_request(event, self.request()))
+        await guard.guard_llm_request(event, self.request())
 
         self.assertTrue(event.stopped)
         self.assertEqual(provider.calls, 0)
@@ -276,7 +289,7 @@ class ClassifierOutageFlowTests(unittest.TestCase):
         )
         self.assertIsNone(guard._outage().current_event)
 
-    def test_budget_and_semantic_silence_do_not_create_outage(self):
+    async def test_budget_and_semantic_silence_do_not_create_outage(self):
         provider = FakeProvider(
             '{"act":"silent","conf":10,"understood":true,'
             '"reason":"others_talking","ground":"none"}'
@@ -284,56 +297,59 @@ class ClassifierOutageFlowTests(unittest.TestCase):
         guard = self.ready(provider, gate_hourly_budget=1)
         guard.engine._budget["1001"] = deque([time.monotonic()])
         budget_event = self.event(group="1001")
-        asyncio.run(guard.guard_llm_request(budget_event, self.request()))
+        await guard.guard_llm_request(budget_event, self.request())
         self.assertEqual(
             budget_event.get_extra("_at_guard_decision")["reason"], "budget"
         )
         self.assertIsNone(guard._outage().current_event)
 
         semantic_event = self.event(group="1002")
-        asyncio.run(guard.guard_llm_request(semantic_event, self.request()))
+        await guard.guard_llm_request(semantic_event, self.request())
         self.assertEqual(
             semantic_event.get_extra("_at_guard_decision")["reason"],
             "others_talking",
         )
         self.assertIsNone(guard._outage().current_event)
 
-    def test_notification_throttle_and_recovery_interface(self):
+    async def test_notification_throttle_and_recovery_interface(self):
         provider = FakeProvider(HttpError(503))
         guard = self.ready(provider, admins=["10001"])
         event = self.event()
-        asyncio.run(guard.guard_llm_request(event, self.request()))
+        await guard.guard_llm_request(event, self.request())
+        await guard._reply_health().finish(event)
         outage = guard._outage().current_event
-        initial = outage.notifications[0].sent_at
+        initial = guard._reply_health().claimed_at
+        self.assertIsNotNone(initial)
+        self.assertEqual(outage.notifications, [])
 
-        sent = asyncio.run(guard.notify_classifier_outage_continued(
+        sent = await guard.notify_classifier_outage_continued(
             platform_id="qq-bot", cycle=1, at=initial + 599
-        ))
+        )
         self.assertEqual(sent, 0)
-        sent = asyncio.run(guard.notify_classifier_outage_continued(
+        sent = await guard.notify_classifier_outage_continued(
             platform_id="qq-bot", cycle=1, at=initial + 600
-        ))
+        )
         self.assertEqual(sent, 1)
-        sent = asyncio.run(guard.notify_classifier_recovered(
+        sent = await guard.notify_classifier_recovered(
             platform_id="qq-bot",
             counts={"completed": 2, "no_reply": 1, "retry": 0},
             at=initial + 1200,
-        ))
-        self.assertEqual(sent, 1)
-        self.assertIn("文字判定状态：恢复", guard.context.sent[-1][1])
-        self.assertIn("成功 2，无需回复 1，待重试 0", guard.context.sent[-1][1])
+        )
+        self.assertEqual(sent, 0)
+        self.assertEqual(len(guard.context.sent), 2)
 
-    def test_no_admin_keeps_state_without_public_notification(self):
+    async def test_no_admin_keeps_state_without_public_notification(self):
         provider = FakeProvider(HttpError(503))
         guard = self.ready(provider, admins=[])
         event = self.event()
 
-        asyncio.run(guard.guard_llm_request(event, self.request()))
+        await guard.guard_llm_request(event, self.request())
+        await guard._reply_health().finish(event)
 
         self.assertEqual(guard._outage().state, OutageState.COOLING)
         self.assertEqual(guard.context.sent, [])
 
-    def test_runtime_enable_syncs_before_first_failure(self):
+    async def test_runtime_enable_syncs_before_first_failure(self):
         provider = FakeProvider(HttpError(503))
         guard = plugin(gate_config(), provider)
         guard.context = NotificationContext(provider)
@@ -341,7 +357,7 @@ class ClassifierOutageFlowTests(unittest.TestCase):
         guard.config["classifier_outage_recovery_enabled"] = True
         event = self.event()
 
-        asyncio.run(guard.guard_llm_request(event, self.request()))
+        await guard.guard_llm_request(event, self.request())
 
         self.assertEqual(guard._outage().state, OutageState.COOLING)
 
@@ -355,7 +371,7 @@ class ClassifierProbeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         )
         guard = plugin(config, provider)
         guard.context = NotificationContext(provider, admins)
-        return guard
+        return persistent_guard(self, guard)
 
     async def test_expired_cooling_probes_synthetic_data_without_stats_or_budget(self):
         provider = CapturingProvider(VALID_PROBE_RESPONSE)
@@ -417,18 +433,21 @@ class ClassifierProbeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             lambda: provider.calls == 1
             and outage.state is OutageState.COOLING
             and len(guard.context.sent) == 1
+            # 平台替身记录发生在通知持久化之前，须等完整通知回执。
+            and guard._reply_health().notification == "sent"
         )
 
         self.assertGreaterEqual(
-            outage.current_event.cooldown_until, time.time() + 590
+            outage.current_event.cooldown_until, time.time() + SHORT_COOLDOWN_SECONDS - 10
         )
-        self.assertIn("持续不可用", guard.context.sent[0][1])
+        self.assertIn("LivingHello", guard.context.sent[0][1])
+        self.assertEqual(guard._reply_health().notification, "sent")
         self.assertEqual(
             [
                 receipt.phase
                 for receipt in outage.current_event.notifications
             ],
-            [NotificationPhase.INTERRUPTED, NotificationPhase.CONTINUED],
+            [NotificationPhase.INTERRUPTED],
         )
         timer = guard._classifier_probe_task
         self.assertIsNotNone(timer)
@@ -443,7 +462,15 @@ class ClassifierProbeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         event.get_platform_id = lambda: "qq-bot"
         request = SimpleNamespace(extra_user_content_parts=[], contexts=[])
 
-        with patch("guard_classifier_outage.COOLDOWN_SECONDS", 0.02):
+        now = [time.time()]
+        original_sleep = asyncio.sleep
+        async def virtual_sleep(delay):
+            if delay >= 1:
+                now[0] += delay
+            await original_sleep(0)
+        with patch("main.time.time", side_effect=lambda: now[0]), \
+             patch("main.asyncio.sleep", side_effect=virtual_sleep):
+            guard._outage().clock = lambda: now[0]
             await guard.guard_llm_request(event, request)
             await wait_until(
                 lambda: guard._outage().state is OutageState.RECOVERING
@@ -469,13 +496,13 @@ class ClassifierProbeLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         guard.request_classifier_outage_probe(reason="test_due")
         await wait_until(
-            lambda: provider.calls == 1
+            lambda: provider.calls == 2
             and outage.state is OutageState.COOLING
             and outage.current_event.error_category == "protocol_error"
         )
 
         self.assertGreater(
-            outage.current_event.cooldown_until, time.time() + 590
+            outage.current_event.cooldown_until, time.time() + SHORT_COOLDOWN_SECONDS - 10
         )
         await guard.terminate()
 
@@ -527,7 +554,7 @@ class ClassifierProbeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             )
             guard.context = NotificationContext(provider, admins=["10001"])
 
-            with patch("guard_webui.register_webui", lambda *_: None):
+            with patch("console.guard_webui.register_webui", lambda *_: None):
                 await guard.initialize()
             await wait_until(
                 lambda: guard._outage().state is OutageState.RECOVERING
@@ -615,6 +642,7 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
             classifier_provider_id="provider-a",
         ), provider)
         guard.context = CrossPluginContext(provider, congling, admins)
+        persistent_guard(self, guard)
         guard._ensure_classifier_probe_runtime()
         guard._classifier_probe_platform_id = "qq-bot"
         outage = guard._outage()
@@ -666,11 +694,7 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(guard._outage().state, OutageState.HEALTHY)
         self.assertIsNone(guard._outage().current_event)
-        self.assertEqual(
-            [route for route, _ in guard.context.sent],
-            ["qq-bot:FriendMessage:9001"],
-        )
-        self.assertIn("成功 1，无需回复 1，待重试 0", guard.context.sent[0][1])
+        self.assertEqual(guard.context.sent, [])
 
     async def test_congling_unavailable_only_notifies_admin(self):
         guard, event, work = self.ready(None, admins=["9001"])
@@ -682,12 +706,8 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
             for session in event.affected_sessions.values()
         ))
         self.assertEqual(guard._outage().state, OutageState.HEALTHY)
-        self.assertEqual(len(guard.context.sent), 1)
-        route, text = guard.context.sent[0]
-        self.assertEqual(route, "qq-bot:FriendMessage:9001")
-        self.assertIn("不可用 2", text)
-        self.assertTrue(all(":FriendMessage:" in item[0]
-                            for item in guard.context.sent))
+        self.assertEqual(guard.context.sent, [])
+        self.assertEqual(guard._outage().store.load_latest().state, OutageState.HEALTHY)
 
     async def test_retry_and_unknown_results_keep_event_recovering(self):
         congling = SimpleNamespace()
@@ -766,8 +786,7 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(attempts, 2)
         self.assertEqual(guard._outage().state, OutageState.HEALTHY)
-        self.assertEqual(len(guard.context.sent), 1)
-        self.assertIn("LivingHello 文字判定状态：恢复", guard.context.sent[0][1])
+        self.assertEqual(guard.context.sent, [])
         await guard.terminate()
 
     async def test_cancelled_handoff_persists_retry_cooldown(self):

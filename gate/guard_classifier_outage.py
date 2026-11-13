@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 try:
-    from .guard_reply_health import (
+    from ..reply.guard_reply_health import (
         DISPOSITION_BY_CATEGORY, NOT_AN_ERROR, RETRY_THEN_ROTATE, classify,
     )
 except ImportError:
-    from guard_reply_health import (
+    from reply.guard_reply_health import (
         DISPOSITION_BY_CATEGORY, NOT_AN_ERROR, RETRY_THEN_ROTATE, classify,
     )
 

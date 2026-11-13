@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-import guard_webui
-from guard_coupling import clean_request
-from guard_livingemotion import state_lines
+from console import guard_webui
+from integrations.guard_coupling import clean_request
+from integrations.guard_livingemotion import state_lines
 from test_gate import gate_config, plugin
 from test_livingemotion_handoff import API, PLUGIN, STATE, meta, scope
 from test_reply_delivery import Event
@@ -174,9 +174,10 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
         self.registry["astrbot_plugin_at_guard"] = SimpleNamespace(
             activated=True, star_cls=self.guard)
         # 只经 couplings 契约取值，不读本插件配置。
-        self.assertEqual(module.reply_freshness_window(self.guard.context), 60.0)
+        self.assertEqual(module.policy(self.guard.context)["reply_freshness"]
+                         ["private_watermark_window_seconds"], 60.0)
         self.registry["astrbot_plugin_at_guard"].activated = False
-        self.assertEqual(module.reply_freshness_window(self.guard.context), 0.0)
+        self.assertIsNone(module.policy(self.guard.context))
 
     async def test_companion_policies_follow_alias_and_deactivation(self):
         for name in ("astrbot_plugin_LivingHello", "astrbot_plugin_livinghello"):

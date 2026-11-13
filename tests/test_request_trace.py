@@ -17,10 +17,10 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from astrbot.api.message_components import Plain, Image, Reply
-from guard_request_trace import ID_KEY, TRACE_KEY, RequestTrace, registry_coverage, emit
-from guard_reply_delivery import ReplyDelivery
-from guard_image_settings import ImageSettings
-import guard_webui
+from observability.guard_request_trace import ID_KEY, TRACE_KEY, RequestTrace, registry_coverage, emit
+from reply.guard_reply_delivery import ReplyDelivery
+from images.guard_image_settings import ImageSettings
+from console import guard_webui
 from test_gate import plugin, gate_config, FakeProvider
 from test_reply_delivery import Event, Chain
 import test_image_generation as image_fixture
@@ -197,15 +197,16 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bypass_and_cancel_share_id_do_not_count_as_decisions(self):
         event = Event()
-        event._mentions = [SimpleNamespace(qq="bot")]
-        self.guard._mention_targets = lambda e: {"bot"}
+        event._mentions = [SimpleNamespace(qq=event.get_self_id())]
+        self.guard._mention_targets = lambda e: {event.get_self_id()}
         await self.guard.guard_llm_request(event, SimpleNamespace(extra_user_content_parts=[], image_urls=[]))
         self.guard._record_delivery_block(event, "context_changed")
-        rows = self.guard.engine.log.recent()
+        rows = list(self.guard.engine.log.ring)
         self.assertEqual({row["src"] for row in rows}, {"bypass", "delivery"})
         self.assertEqual(len({row["request_id"] for row in rows}), 1)
         self.assertEqual(self.guard.engine.stats["judged"], 0)
         self.assertEqual(self.guard.participation_stats["total"], 0)
+        self.assertEqual(self.guard.engine.log.recent()[0]["src"], "delivery")
 
     async def test_model_silence_records_identity_and_actual_metrics(self):
         self.guard.context.provider = FakeProvider(
@@ -365,7 +366,7 @@ class ActualHostListenerTests(unittest.IsolatedAsyncioTestCase):
         guard.evidence = SimpleNamespace(remember=lambda *args: None)
         ns, stars = actual_host_namespace(guard)
         registry, kinds = ns["star_handlers_registry"], ns["EventType"]
-        from guard_request_trace import LISTENERS
+        from observability.guard_request_trace import LISTENERS
         for key, (kind, method) in LISTENERS.items():
             registry.append(SimpleNamespace(event_type=getattr(kinds, kind), handler_name=method,
                 handler_full_name=method, handler_module_path=type(guard).__module__,
@@ -395,7 +396,7 @@ class ActualHostListenerTests(unittest.IsolatedAsyncioTestCase):
         replacement = plugin(gate_config())
         self.assertTrue(all(r["status"] == "unverified" for r in
                             registry_coverage(replacement, registry, kinds, stars).values()))
-        first = next(iter(registry))
+        first = next(h for h in registry if h.handler_name == LISTENERS["receive"][1])
         registry.append(first)
         self.assertEqual(registry_coverage(guard, registry, kinds, stars)["receive"]["status"], "unregistered")
         await guard.terminate()
@@ -447,6 +448,11 @@ class ImageTraceTests(unittest.IsolatedAsyncioTestCase):
         self.trace.increment(event, "tool_calls")
         event.extra["_livinghello_tool_spans"] = {(1, 2): 1}
         await self.service.generate(event, "画猫")
+        row = await self.trace.get(event.get_extra(ID_KEY))
+        self.assertEqual(row["summary"]["tool_calls"], 1)
+        self.assertEqual(row["features"]["image_delivery"]["status"], "queued")
+        event.send.assert_not_awaited()
+        await self.fixture.deliver(event)
         row = await self.trace.get(event.get_extra(ID_KEY))
         self.assertEqual(row["summary"]["tool_calls"], 1)
         self.assertEqual(row["features"]["image_delivery"]["status"], "success")

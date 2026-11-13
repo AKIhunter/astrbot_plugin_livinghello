@@ -126,7 +126,7 @@ async def fit_images(req) -> tuple[int, int, int]:
     try:
         from .image_history import compact_contexts
     except ImportError:
-        from image_history import compact_contexts
+        from images.image_history import compact_contexts
     contexts = getattr(req, "contexts", None)
     if contexts:
         current_in_contexts = (

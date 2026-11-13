@@ -9,7 +9,14 @@ README.md                    首页与首次使用
 CHANGELOG.md                 版本变化
 metadata.yaml                商店元数据与兼容版本
 logo.png                     256×256 图标
-main.py / guard_*.py          运行实现，保持既有导入路径
+main.py                      AstrBot 插件入口
+gate/                        参与判定、名单、解析与故障冷却
+input/                       消息理解、碎片合并与试跑输入
+images/                      图片预算、缓存、历史补读与生图
+reply/                       回复修饰、分段、重试、健康与投递
+integrations/                宿主设置及配套插件契约
+console/                     控制台接口、流程与帮助文案
+observability/               请求追踪与诊断
 _conf_schema.json            插件参数的权威默认值
 pages/guard/index.html       四页控制台
 docs/                       使用、配置、流程、维护、历史档案
@@ -21,7 +28,7 @@ run_offline_tests.py         根目录兼容入口，转发到 scripts/
 .github/workflows/checks.yml 文档和离线回归
 ```
 
-正式仓库为 `AKIhunter/astrbot_plugin_livinghello`，默认分支 `main`。独立维护根目录源码，不再从旧总库同步或执行 subtree split。技术 ID 已统一为 `astrbot_plugin_LivingHello`，目录、配置、数据与路由随之迁移；不要再改回旧名，也不要新增第二套别名。
+正式仓库为 `AKIhunter/astrbot_plugin_livinghello`，默认分支 `main`。运行模块按上述七个功能目录维护，根目录保留 `main.py` 和离线测试入口；不再从旧总库同步或执行 subtree split。2026-11-13 目录整理后，同目录使用相对导入、跨目录使用包路径；新增模块按职责归入对应目录，源码位置变化时同步测试的导入及打桩路径、资源定位和文档链接。技术 ID 为 `astrbot_plugin_LivingHello`，配置、数据与路由约定保持一致。
 
 ## 从完整克隆执行验证
 
@@ -104,7 +111,7 @@ git archive --format=zip HEAD -o /tmp/livinghello-release.zip
 
 新记录含完整会话类型、群 ID 或私聊对象；旧私聊从会话标识恢复，群发送者不当作私聊对象。正文在页面按文本输出。普通保存不清零；独立清零操作须确认并保留日志。
 
-`guard_webui._decision_rows()` 是最近记录的统一只读展示入口：先关联请求追踪，再增强 `chat_data`。`console/state` 与 `console/decisions` 必须都走该入口，避免默认页和搜索页口径不同。新增字段如下：
+`console.guard_webui._decision_rows()` 是最近记录的统一只读展示入口：先关联请求追踪，再增强 `chat_data`。`console/state` 与 `console/decisions` 必须都走该入口，避免默认页和搜索页口径不同。新增字段如下：
 
 | 字段 | 含义 |
 | --- | --- |
@@ -158,4 +165,4 @@ LivingMemory 的 `core/retrieval/request_timing.py` 可通过请求局部 Contex
 | console/probe | POST | 文字判定试跑，有 API 用量 |
 | console/reset | POST | 明确清零统计，保留日志 |
 
-实现见 [guard_webui.py](../guard_webui.py)。POST 通过宿主桥接请求与权限检查，不将内部路由示例解释为无需认证的公开服务。
+实现见 [console/guard_webui.py](../console/guard_webui.py)。POST 通过宿主桥接请求与权限检查，不将内部路由示例解释为无需认证的公开服务。

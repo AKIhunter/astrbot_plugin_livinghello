@@ -13,8 +13,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
 
-from guard_native_settings import NativeSettings
-from guard_native_reply import NativeReply, NativeReplyError, values
+from integrations.guard_native_settings import NativeSettings
+from reply.guard_native_reply import NativeReply, NativeReplyError, values
 from test_native_reply import NATIVE
 
 SOURCE = Path(os.environ.get("ASTRBOT_NATIVE_SOURCE", "/nonexistent-astrbot-source"))

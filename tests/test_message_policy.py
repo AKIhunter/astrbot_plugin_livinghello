@@ -4,8 +4,8 @@ import itertools
 import unittest
 from unittest.mock import patch
 
-from guard_message_policy import FIELDS, MessagePolicy, validate_policy_config
-import guard_webui
+from gate.guard_message_policy import FIELDS, MessagePolicy, validate_policy_config
+from console import guard_webui
 from test_gate import gate_config, plugin
 
 

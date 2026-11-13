@@ -14,13 +14,13 @@ try:
         ERROR_LABELS, FAIL_REPORT, KEY, NOT_AN_ERROR, RETRY_THEN_ROTATE,
         ROTATE_NOW_REPORT, classify,
     )
-    from .guard_request_trace import emit
+    from ..observability.guard_request_trace import emit
 except ImportError:
-    from guard_reply_health import (
+    from reply.guard_reply_health import (
         ERROR_LABELS, FAIL_REPORT, KEY, NOT_AN_ERROR, RETRY_THEN_ROTATE,
         ROTATE_NOW_REPORT, classify,
     )
-    from guard_request_trace import emit
+    from observability.guard_request_trace import emit
 
 
 class ReplyFallback:

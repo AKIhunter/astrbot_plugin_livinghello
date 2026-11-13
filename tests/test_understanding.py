@@ -7,9 +7,9 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 
 from astrbot.api.message_components import Plain, Image, Reply, Record
-from guard_understanding import Understanding, audio_capable
-from guard_expression_help import HELP
-from guard_webui import _providers, _load_schema_subset, EDITABLE
+from input.guard_understanding import Understanding, audio_capable
+from console.guard_expression_help import HELP
+from console.guard_webui import _providers, _load_schema_subset, EDITABLE
 from test_gate import gate_config, plugin
 from test_reply_delivery import Event, Chain
 
@@ -284,8 +284,13 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
             parse.assert_not_awaited()
             self.assertEqual(req.extra_user_content_parts, [])
         req = SimpleNamespace(extra_user_content_parts=[])
-        await reader.attach(Event(group="independent"), req)
-        self.assertEqual(len(req.extra_user_content_parts), 1)
+        independent = Event(group="independent")
+        independent.message_obj.message = [Plain("独立模式用户正文")]
+        independent.message_str = "独立模式用户正文"
+        await reader.attach(independent, req)
+        # 纯文本无需重复附加；只标记本轮已理解，原始正文保持可用。
+        self.assertEqual(req.extra_user_content_parts, [])
+        self.assertTrue(independent.get_extra("_at_guard_understanding_attached"))
 
     async def test_congling_quote_image_uses_livinghello_vision_once(self):
         guard = plugin(gate_config(

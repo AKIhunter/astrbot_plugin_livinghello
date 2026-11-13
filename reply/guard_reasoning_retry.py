@@ -7,9 +7,9 @@ import time
 from astrbot.core.agent.message import TextPart
 
 try:
-    from .guard_request_trace import emit
+    from ..observability.guard_request_trace import emit
 except ImportError:
-    from guard_request_trace import emit
+    from observability.guard_request_trace import emit
 
 KEY = "_livinghello_reasoning_retry"
 REQUEST_KEY = "_livinghello_provider_request"

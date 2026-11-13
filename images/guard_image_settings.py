@@ -20,15 +20,15 @@ from urllib.parse import urlsplit
 from types import SimpleNamespace
 
 try:
-    from .guard_native_reply import NativeReplyError, revision
-    from .guard_router_connections import router_connections, CHAT_TYPES
-    from .guard_request_trace import emit, TRACE_KEY, touch
-    from .guard_reply_health import report_model_fault
+    from ..reply.guard_native_reply import NativeReplyError, revision
+    from ..integrations.guard_router_connections import router_connections, CHAT_TYPES
+    from ..observability.guard_request_trace import emit, TRACE_KEY, touch
+    from ..reply.guard_reply_health import report_model_fault
 except ImportError:
-    from guard_native_reply import NativeReplyError, revision
-    from guard_router_connections import router_connections, CHAT_TYPES
-    from guard_request_trace import emit, TRACE_KEY, touch
-    from guard_reply_health import report_model_fault
+    from reply.guard_native_reply import NativeReplyError, revision
+    from integrations.guard_router_connections import router_connections, CHAT_TYPES
+    from observability.guard_request_trace import emit, TRACE_KEY, touch
+    from reply.guard_reply_health import report_model_fault
 
 TOOL_NAME = "livinghello_generate_image"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -232,7 +232,7 @@ class ImageSettings:
             try:
                 from .guard_image_tool import GenerateImageTool
             except ImportError:
-                from guard_image_tool import GenerateImageTool
+                from images.guard_image_tool import GenerateImageTool
             self._tool = GenerateImageTool(service=self)
         except ImportError:
             return None

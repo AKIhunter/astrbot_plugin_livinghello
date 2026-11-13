@@ -19,7 +19,7 @@ from astrbot.api.message_components import At, Image, Plain, Record, Reply
 from astrbot.core.platform.message_type import MessageType
 from test_gate import gate_config, plugin
 from test_native_reply import NATIVE
-from guard_native_reply import second_period_regex, managed_regex
+from reply.guard_native_reply import second_period_regex, managed_regex
 from test_reply_delivery import Chain, Event, recall
 
 SOURCE = Path(os.environ.get("ASTRBOT_NATIVE_SOURCE", "/nonexistent-astrbot-source"))
@@ -247,7 +247,7 @@ class NativePipelineTests(unittest.IsolatedAsyncioTestCase):
             (False, True, 0, ["甲。乙！丙。", "丁。戊！"]),
             (True, False, 0, ["甲。", "乙！", "丙。", "丁。", "戊！"]),
             (True, True, 0, ["甲。乙！", "丙。丁。", "戊！"]),
-            (True, False, 2, ["甲。 乙！ 丙。", "丁。 戊！"]),
+            (True, False, 2, ["甲。乙！丙。", "丁。戊！"]),
         ):
             event, _, _ = await self.run_pipeline(text="甲。乙！丙。丁。戊！",
                 native_quote=False, native_mention=False, quote=False, mention=False,

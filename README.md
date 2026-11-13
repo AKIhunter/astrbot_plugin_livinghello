@@ -1,182 +1,466 @@
 <div align="center">
 
-# LivingHello
+# 👋 LivingHello
 
-**让机器人看懂话题，再决定是否接话。**
+**让机器人先听懂话题，在合适的时候接话。**
 
-![LivingHello Banner](.github/img/Banner.png)
+**Help your bot follow the conversation and respond when it makes sense.**
+
+![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
 [![Version](https://img.shields.io/badge/version-2.7.5-3a8060)](CHANGELOG.md)
-[![Docs](https://img.shields.io/badge/docs-%E4%B8%AD%E6%96%87-66736c)](docs/README.md)
+[![Languages](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87%20%2F%20English-66736c)](#quick-start)
+
+**👂 听懂话题 · 🤔 判断接话 · 💬 整理回复 · 🎨 按需画图**
+
+**Follow the topic · Decide when to join · Organize replies · Draw when needed**
+
+[🚀 第一次使用 / Quick start](#quick-start) · [🎨 AI 生图 / Image generation](#image-generation) · [❓ 常见问题 / FAQ](#faq)
 
 </div>
 
-LivingHello 在 AstrBot 主回复生成前判断群聊消息是否适合参与：先检查本地规则，再按需使用文字、记忆和图片背景。通过后由原生主模型及人格生成回复，并管理碎片等待、分段、引用与 @；需要配图时可调用独立生图工具。可独立使用，也可接入 LivingMemory 和 LivingEmotion。正式名称已由 AtGuard 更改为 LivingHello，既有插件 ID、接口和数据目录继续兼容。
+LivingHello 是一个 AstrBot 插件。群聊里，它先根据规则和模型判断是否适合接话，再把允许回复的消息交给你配置的主模型与人格。它也能合并连续消息、管理分段与引用、按需看图或生成图片。安装 LivingMemory / LivingEmotion 并开启对应接入后，还能使用历史记忆和当轮情绪。
 
-**看完整流程：** [HTML 图解](docs/flow/index.html) · [四种插件组合](docs/integrations-and-flow.md) · [合成数据验证报告](docs/validation-20261112.md)。
+LivingHello is an AstrBot plugin. In group chats, it uses rules and a model to decide whether to join, then passes approved messages to your configured chat model and persona. It can combine consecutive messages, manage reply segments and quotes, and understand or generate images. Optional LivingMemory and LivingEmotion integrations add past memories and the current emotional state.
 
-GitHub 文件页展示 HTML 源码。下载整个仓库后，用浏览器打开 `docs/flow/index.html` 即可查看，图表和字体均可离线加载；也可自行用 GitHub Pages 托管 `docs` 目录，访问 `flow/`。
+<a name="features"></a>
 
-## 能做什么
+## ✨ 能做什么 / What can it do?
 
-| 你想做的事 | LivingHello 的处理 |
+| 你希望机器人…… / You want your bot to… | LivingHello 怎么做 / How LivingHello helps |
 | --- | --- |
-| 减少群聊插话和无效生成 | 小模型先判定；硬闸门静默时停止主回复生成 |
-| 听完连续几条消息再回复 | 同一会话、同一用户续发重置安静期，合并为一次输入；整批另受总等待上限约束 |
-| 图片和记忆有助于理解话题 | 按需补查；图片观察与成功查询证据可传给主回复 |
-| 统一回复格式 | 原生配置管理模型段落、多消息发送、最大段数；首条正文按开关引用或 @ |
-| 在一页管理原生配置 | “AstrBot配置人格”统一选择配置及人格，刷新保持编辑目标；双向同步主模型、默认TTS模型、语音开关、排版与分段 |
-| 回复需要生成或编辑图片 | 独立AI生图工具使用已注册模型或路由上游，文生图和图生图共用每日额度 |
-| 看清机器人为何回复或静默 | 四页控制台、可点击流程节点、文字试跑和最近判定详情 |
+| 🤫 该安静时安静<br>Stay quiet when appropriate | 先判断参与是否合适；硬闸门否决后停止主回复生成。<br>Check whether participation makes sense; a hard-gate rejection stops the main reply. |
+| 👂 等你把话说完<br>Let you finish speaking | 可合并同一用户在同一会话里的连续消息，再处理一次。<br>Optionally combine consecutive messages from the same user in the same conversation. |
+| 🖼️ 理解你发的图片<br>Understand shared images | 配置视觉模型后，按需读图并把观察交给回复模型。<br>Use a configured vision model when needed and pass its observations to the reply model. |
+| 💬 回复更好读<br>Make replies easier to read | 管理段落、多条消息、首条引用与 @；语音使用 AstrBot 原生配置。<br>Manage paragraphs, message segments, first-message quotes and mentions; speech uses native AstrBot settings. |
+| 🎨 帮你画图或改图<br>Generate or edit images | 主模型按需调用生图工具，先回文字，再独立发图。<br>The main model can call an image tool; the text reply is sent before a separate image message. |
+| 🧠 记得以前聊过的事<br>Use past conversations | 可选接入 LivingMemory，在授权范围内召回历史。<br>Optionally use LivingMemory to retrieve history within the authorized scope. |
+| 🌙 带着当下情绪说话<br>Use the current emotional state | 可选接入 LivingEmotion，读取当轮情绪、关系与聊天可用性。<br>Optionally use LivingEmotion for current emotion, relationships and chat availability. |
+| 🔎 看懂为什么没回复<br>Understand why it stayed quiet | 控制台展示判定与请求追踪，可查看接收、生成、工具及发送结果。<br>The console shows decisions and traces for receiving, generation, tools and delivery. |
 
-## 第一次使用
+<a name="quick-start"></a>
 
-> 先选定一个成本合适的判定小模型，再使用默认硬闸门。文字试跑使用已保存配置，会产生模型 API 用量。
+## 🚀 第一次使用 / Quick start
 
-1. 在 AstrBot 插件管理中通过仓库地址安装：
+> [!TIP]
+> 第一次先配置判定模型和对话模型，确认文字聊天可用，再按需开启记忆、情绪或生图。
+>
+> Start with the decision model and chat model. Confirm text chat works, then enable memory, emotion or image generation as needed.
 
-   ```text
-   https://github.com/AKIhunter/astrbot_plugin_livinghello
-   ```
+### ① 安装插件 / Install
 
-2. 打开 **插件详情 → guard**；在 **判定设置** 选择判定小模型，保留默认阈值 `65` 和 `enforce` 模式。
-3. 在 **回复与私聊 → AstrBot配置人格** 核对配置并选择人格，按需调整对话模型、回退和分段，点击底部 **保存更新**。配置选择由服务端记录，刷新继续编辑同一配置；会话实际使用哪个配置仍由 AstrBot 分配。
-4. 在 **流程与试跑** 输入一句消息和必要背景，查看每个节点的实际依据。再到测试会话检查真实接话和发送效果。
+在 AstrBot 管理面板的插件管理中，通过下面的仓库地址安装。
 
-图片判定按需配置视觉模型；判定模型留空会跟随会话当前模型，成本也会随其变化。详细操作见[使用指南](docs/usage.md)。
+In AstrBot’s plugin manager, install the plugin using this repository URL:
 
-## 目录
-
-- [使用模式](#使用模式)
-- [控制台与配置](#控制台与配置)
-- [配置独立AI生图](docs/usage.md#配置独立ai生图)
-- [判定与生成流程](#判定与生成流程)
-- [配套插件](#配套插件)
-- [常见问题](#常见问题)
-- [兼容性与安全](#兼容性与安全)
-- [使用指令与接口](#使用指令与接口)
-- [更新日志](#更新日志)
-- [完整文档入口](docs/README.md)
-
-## 使用模式
-
-| 模式 | 对需要判定的消息如何处理 | 适用情况 |
-| --- | --- | --- |
-| `enforce`（默认） | 静默时停止主回复生成；图片异常兜底仍可能调用主模型做判定 | 日常运行 |
-| `shadow` | 记录判定结果，继续原生生成流程 | 对比新模型或阈值；不能用来验证“静默时不生成” |
-
-当前只支持这两种模式。存量 `legacy` / `off` 会归一到 `enforce`，不能当成关闭插件的办法。
-
-原生 @ 当前机器人有直接放行路径，不需要小模型评分。私聊参与过滤默认关闭。普通群消息由 `proactive_group_judge` 控制：默认 `whitelist_empty` 在群白名单为空时也补一次判定，`all` 不依赖白名单是否为空（名单外群仍只读静默），`off` 则完全沿用 AstrBot 已启用的主动回复策略。开启后每个群消息都会跑一次判定模型，成本随群消息量上升。
-
-## 控制台与配置
-
-| 一级页 | 主要内容 |
-| --- | --- |
-| 运行概览 | 闸门模式、今日/累计统计、分数分布、阈值扫描、最近判定 |
-| 判定设置 | 小模型、视觉和兜底、上下文/记忆、预算和时限 |
-| 回复与私聊 | 碎片等待、引用/@、模拟耗时、撤回、原生模型/人格/语音/分段、图片相关设置 |
-| 流程与试跑 | 判定图、生成图、文字试跑、节点输入与依据 |
-
-配置标题右侧 `?` 显示解释及两个示例；顶部参数手册支持搜索。改动后底部显示统一保存栏，切页保留草稿。保存不清零统计，失败部分保留草稿。配置默认值和保存范围见[配置参考](docs/configuration.md)。
-
-最近判定默认只展示10条判断结果、`request_id` 和详情入口。详情先按数字顺序展示五个主要节点；`session_id`、监听、耗时、上下文和原始资料按需展开。按 ID 搜索后可核对工具、绘图 API 和实际发送结果；已注册不等于本次调用，放行不等于发送完成。[排查步骤](docs/usage.md#按请求id排查)。
-
-独立生图默认关闭。在“AI生图（文生图 / 图生图）”选择支持生图的API、设置模型和每日上限，再开启并保存。每次请求1张，文生图和图生图共用每日额度。[完整设置步骤](docs/usage.md#配置独立ai生图)。
-
-上下文有效期设 `0` 不限制时间，按已配置流水条数取近期消息；正数为 `30–3600` 秒。原有字符上限和回复机会有效期仍生效。
-
-分段有两个独立层次：“仅对模型结果分段”要求模型组织段落，“启用分段回复”负责拆成多条消息。第二句号和分段词默认关闭，最大段数 `0` 表示不限。操作示例见[分段设置](docs/usage.md#设置分段回复)。
-
-## 判定与生成流程
-
-```mermaid
-flowchart LR
-    A["消息与碎片合并"] --> B["本地规则 / 明确呼叫"]
-    B --> C["文字判定"]
-    C --> D["按需补查记忆或图片"]
-    D --> E["语义否决与阈值"]
-    E -->|静默| F["硬闸门停止生成"]
-    E -->|放行| G["原生模型 / 人格 / 可用工具"]
-    B -->|原生 @ 直通| G
-    G -->|按需调用| I["独立生图工具 / 每日额度"]
-    I --> J["检查取消与时效 / 当前会话发图"]
-    G --> H["正文分段 / 时效检查 / 原生发送"]
+```text
+https://github.com/AKIhunter/astrbot_plugin_livinghello
 ```
 
-从入口到出口可以顺着走一遍：消息到达后先登记碎片（默认 3 秒安静期，整批最多等 10 秒），名单规则决定这条消息是否读取、是否具备回复资格；零成本规则再过滤最短字数、预算、去重与冷却；进入判定后由文字模型给出 `act/conf/understood/reason`，必要时补查记忆或图片；只要出现静默动作、背景不足或分数不达阈值，就停在闸门、不生成正文；放行后才交给会话主模型或人格生成，正文经分段与时效检查后发送。生成阶段的失败再按 disposition 决定重试、换候选、按静默收尾或上报。
+需要 **AstrBot ≥ 4.29.1**。安装后，在插件详情打开 **`guard`**。
 
-分数是参与适合度，不是事实正确率。通过还须 `act=reply`、`understood=true` 且没有停口、互聊、已答或背景不足等否决。判定异常默认静默；视觉异常才按开关尝试支持图片的会话主模型兜底一次，正常视觉静默不会触发兜底。
+Requires **AstrBot ≥ 4.29.1**. After installation, open **`guard`** in the plugin details.
 
-回复生成阶段的错误同样先分类再处置：`retry_then_rotate` 原地重试一次后换候选，`rotate_now_report` 立即换候选，`not_an_error` 按主动静默收尾，`fail_report` 直接记录并上报。关键异常会打一条 `[ReplyFault]` 锚点，带场景码、类别、处置与 `request_id`，用于和请求追踪对齐。[回复闭环与提醒](docs/reply-health.md)。
+### ② 选一个判定模型 / Choose a decision model
 
-流程页的生成图表示后续计划；文字试跑不生成正文、不读取真实用户记忆、不上传图片、不发送消息。真实工具结果和发送记录才可证明检索、记忆回写及回复发生。[完整流程、缓存与失败边界](docs/architecture.md)。
+进入 **判定设置**，选择成本合适、能稳定输出结果的小模型。先保留默认 **硬闸门 `enforce`** 和阈值 **`65`**。
 
-## 配套插件
+Open **判定设置 / Decision settings** and choose an affordable model that returns reliable results. Start with the default **hard gate `enforce`** and threshold **`65`**.
 
-- **LivingMemory**：开关默认关闭。接入后按身份、会话、人格和受众检索历史；长期写入须实际启用 `agent_tools.enable_memorize_tool`，由主模型成功调用 `memorize_long_term_memory`。关闭 Hello 的接入开关只关闭召回，不会关闭 Memory 的原生归档或写工具。
-- **LivingEmotion**：开关默认关闭。接入后提供当轮情绪、关系和可用性；睡眠等明确禁聊状态可以拦截默认直接回复的私聊，主动行为暂不可用只限制主动插话。插件失联时降级为本地规则。
-- **从绫兼容**：保留感知与固定人格适配；动态情绪、关系和记忆统一由功能耦合控制，不能理解为旧动态功能仍全部生效。[配套约定](docs/architecture.md#从绫配套)。
-- **多 API 模型路由**：下拉可选择已注册 provider，判定列表支持相应上游选择。原生回退模型列表只接受真实注册的 provider。
-- **独立AI生图**：不依赖 BiliBot；选择 AstrBot 已注册模型或多 API 路由具体上游，确认上游支持标准图片接口或对话生图接口。主模型通过 `livinghello_generate_image` 按需生成或编辑图片。
+> [!NOTE]
+> 判定模型负责“该不该接话”，主模型负责“具体说什么”。判定模型留空时会跟随会话模型，费用也随它变化。
+>
+> The decision model answers “Should I join?” The chat model writes the reply. Leaving the decision model empty uses the conversation’s model, including its pricing.
 
-## 常见问题
+### ③ 选对话模型与人格 / Choose the chat model and persona
 
-**为什么 @ 了机器人，最近判定里没有评分？**
+进入 **回复与私聊 → AstrBot配置人格**，核对编辑的配置，选择人格和对话模型，点击底部 **保存更新**。
 
-原生 @ 直接放行，不伪造小模型记录。碎片等待中的旧触发、其他插件提前拦截也可能不产生参与判定记录。
+Open **回复与私聊 / Replies & private chats → AstrBot配置人格 / AstrBot configuration & persona**. Check the configuration you are editing, select a persona and chat model, then click **保存更新 / Save updates**.
 
-**为什么降低阈值还是不回复？**
+会话实际使用哪份配置仍由 AstrBot 分配。保存后确认测试会话使用的就是这份配置。
 
-语义否决、理解状态、预算和时效均独立于阈值。先查看实际记录原因及流程节点，再调整模型或背景。
+AstrBot still assigns configurations to conversations. Make sure your test conversation uses the configuration you just saved.
 
-**为什么分段后仍是一条消息？**
+### ④ 看一眼结果 / Check the result
 
-检查“启用分段回复”和会话实际使用的原生配置。模型段落开关只控制输出组织；平台发送限制、原生长文本阈值及最大段数也会影响结果。
+到 **运行概览** 查看最近记录。需要排查时，打开详情，依次看 **接收 → 判断 → 生成 → 工具 → 发送**。
 
-**为什么读完从绫历史没有当前答复？**
+Open **运行概览 / Overview** to see recent records. For troubleshooting, open a record and follow **receive → decide → generate → tools → deliver**.
 
-检查钩子顺序、当前事件是否真实上报准备耗时，以及 `context_changed` / `message_expired`。有效期适配不绕过新消息取消或正文生成失败。
+**流程与试跑**可以模拟文字判定；它会调用模型，但不会生成主回复或发送消息。
 
-**为什么私聊里来了新消息，上一条回复仍然发出了？**
+**流程与试跑 / Flow & test run** can simulate a text decision. It calls a model but does not generate the main reply or send messages.
 
-水位从消息到达时刻起算：`private_watermark_window_seconds`（默认15秒）内又收到新消息时，尚未发送的旧回复会被顶替，停止剩余分段气泡，已发出的不回收；窗口外旧回复照发。设为 `0` 关闭水位顶替，旧回复一律发送。默认只作用于私聊，把「水位生效范围」改为 `private` 以外的 `all` 才会同时管群聊；300 秒回复有效期优先级高于水位，超期一律丢弃。
+> [!IMPORTANT]
+> 判定、看图、文字试跑、语音和生图都可能产生 API 费用，取决于启用的功能与所选服务。观察模式 `shadow` 仍会继续生成回复。
+>
+> Decisions, vision, test runs, speech and image generation may incur API costs, depending on enabled features and providers. Observation mode `shadow` still continues reply generation.
 
-**文生图、文本转图和图生图有何区别？**
+## 🧭 目录 / Contents
 
-图片理解用于读图，模型在独立内容理解中选择；原生 `t2i` 把文字排版成图。独立 AI 生图支持文字生成和以本次输入图片为参考的编辑，实际能力取决于所选 API。
-
-**旧安装需要迁移吗？**
-
-技术 ID 为 `astrbot_plugin_LivingHello`（2.7.0 起由 `astrbot_plugin_at_guard` 改名，目录、数据与配置已随改名迁移）。已保存配置优先于新默认值；手动选择人格并保存后才固定人格。
-
-**为什么生图失败或没有发送，额度仍减少？**
-
-额度在上游请求前持久预占，失败、超时或生成后取消仍计已请求次数。它限制请求成本；未知结果不自动重试。[生图排查](docs/usage.md#根据记录排查)。
-
-更多操作与排查见[使用指南](docs/usage.md)。
-
-## 兼容性与安全
-
-要求 AstrBot **4.29.1 及以上**；原生保存与流水线接口缺失时明确报错。语音回复开关和默认TTS模型同步所选原生配置，实际转换仍受会话选择、触发概率、Provider可用性与平台能力约束。
-
-判定记录可能包含消息正文、上下文与模型输入，应限制数据目录访问。发布时排除用户配置、密钥、数据库、日志和备份。生图连接密钥复用宿主或路由配置，不返回页面。试跑、观察模式和实际生图可能产生 API 费用。每日生图默认上限20次，0禁止生图；请求失败、超时或发送取消仍计已请求次数，不自动补发。
-
-离线回归验证代码分支和交接规则，不能证明真实群聊语义准确率，也不能据此声称固定的线上 Token 节省比例。
-
-## 使用指令与接口
-
-| 入口 | 用途 |
+| 先看这里 / Start here | 需要时再看 / Explore when needed |
 | --- | --- |
-| `/智能过滤统计` | 查看当前模式与今日统计，沿用 AstrBot 命令前缀设置 |
-| 插件详情 → `guard` | 配置、记录与流程试跑 |
-| `at_guard_score(text)` | 可选配套打分，返回 `{"score": 0..100}` 或 `None`；会使用判定模型 |
-| `get_fixed_native_persona_id(umo)` | 配套插件读取目标原生配置的固定人格 |
-| `livinghello_generate_image` | 主模型可用的独立生图工具；画面描述加可选的当前图片参考开关 |
+| [💬 聊天小剧场 / Chat examples](#chat-examples) | [🎨 AI 生图 / Image generation](#image-generation) |
+| [🎛️ 控制台与配置 / Console & settings](#console) | [🧩 配套插件 / Integrations](#integrations) |
+| [🔄 工作流程 / How it works](#flow) | [❓ 常见问题 / FAQ](#faq) |
+| [🧯 使用模式 / Modes](#modes) | [🛠️ 指令与接口 / Commands & interfaces](#commands) |
+| [📚 完整文档 / Documentation](#documentation) | [📦 更新日志 / Changelog](#changelog) |
 
-WebUI 路由和开发验证入口见[开发与维护](docs/development.md)。
+<a name="chat-examples"></a>
 
-## 更新日志
+## 💬 聊天小剧场 / A few chat examples
 
-当前 **2.7.5**：普通群消息判定入口、私聊图片摘要与旧图工具、历史记忆补查、旧图权限复核已覆盖合成反例；公开 HTML 说明从收消息到发送的分支及四种接入组合。[完整更新日志](CHANGELOG.md)。
+这些是功能示意，实际判断、回复文字和工具调用取决于配置、背景与模型。
+
+These examples illustrate the features. Actual decisions, wording and tool calls depend on your settings, context and models.
+
+### 🤔「这句话需要我接吗？」 / “Should I join this conversation?”
+
+| 群里发生了什么 / What happens in the group | 机器人会考虑什么 / What the bot considers |
+| --- | --- |
+| 👥 两个人正在聊自己的安排。<br>Two people are discussing their own plans. | 🤫 是否与我有关？插话是否合适？可能保持安静。<br>Is this relevant to me? Would joining help? It may stay quiet. |
+| 🙋 有人明确 @ 机器人并提问。<br>Someone mentions the bot and asks a question. | 👋 原生 @ 有直接回复路径，仍检查名单等限制。<br>A native mention has a direct reply path, subject to list restrictions. |
+| 🖼️ 有人发图，并问图里是什么。<br>Someone shares an image and asks what it shows. | 👀 使用已配置的图片理解能力，取得观察再回答。<br>Use the configured image-understanding capability before answering. |
+
+### 👂「等一下，我还没说完」 / “Wait, I’m not finished”
+
+```text
+🙋 你 / You    「帮我想个名字」 / “Help me think of a name.”
+🙋 你 / You    「是给一只猫」   / “It’s for a cat.”
+🙋 你 / You    「橘色的」       / “An orange one.”
+
+🤖 合并后的意思 / Combined meaning
+   「给一只橘猫想个名字」 / “Suggest a name for an orange cat.”
+```
+
+开启碎片合并后，同一用户的续发会重置安静期。默认安静期 **3 秒**，整批最多等 **10 秒**；是否合并私聊由独立开关控制。
+
+With fragment merging enabled, another message from the same user resets the quiet period. Defaults are **3 seconds** of quiet and a **10-second** batch limit. Private-chat merging has its own switch.
+
+### 🎨「画一只窗边的猫」 / “Draw a cat by the window”
+
+```text
+🙋 你 / You    「画一只坐在窗边的猫」 / “Draw a cat sitting by a window.”
+💬 机器人 / Bot  简短承接你的请求。  / A short text reply acknowledges the request.
+🖼️ 机器人 / Bot  再单独发送生成的图片。 / The generated image follows as a separate message.
+```
+
+这是生图工具成功、主回复已发送且本轮未取消时的顺序。生成失败、超时或回复被取消时，图片可能不会发出。
+
+This is the order when generation succeeds, the main reply is sent and the turn remains valid. Generation failures, timeouts or a cancelled reply may prevent image delivery.
+
+<a name="modes"></a>
+
+## 🧯 使用模式 / Modes
+
+| 模式 / Mode | 简单理解 / What it means | 适合什么时候 / When to use it |
+| --- | --- | --- |
+| **`enforce` · 硬闸门 / Hard gate** | 判断该安静时，停止主回复生成。<br>Stop the main reply when the decision is to remain quiet. | ✅ 默认，日常使用。<br>Default for everyday use. |
+| **`shadow` · 观察 / Observe** | 记录判断，但继续原生生成流程。<br>Record the decision while continuing native generation. | 🔬 对比模型或阈值。<br>Compare models or thresholds. |
+
+硬闸门静默时仍可能已经使用判定 API；图片异常兜底也可能调用模型。观察模式不绕过名单和明确禁聊限制。
+
+A hard-gate rejection may still have used the decision API; vision fallback may also call a model. Observation mode does not bypass list restrictions or explicit chat blocks.
+
+<details>
+<summary>🔧 群聊、私聊和旧配置 / Group chats, private chats and older settings</summary>
+
+默认私聊不做参与评分，但名单、明确禁聊状态和发送保护仍生效。原生 @ 有直接放行路径，不保证一定产生小模型评分记录。
+
+Private chats skip participation scoring by default, while list restrictions, explicit chat blocks and delivery checks remain active. Native mentions have a direct path and may not produce a decision-model score.
+
+普通群消息的主动判定由 `proactive_group_judge` 控制：默认 `whitelist_empty` 在群白名单为空时补判定；`all` 扩展主动判定范围，名单限制仍生效；`off` 沿用 AstrBot 自身的主动回复策略。
+
+Proactive group decisions are controlled by `proactive_group_judge`: the default `whitelist_empty` adds decisions when the group whitelist is empty; `all` broadens proactive evaluation while retaining list restrictions; `off` follows AstrBot’s own proactive reply policy.
+
+当前仅支持 `enforce` 和 `shadow`。旧 `legacy` / `off` 模式值会归一到 `enforce`；要停用插件，请使用 AstrBot 的插件停用功能。
+
+Only `enforce` and `shadow` are supported. Older `legacy` / `off` mode values normalize to `enforce`. To disable the plugin, use AstrBot’s plugin controls.
+
+</details>
+
+<a name="console"></a>
+
+## 🎛️ 控制台与配置 / Console & settings
+
+**入口 / Entry：AstrBot → 插件 / Plugins → LivingHello → 插件详情 / Details → `guard`**
+
+| 页面 / Page | 在这里做什么 / What to do here |
+| --- | --- |
+| 📊 **运行概览 / Overview** | 看统计、最近判断和请求详情。<br>View statistics, recent decisions and request details. |
+| 🤔 **判定设置 / Decision settings** | 选择判定/视觉模型，调整阈值、背景、预算和时限。<br>Choose decision/vision models; adjust thresholds, context, budgets and time limits. |
+| 💬 **回复与私聊 / Replies & private chats** | 设置碎片、引用/@、人格、对话模型、语音、分段和生图。<br>Configure fragments, quotes/mentions, persona, chat models, speech, segments and image generation. |
+| 🧪 **流程与试跑 / Flow & test run** | 查看判定流程，用文字样例检查依据。<br>Explore the decision flow and inspect reasoning with a text example. |
+
+参数旁的 **`?`** 有解释和示例；改动后点击底部 **保存更新**。切页保留草稿，保存失败时先看对应分组的结果。
+
+The **`?`** beside a setting provides explanations and examples. Click **保存更新 / Save updates** after editing. Switching pages keeps drafts; if saving fails, check the affected section’s result.
+
+### 🧷 几个默认值 / Useful defaults
+
+| 设置 / Setting | 默认值 / Default | 大白话 / In plain language |
+| --- | --- | --- |
+| 参与模式 / Participation mode | `enforce` | 判断不合适就不生成主回复。<br>A rejected decision stops the main reply. |
+| 接话阈值 / Participation threshold | `65` | 是接话合适度，不是事实正确率。<br>A participation score, not factual accuracy. |
+| 私聊参与过滤 / Private-chat scoring | 关闭 / Off | 私聊默认跳过评分。<br>Private chats skip scoring by default. |
+| 碎片安静期 / Fragment quiet period | `3 s` | 续发可以重置等待。<br>Another message can reset the wait. |
+| 碎片总等待上限 / Batch wait limit | `10 s` | 连续发送也有整批截止点。<br>The batch has a deadline even with continued messages. |
+| 私聊旧答顶替窗口 / Private reply replacement window | `15 s` | 窗口内新消息可顶替未发旧答。<br>A new message within the window can replace an unsent old reply. |
+| 回复有效期 / Reply lifetime | `30 s` | 默认值；可配置为 `5–300 s`。<br>The default; configurable from `5–300 s`. |
+| AI 生图 / AI image generation | 关闭 / Off | 选好支持生图的 API 后再开启。<br>Choose a compatible image API before enabling it. |
+| 生图每日共享上限 / Shared daily image limit | `20` | 上游请求次数，失败也计数。<br>Counts upstream requests, including failures. |
+
+已保存的配置优先于默认值。完整字段、范围和各类 `0` 的含义见 [配置参考 / Configuration reference](docs/configuration.md)。
+
+Saved settings take precedence over defaults. See the [configuration reference](docs/configuration.md) for all fields, ranges and meanings of `0`.
+
+<a name="image-generation"></a>
+
+## 🎨 AI 生图 / AI image generation
+
+### 三种“图片功能”，先分清 / Three different image features
+
+| 功能 / Feature | 例子 / Example |
+| --- | --- |
+| 👀 **看图 / Understand an image** | “这张照片里有什么？”<br>“What is in this photo?” |
+| 📝 **文字排版转图 / Render text as an image** | 把一段回复排版成图片，使用 AstrBot 原生 `t2i`。<br>Turn a text reply into an image using AstrBot’s native `t2i`. |
+| 🖌️ **AI 生图 / Generate or edit an image** | “画只猫”；或发参考图说“把背景改成夜晚”。<br>“Draw a cat”; or attach a reference and ask to change the background to night. |
+
+### 开启步骤 / Enable image generation
+
+1. 进入 **回复与私聊 → AI生图（文生图 / 图生图）**。<br>Open **回复与私聊 / Replies & private chats → AI生图（文生图 / 图生图） / AI image generation**.
+2. 选择 AstrBot 已注册模型或多 API 路由的**具体上游**，确认该服务确实支持所选生图接口。<br>Select a registered AstrBot model or a **specific upstream** from the multi-API router. Confirm that the service supports your chosen image interface.
+3. 核对模型名称、接口、尺寸和每日上限，开启生图，点击 **保存更新**。<br>Check the model name, interface, size and daily limit, enable generation, then click **Save updates**.
+4. 主对话模型需要支持工具调用。文生图用文字描述；图生图使用本次消息或引用里的图片。<br>The main chat model needs tool-calling support. Describe an image for generation; use an image from the current message or its quote for editing.
+
+启用且工具可用时，群聊和私聊都可以提供生图工具，由主模型判断是否调用。成功生成后先发主回复文字，再独立发图；上游提供的实际画法会回传给模型，帮助它理解生成结果。
+
+When enabled and available, the image tool can be provided in both group and private chats. The main model decides whether to call it. After successful generation, the main text reply is sent before a separate image message. Any revised prompt supplied by the upstream is returned to the model to help it understand what was generated.
+
+> [!NOTE]
+> 每次请求 1 张图；文生图和图生图共用每日额度，按服务器本地自然日重置。失败、超时、生成后取消都可能已消耗额度；未知结果不会自动重试或补发。
+>
+> Each request generates one image. Generation and editing share a daily limit that resets on the server’s local calendar day. Failures, timeouts and cancellations after generation may consume the limit; unknown results are not retried or resent automatically.
+
+连接复用宿主或路由已配置的地址和密钥，不依赖 BiliBot。[详细设置 / Detailed setup](docs/usage.md#配置独立ai生图)。
+
+Connections reuse the host or router’s configured endpoint and credentials. BiliBot is not required. [Detailed setup](docs/usage.md#配置独立ai生图).
+
+<a name="flow"></a>
+
+## 🔄 工作流程 / How it works
+
+```mermaid
+flowchart TD
+    A["📨 收到消息 · Receive"] --> B["👂 合并碎片与检查规则 · Merge & check"]
+    B --> C{"🤔 适合接话吗？ · Should I join?"}
+    B -->|"明确 @，仍检查限制 · Native mention, restrictions apply"| E
+    C -->|"硬闸门否决 · Hard-gate rejection"| D["🤫 保持安静 · Stay quiet"]
+    C -->|"放行 · Approved"| E["💬 主模型与人格组织回复 · Chat model & persona"]
+    E --> F["🧷 分段与发送前检查 · Segment & validate"]
+    F --> G["📤 先发送文字 · Send text"]
+    G --> H{"🎨 本轮有待发图片？ · Pending image?"}
+    H -->|"有，且仍有效 · Yes, still valid"| I["🖼️ 再独立发图 · Send image separately"]
+    H -->|"没有 · No"| J["✅ 本轮结束 · Done"]
+    I --> J
+```
+
+判定会按需读取背景、记忆或图片。分数够高也要同时满足理解状态和其他规则；发送前还会检查名单、撤回、过期与旧答失效。
+
+The decision stage can use context, memories or images when needed. A high score still needs a valid understanding state and other checks. Before delivery, the plugin rechecks lists, recalls, expiry and superseded replies.
+
+回复失败会按错误类别和已启用的配置决定重试、换候选、静默或上报。工具成功与发送成功会分别记录。
+
+Reply failures are handled by error category and enabled settings: retry, rotate candidates, remain quiet or report. Tool success and delivery success are recorded separately.
+
+更细的分支见 [流程说明 / Architecture](docs/architecture.md) 和 [HTML 图解 / HTML flow guide](docs/flow/index.html)。HTML 在 GitHub 文件页显示源码；下载仓库后，用浏览器打开该文件查看图解。
+
+See [Architecture](docs/architecture.md) and the [HTML flow guide](docs/flow/index.html) for detailed branches. GitHub’s file page shows HTML source; download the repository and open the file in a browser to view the guide.
+
+<a name="integrations"></a>
+
+## 🧩 配套插件 / Optional integrations
+
+**只装 LivingHello 也能使用。** 需要记忆或情绪时，再安装对应插件并开启接入。
+
+**LivingHello works on its own.** Install the optional plugins and enable their integrations when you need memory or emotion.
+
+| 组合 / Setup | 多了什么 / What it adds |
+| --- | --- |
+| 👋 **LivingHello** | 接话判断、回复管理、媒体与工具交接。<br>Participation decisions, reply management, media and tool handoff. |
+| 👋 + 🧠 **[LivingMemory](https://github.com/AKIhunter/astrbot_plugin_livingmemory)** | 在授权会话/人格范围内召回真实历史。<br>Retrieve real history within authorized conversation/persona scopes. |
+| 👋 + 🌙 **[LivingEmotion](https://github.com/AKIhunter/astrbot_plugin_livingemotion)** | 当轮情绪、关系和聊天可用性；例如明确睡眠状态可限制聊天。<br>Current emotion, relationships and chat availability; an explicit sleeping state can block chat. |
+| 👋 + 🧠 + 🌙 **三者一起 / All three** | 回复可同时参考历史与情绪，各插件维护自己的数据。<br>Replies can use both history and emotion; each plugin maintains its own data. |
+
+接入位置：**AstrBot → 插件 → LivingHello → 配置 → 接入 LivingMemory / 接入 LivingEmotion**。两个开关默认关闭，安装插件本身不会自动开启联动。
+
+Integration settings: **AstrBot → Plugins → LivingHello → Configuration → 接入 LivingMemory / 接入 LivingEmotion**. Both switches default to off; installing a plugin alone does not enable the integration.
+
+<details>
+<summary>🔌 记忆写入、从绫与模型路由 / Memory writes, Congling and model routing</summary>
+
+**记忆：** Hello 的接入开关控制召回；关闭它不会关闭 Memory 自身的归档或写工具。长期写入需要实际启用写工具，由主模型成功调用，不能把“计划写入”当作已保存。
+
+**Memory:** Hello’s integration switch controls retrieval. Turning it off does not disable Memory’s own archiving or write tools. A long-term write requires an enabled tool and a successful call by the main model; a planned write is not a saved memory.
+
+**从绫：** 保留感知与固定人格兼容；动态情绪、关系和记忆使用统一功能耦合。[配套说明](docs/architecture.md#从绫配套)。
+
+**Congling:** Perception and fixed-persona compatibility remain; dynamic emotion, relationships and memory use the shared integration controls. [Integration notes](docs/architecture.md#从绫配套).
+
+**多 API 路由：** 使用已注册 Provider 或支持的具体上游；看图、生图、语音和对话模型的能力需要分别核对。
+
+**Multi-API routing:** Use registered providers or supported specific upstreams. Verify vision, image generation, speech and chat capabilities separately.
+
+</details>
+
+<a name="faq"></a>
+
+## ❓ 常见问题 / FAQ
+
+<details>
+<summary>🙋 @ 了机器人，为什么没有评分？ / Why is there no score after mentioning the bot?</summary>
+
+原生 @ 可以直接放行，不伪造小模型评分记录。先看请求是否接收、是否生成及是否发送。
+
+A native mention can use the direct path without a decision-model score. Check the request’s receive, generation and delivery stages instead.
+
+</details>
+
+<details>
+<summary>🤫 降低阈值，为什么还是不回复？ / Why is it still quiet after lowering the threshold?</summary>
+
+阈值只是一项条件。背景不足、明确停口、名单、预算、冷却或过期也可能阻止回复。打开请求详情，先看具体原因。
+
+The threshold is only one condition. Missing context, an explicit request to stop, list restrictions, budgets, cooldowns or expiry may also block a reply. Open the request details and check the reason first.
+
+</details>
+
+<details>
+<summary>💬 明明开了分段，为什么还是一条？ / Why does a segmented reply arrive as one message?</summary>
+
+“仅对模型结果分段”控制模型组织段落，“启用分段回复”控制发送多条。还要核对会话使用的原生配置及平台限制。
+
+“仅对模型结果分段” controls how the model organizes paragraphs. “启用分段回复” controls sending multiple messages. Also check the conversation’s native configuration and platform limits.
+
+[分段示例 / Segmentation examples](docs/usage.md#设置分段回复)
+
+</details>
+
+<details>
+<summary>⏳ 私聊新消息，会把旧回复顶替吗？ / Can a new private message replace an older reply?</summary>
+
+默认从旧消息到达时刻起算，15 秒内收到新消息，可丢弃尚未发送的旧回复并停止剩余气泡；已发出的不会自动回收。窗口外旧回复仍可发送，但回复有效期继续生效。窗口设 `0` 关闭顶替；默认只作用于私聊。
+
+By default, a new message within 15 seconds of the old message’s arrival can replace the unsent old reply and stop remaining segments. Already sent messages are not recalled. Outside that window, the old reply may still be sent, subject to its lifetime. Set the window to `0` to disable replacement; private chats are the default scope.
+
+</details>
+
+<details>
+<summary>🎨 额度扣了，为什么没收到图片？ / Why was quota used without an image arriving?</summary>
+
+额度统计的是已请求上游的次数。上游失败、超时或生成后本轮取消，都可能计数。查请求追踪中的绘图 API 次数和图片发送结果，确认后再决定是否重新请求。
+
+The limit counts requests to the upstream. Failures, timeouts or cancellation after generation may still count. Check image API calls and delivery results in the request trace before deciding whether to request again.
+
+</details>
+
+<details>
+<summary>🖼️ 模型能看图，是不是也能画图？ / Does a vision model also generate images?</summary>
+
+不一定。看图、生图和文字排版转图是三种能力；生图还需要兼容的接口和支持工具调用的主对话模型。
+
+Not necessarily. Image understanding, generation and text rendering are separate capabilities. Generation also needs a compatible API and a main chat model that supports tool calls.
+
+</details>
+
+<details>
+<summary>🧠 开了记忆接入，为什么还是不记得？ / Why does it forget things after enabling memory?</summary>
+
+核对 LivingMemory 是否激活、作用域是否允许、是否真的有相关历史，以及召回是否成功。只有当轮情绪或关系不能证明已经召回往事。
+
+Check whether LivingMemory is active, the scope permits access, relevant history exists and retrieval succeeded. Current emotion or relationships alone do not prove that past memories were retrieved.
+
+</details>
+
+<details>
+<summary>🔎 日志从哪里看？ / Where do I find the logs?</summary>
+
+在 **运行概览** 找到最近记录，复制 `request_id`，打开详情查看接收、判断、生成、工具与发送。工具已注册不等于本轮调用，放行不等于发送完成。
+
+Find a recent record in **Overview**, copy its `request_id`, and inspect receiving, decisions, generation, tools and delivery. A registered tool does not mean it was called; approval does not mean delivery completed.
+
+[按请求 ID 排查 / Troubleshoot by request ID](docs/usage.md#按请求id排查)
+
+</details>
+
+<a name="compatibility"></a>
+
+## 🧷 兼容性与数据 / Compatibility & data
+
+- **AstrBot ≥ 4.29.1**；语音、图片、引用和 @ 的实际效果取决于 Provider 与平台能力。<br>**AstrBot ≥ 4.29.1**; speech, images, quotes and mentions depend on provider and platform capabilities.
+- 正式名称为 **LivingHello**，当前插件 ID 为 `astrbot_plugin_LivingHello`。内部兼容标识可能保留 `at_guard`，请勿仅因名称不同就手动删除旧配置或数据。<br>The public name is **LivingHello**, with plugin ID `astrbot_plugin_LivingHello`. Internal compatibility identifiers may retain `at_guard`; do not delete older settings or data just because a name differs.
+- 判定记录可能包含聊天正文、背景和模型输入；提交问题时只附脱敏后的最小案例。<br>Decision records may contain chat text, context and model inputs. Share only a minimal, redacted example when reporting issues.
+- 生图连接密钥复用宿主或路由配置，不返回页面；每日生图上限设 `0` 可禁止生图。<br>Image credentials are reused from host/router settings and are not returned to the UI. Set the daily image limit to `0` to disable image generation.
+- 离线回归说明代码路径得到验证，不代表真实群聊判断必然准确，也不代表固定的费用节省比例。<br>Offline regression verifies code paths, not guaranteed accuracy in real conversations or a fixed cost-saving percentage.
+
+<a name="commands"></a>
+
+## 🛠️ 使用指令与接口 / Commands & interfaces
+
+| 入口 / Entry | 用途 / Purpose |
+| --- | --- |
+| `/智能过滤统计` | 查看当前模式与今日统计，命令前缀跟随 AstrBot 设置。<br>Show the current mode and today’s statistics; use AstrBot’s configured command prefix. |
+| 插件详情 / Plugin details → `guard` | 配置、记录和文字试跑。<br>Settings, records and text test runs. |
+| `livinghello_generate_image` | 提供给主模型的生图工具，不是手动聊天指令。<br>An image tool for the main model, not a manual chat command. |
+
+<details>
+<summary>🧑‍💻 给开发者的接口 / Developer interfaces</summary>
+
+| 接口 / Interface | 用途 / Purpose |
+| --- | --- |
+| `at_guard_score(text)` | 可选打分，返回 `{"score": 0..100}` 或 `None`；使用判定模型。<br>Optional scoring; returns `{"score": 0..100}` or `None` and uses the decision model. |
+| `get_fixed_native_persona_id(umo)` | 读取目标配置的固定人格。<br>Read the fixed persona for a target configuration. |
+| `get_function_coupling()` | 查询插件接入状态与共享契约。<br>Inspect integration status and shared contracts. |
+
+开发、路由及离线验证见 [开发与维护 / Development & maintenance](docs/development.md)。
+
+</details>
+
+<a name="changelog"></a>
+
+## 📦 更新日志 / Changelog
+
+当前版本 **2.7.5**：修复普通群聊判定入口、私聊图片摘要、历史记忆补查及旧图授权检查。当前仓库也包含“模型自主选择生图、先文字后图片、实际画法回传”和 LivingMemory 原生作用域适配。
+
+Current version **2.7.5** fixes the ordinary group-message decision path, private-chat image summaries, history retrieval and historical-image authorization. The current repository also includes model-selected image generation, text-before-image delivery, revised-prompt feedback and native LivingMemory scope integration.
+
+[查看完整版本记录 / Read the full changelog](CHANGELOG.md)
+
+<a name="documentation"></a>
+
+## 📚 完整文档 / Documentation
+
+README 提供中英双语入门；下面的详细文档主要为中文，代码字段保留原名。
+
+This README provides a bilingual introduction. The detailed guides below are mainly in Chinese; code identifiers retain their original names.
+
+| 想继续了解 / Learn more about | 文档 / Guide |
+| --- | --- |
+| 操作与排查 / Setup & troubleshooting | [使用指南 / Usage](docs/usage.md) |
+| 字段、范围与默认值 / Fields, ranges & defaults | [配置参考 / Configuration](docs/configuration.md) |
+| 判定和发送逻辑 / Decision & delivery logic | [流程说明 / Architecture](docs/architecture.md) |
+| 四种插件组合 / Four integration setups | [配套组合 / Integrations](docs/integrations-and-flow.md) |
+| 浏览器图解 / Browser flow diagrams | [HTML 图解 / HTML guide](docs/flow/index.html) |
+| 合成场景验证 / Synthetic scenario validation | [验证报告 / Validation](docs/validation-20261112.md) |
+| 开发与维护 / Development & maintenance | [开发说明 / Development](docs/development.md) |
+| 所有文档 / All guides | [文档索引 / Documentation index](docs/README.md) |
+
+---
+
+<div align="center">
+
+**👋 Hello，先听懂，再接话。 / Listen first. Join thoughtfully.**
+
+</div>

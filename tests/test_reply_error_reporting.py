@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import unittest
 
 from astrbot.api.message_components import At, Plain
-from guard_engine import DecisionLog
-from guard_reply_health import KEY, error_category, safe_excerpt
+from gate.guard_engine import DecisionLog
+from reply.guard_reply_health import KEY, error_category, safe_excerpt
 from test_reply_delivery import Chain
 import test_reply_health
 
@@ -118,6 +118,21 @@ class ErrorReportingTests(test_reply_health.ReplyHealthTests):
         row = self.guard.engine.log.recent()[0]
         self.assertEqual(row["reply_error"]["model"], "main-fixture")
         self.assertIn("本轮起始模型：main-fixture", self.sent[0][1].chain[0].text)
+
+    async def test_cron_tool_failure_detail_is_recorded(self):
+        self.guard.engine.log = DecisionLog(self.guard.data_dir / "decisions.jsonl")
+        event = self.cron_event()
+        self.health.watch(event, expected=True)
+        self.health.model_done(event, object())
+        self.health.tool_failed(
+            event, "error: failed to find platform for session "
+                   "qq-bot:FriendMessage:851911696 token=secret")
+        self.assertTrue(await self.health.finish_cron(event))
+        row = self.guard.engine.log.recent()[0]
+        self.assertEqual(row["reason"], "tool_call_failed")
+        # 失败原文进 decisions.jsonl，但凭据仍在入库前被脱敏。
+        self.assertIn("failed to find platform", row["reply_error"]["detail"])
+        self.assertNotIn("secret", row["reply_error"]["detail"])
 
     async def test_initialization_failure_before_agent_begin_and_command_survives(self):
         self.health.watch(self.event)

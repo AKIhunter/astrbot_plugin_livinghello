@@ -8,8 +8,8 @@ from unittest import mock
 from astrbot.api.message_components import Image
 from astrbot.core.platform.message_type import MessageType
 
-from guard_engine import GateEngine
-from guard_livingemotion import STATE_MARKER
+from gate.guard_engine import GateEngine
+from integrations.guard_livingemotion import STATE_MARKER
 from main import Main
 
 
@@ -237,7 +237,7 @@ class WatermarkTurnTest(unittest.TestCase):
 
 class VisionBatchTest(unittest.TestCase):
     def test_superseded_stops_vision_calls(self):
-        from guard_understanding import Observation, Understanding
+        from input.guard_understanding import Observation, Understanding
 
         instance = plugin()
         instance._policy_send_reason = lambda _event: ""
@@ -246,7 +246,7 @@ class VisionBatchTest(unittest.TestCase):
         event.set_extra("_at_guard_superseded", True)
         observation = Observation(images=["a", "b", "c"])
 
-        with mock.patch("guard_understanding.report_model_fault") as report:
+        with mock.patch("input.guard_understanding.report_model_fault") as report:
             state, calls = asyncio.run(
                 understanding._enrich_images(event, observation, object(), {}))
 

@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
 
-from guard_understanding import Observation, Understanding
-from guard_image_budget import fit_images
+from input.guard_understanding import Observation, Understanding
+from images.guard_image_budget import fit_images
 
 
 class Event:

@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 try:
-    from .guard_message_policy import event_source
-    from .guard_request_trace import emit
+    from ..gate.guard_message_policy import event_source
+    from ..observability.guard_request_trace import emit
 except ImportError:
-    from guard_message_policy import event_source
-    from guard_request_trace import emit
+    from gate.guard_message_policy import event_source
+    from observability.guard_request_trace import emit
 
 import asyncio
 import json
@@ -18,17 +18,17 @@ from collections.abc import Mapping
 from astrbot.core.agent.message import TextPart
 
 try:
-    from .guard_reply_health import report_model_fault
-    from .guard_expression import congling_for, takeover
-    from .guard_media import image_target
-    from .guard_reply_delivery import number
-    from .guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+    from ..reply.guard_reply_health import report_model_fault
+    from ..reply.guard_expression import congling_for, takeover
+    from ..images.guard_media import image_target
+    from ..reply.guard_reply_delivery import number
+    from ..images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
 except ImportError:
-    from guard_reply_health import report_model_fault
-    from guard_expression import congling_for, takeover
-    from guard_media import image_target
-    from guard_reply_delivery import number
-    from guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+    from reply.guard_reply_health import report_model_fault
+    from reply.guard_expression import congling_for, takeover
+    from images.guard_media import image_target
+    from reply.guard_reply_delivery import number
+    from images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
 
 
 def read(value, *names, default=""):
@@ -83,9 +83,9 @@ class Understanding:
     async def _enrich_images(self, event, observation, provider, kwargs):
         """每批两张、最多十二张；独立保存已完成批次，超时不抹掉观察。"""
         try:
-            from .guard_image_budget import fit_sync
+            from ..images.guard_image_budget import fit_sync
         except ImportError:
-            from guard_image_budget import fit_sync
+            from images.guard_image_budget import fit_sync
         limit = min(12, max(0, int(event.get_extra("_livinghello_vision_limit", 12))))
         urls = observation.images[:limit]
         batches = [(i, urls[i:i + 2]) for i in range(0, len(urls), 2)]

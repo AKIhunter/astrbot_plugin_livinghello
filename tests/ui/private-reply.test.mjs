@@ -16,11 +16,16 @@ try {
   for (const width of [320, 390, 1280]) {
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     const errors = [];
+    const external = [];
     page.on("pageerror", error => errors.push(error.message));
+    await page.route("**/*", route => {
+      if (new URL(route.request().url()).origin === new URL(url).origin) return route.continue();
+      external.push(route.request().url()); return route.abort();
+    });
     await page.goto(url);
     await page.locator("#ver").filter({ hasText: "fixture-task9" }).waitFor();
     await page.getByRole("tab", { name: "回复与私聊" }).click();
-    await page.getByRole("link", { name: "回复方式", exact: true }).click();
+    await page.locator('#replySubTabs [data-sub="reply"]').click();
     const control = page.locator("#field-expression_private_reuse");
     assert.equal(await control.isChecked(), false);
     assert.equal(await control.isEnabled(), true);
@@ -30,7 +35,7 @@ try {
       await page.locator("#saveMsg").filter({ hasText: "回复参数已保存" }).waitFor();
       const saved = await page.evaluate(() => window.__fixture.calls.filter(c => c.path === "console/config").at(-1).payload);
       assert.deepEqual(saved, { expression_private_reuse: value });
-      const readback = await page.evaluate(async () => (await window.AstrBotPluginView.apiGet("console/state")).data.config.expression_private_reuse);
+      const readback = await page.evaluate(() => window.__fixture.state.config.expression_private_reuse);
       assert.equal(readback, value);
       assert.equal(await control.isChecked(), value);
     }
@@ -42,6 +47,7 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.equal(await page.evaluate(() => window.__fixture.modelCalls), 0);
     assert.deepEqual(errors, []);
+    assert.deepEqual(external, []);
     await page.screenshot({ path: fileURLToPath(new URL(`private-reply-${width}.png`, evidence)) });
     results.push({ width, defaultOff: true, savedOnAndOff: true, noModelCalls: true });
     await page.close();

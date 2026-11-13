@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
 
-from guard_engine import GateProvider
-from guard_livingemotion import PLUGIN, STATE_MARKER
+from gate.guard_engine import GateProvider
+from integrations.guard_livingemotion import PLUGIN, STATE_MARKER
 from test_gate import gate_config, plugin
 from test_livingemotion_handoff import API, meta, scope
 from test_reply_delivery import Event

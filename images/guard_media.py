@@ -2,9 +2,9 @@
 import re
 
 try:
-    from .guard_engine import GateFailure, GateProvider
+    from ..gate.guard_engine import GateFailure, GateProvider
 except ImportError:
-    from guard_engine import GateFailure, GateProvider
+    from gate.guard_engine import GateFailure, GateProvider
 
 
 def supports_images(provider, model=""):

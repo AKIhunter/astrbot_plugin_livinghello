@@ -5,8 +5,9 @@ import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 
-from guard_classifier_outage import (
+from gate.guard_classifier_outage import (
     COOLDOWN_SECONDS,
+    SHORT_COOLDOWN_SECONDS,
     LEGAL_TRANSITIONS,
     BackfillStatus,
     ClassifierOutageRecovery,
@@ -210,7 +211,7 @@ class OutagePersistenceTests(unittest.TestCase):
         service = self.service()
         event = service.create_event("timeout", "router::Qwen/Qwen3-8B", at=1000)
         self.assertEqual(service.state, OutageState.COOLING)
-        self.assertEqual(event.cooldown_until, 1000 + COOLDOWN_SECONDS)
+        self.assertEqual(event.cooldown_until, 1000 + SHORT_COOLDOWN_SECONDS)
 
         service.add_affected_session("qq:group:1001", at=1010)
         service.add_affected_session("qq:group:1001", at=1020)
@@ -301,9 +302,9 @@ class OutagePersistenceTests(unittest.TestCase):
         service.add_affected_session("qq:group:1", at=6020)
 
         self.assertIsNone(
-            service.begin_probe("provider-a", force=False, at=6599)
+            service.begin_probe("provider-a", force=False, at=6119)
         )
-        token = service.begin_probe("provider-b", force=False, at=6600)
+        token = service.begin_probe("provider-b", force=False, at=6120)
         work = service.complete_probe_success(token, at=6601)
 
         self.assertEqual(service.state, OutageState.RECOVERING)

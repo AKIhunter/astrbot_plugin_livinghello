@@ -1,8 +1,8 @@
 """统一错误分类矩阵：状态码/异常类型/业务性取消/程序缺陷各一条断言。"""
 import unittest
 
-from guard_classifier_outage import FailureDisposition, classify_classifier_failure
-from guard_reply_health import (
+from gate.guard_classifier_outage import FailureDisposition, classify_classifier_failure
+from reply.guard_reply_health import (
     FAIL_REPORT,
     NOT_AN_ERROR,
     RETRY_THEN_ROTATE,

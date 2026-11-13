@@ -2,7 +2,7 @@
 import unittest
 from types import SimpleNamespace
 
-from guard_evidence import EvidenceMemory
+from integrations.guard_evidence import EvidenceMemory
 
 
 class Event:

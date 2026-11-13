@@ -6,9 +6,9 @@ import time
 import unittest
 from types import SimpleNamespace
 
-from guard_engine import GateEngine, GateProvider, parse_gate_details, parse_image_summaries
-from guard_gate_parser import parse_gate
-from guard_request_trace import ID_KEY
+from gate.guard_engine import GateEngine, GateProvider, parse_gate_details, parse_image_summaries
+from gate.guard_gate_parser import parse_gate
+from observability.guard_request_trace import ID_KEY
 from test_context_policy import output
 from test_gate import GateEvent, gate_config, plugin
 from test_multimodal import IMAGE, NEED_IMAGE
@@ -187,12 +187,12 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(d.attempts[0]["format_retry"])
 
     async def test_retry_uses_original_stage_time_window(self):
-        # 两次各0.3秒；原窗口0.5秒必须截断第二次，不能重新给0.5秒。
-        p = SequenceProvider("bad", output(), delay=0.3)
+        # 最小窗口1秒；两次各0.6秒必须截断第二次，不能重置预算。
+        p = SequenceProvider("bad", output(), delay=0.6)
         started = time.monotonic()
-        _, d = await self.decide(p, classifier_timeout_seconds=0.5)
+        _, d = await self.decide(p, classifier_timeout_seconds=1)
         self.assertEqual((d.action, d.reason, len(p.requests)), ("silence", "timeout", 2))
-        self.assertLess(time.monotonic() - started, 0.75)
+        self.assertLess(time.monotonic() - started, 1.3)
 
     async def test_retry_obeys_hourly_budget(self):
         p = SequenceProvider("bad", output())

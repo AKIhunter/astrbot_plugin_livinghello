@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from astrbot.api.message_components import Image, Reply
 from test_gate import plugin, gate_config, GateEvent
-from guard_webui import _coerce
+from console.guard_webui import _coerce
 
 
 class UnlimitedContextTests(unittest.TestCase):

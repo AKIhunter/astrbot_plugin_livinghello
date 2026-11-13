@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, patch
 
 from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.core.platform.message_type import MessageType
-from guard_reply_delivery import OWNER_KEY, ReplyDelivery
-from guard_native_reply import REMOVED_FIELDS
-from guard_webui import EDITABLE, _coerce, _load_schema_subset
+from reply.guard_reply_delivery import OWNER_KEY, ReplyDelivery
+from reply.guard_native_reply import REMOVED_FIELDS
+from console.guard_webui import EDITABLE, _coerce, _load_schema_subset
 from test_gate import GateEvent, gate_config, plugin
 
 TEXT = "第一句话完整解释这个问题。第二句话说明具体操作步骤。第三句话提供另外一个建议。第四句话保留最后的重要提醒。"
@@ -256,14 +256,15 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
         self.guard.config["gate_reply_max_age_seconds"] = 30
         self.assertEqual(self.guard._stale_reason(self.event, "1001"), "message_expired")
 
-    async def test_valid_response_marks_generation_before_freshness_recheck(self):
+    async def test_valid_response_does_not_mark_actual_delivery(self):
         self.guard.config["gate_mode"] = "enforce"
         self.event.set_extra("_at_guard_proactive", True)
         self.event.set_extra("_at_guard_judged_revision", -1)
         response = SimpleNamespace(completion_text="这是一条已经生成的完整回答")
         await self.guard.suppress_no_reply_and_track(self.event, response)
         self.assertEqual(response.completion_text, "这是一条已经生成的完整回答")
-        self.assertTrue(self.event.get_extra("_livinghello_response_ready"))
+        self.assertFalse(self.event.get_extra("_livinghello_response_ready"))
+        self.assertEqual(self.guard.participation_stats["total"], 0)
 
     async def test_generated_private_reply_marks_context_advance_without_cancelling(self):
         self.event._group = ""

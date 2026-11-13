@@ -10,8 +10,8 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from astrbot.api.message_components import At, Plain
-from guard_reply_health import KEY, ReminderStore, ReplyHealth, qq_ids, tool_result_delivered
-from guard_webui import _coerce, _outage_status
+from reply.guard_reply_health import KEY, ReminderStore, ReplyHealth, qq_ids, tool_result_delivered
+from console.guard_webui import _coerce, _outage_status
 from test_gate import plugin, gate_config
 from test_reply_delivery import Event, Chain
 
@@ -99,7 +99,11 @@ class ReplyHealthTests(unittest.IsolatedAsyncioTestCase):
         try:
             import astrbot.core.pipeline.scheduler as native
         except ImportError:
-            self.skipTest("真实宿主验证在生产 Python 隔离测试中执行")
+            from host_fixtures import scheduler
+            try:
+                native = scheduler()
+            except ImportError as exc:
+                self.skipTest(str(exc))
         scheduler = object.__new__(native.PipelineScheduler)
         async def flow(_):
             self.health.watch(self.event, expected=True)

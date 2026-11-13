@@ -6,8 +6,8 @@ import unittest
 from types import SimpleNamespace
 
 from astrbot.api.message_components import Image, Reply
-from guard_engine import GateEngine, GateProvider
-from guard_media import image_target, StrictVisionProvider
+from gate.guard_engine import GateEngine, GateProvider
+from images.guard_media import image_target, StrictVisionProvider
 from test_gate import GateEvent, gate_config, plugin
 from test_context_policy import output
 
@@ -131,12 +131,12 @@ class MultimodalTest(unittest.TestCase):
 
     def test_failed_main_stays_silent(self):
         _, d, _, _, main = self.run_case(
-            vision=Provider(RuntimeError()), main=Provider("bad", model="gpt-4o"))
+            vision=Provider(RuntimeError()), main=Provider("bad", "bad", model="gpt-4o"))
         self.assertEqual((d.action, d.reason), ("silence", "parse_error"))
-        self.assertEqual(len(main.requests), 1)
+        self.assertEqual(len(main.requests), 2)
 
     def test_text_failure_does_not_burn_vision_budget(self):
-        _, d, _, vision, main = self.run_case(text=Provider("bad"))
+        _, d, _, vision, main = self.run_case(text=Provider("bad", "bad"))
         self.assertEqual(d.reason, "parse_error")
         self.assertEqual(len(vision.requests) + len(main.requests), 0)
 

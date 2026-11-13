@@ -4,7 +4,7 @@
 
 ## 错误分类与处置
 
-所有回复链路的错误先经过 `guard_reply_health.py` 的 `classify(value)`，返回
+所有回复链路的错误先经过 `reply/guard_reply_health.py` 的 `classify(value)`，返回
 `(category, disposition)`。`category` 用于页面、日志和提醒文案；
 `disposition` 只有四个值，各层按它决定动作，不再逐个状态码写分支：
 

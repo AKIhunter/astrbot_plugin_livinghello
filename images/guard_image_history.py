@@ -14,9 +14,9 @@ try:
     from .guard_media import image_target
     from .guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
 except ImportError:
-    from image_history import MAX_LOOKUP_IMAGES, SUMMARY_LIMIT, SUMMARY_PREFIX, TOOL_NAME, old_images
-    from guard_media import image_target
-    from guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+    from images.image_history import MAX_LOOKUP_IMAGES, SUMMARY_LIMIT, SUMMARY_PREFIX, TOOL_NAME, old_images
+    from images.guard_media import image_target
+    from images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
 
 
 class ImageHistory:
@@ -62,7 +62,7 @@ class ImageHistory:
         try:
             from .guard_history_image_tool import ReadHistoryImageTool
         except ImportError:
-            from guard_history_image_tool import ReadHistoryImageTool
+            from images.guard_history_image_tool import ReadHistoryImageTool
         from astrbot.core.agent.tool import ToolSet
         tools = ToolSet()
         for existing in getattr(getattr(req, "func_tool", None), "tools", []):

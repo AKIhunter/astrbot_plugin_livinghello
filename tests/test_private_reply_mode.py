@@ -2,7 +2,7 @@
 import unittest
 
 from astrbot.api.message_components import At, Plain, Reply
-from guard_webui import EDITABLE, _coerce, _load_schema_subset
+from console.guard_webui import EDITABLE, _coerce, _load_schema_subset
 from test_gate import gate_config, plugin
 from test_reply_delivery import Chain, Event
 

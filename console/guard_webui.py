@@ -25,36 +25,36 @@ from astrbot.api import logger
 from astrbot.api.star import Context
 from astrbot.api.web import error_response, json_response, request
 try:
-    from .guard_message_policy import FIELDS as MESSAGE_POLICY_FIELDS, validate_policy_config
-    from .guard_media import image_target
+    from ..gate.guard_message_policy import FIELDS as MESSAGE_POLICY_FIELDS, validate_policy_config
+    from ..images.guard_media import image_target
     from .guard_expression_help import HELP as EXPRESSION_HELP
-    from .guard_engine import GATE_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT, GateEngine, Decision
-    from .guard_probe_input import parse_probe, ProbeInputError
-    from .guard_understanding import audio_capable
-    from .guard_native_reply import NativeReply, NativeReplyError
-    from .guard_native_settings import NativeSettings
-    from .guard_image_settings import ImageSettings
+    from ..gate.guard_engine import GATE_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT, GateEngine, Decision
+    from ..input.guard_probe_input import parse_probe, ProbeInputError
+    from ..input.guard_understanding import audio_capable
+    from ..reply.guard_native_reply import NativeReply, NativeReplyError
+    from ..integrations.guard_native_settings import NativeSettings
+    from ..images.guard_image_settings import ImageSettings
     from .guard_flow import build_flow
-    from .guard_coupling import snapshot as coupling_snapshot, SPECS as COUPLING_SPECS
-    from .guard_classifier_outage import (
+    from ..integrations.guard_coupling import snapshot as coupling_snapshot, SPECS as COUPLING_SPECS
+    from ..gate.guard_classifier_outage import (
         COOLDOWN_SECONDS,
         ClassifierOutageRecovery,
         InvalidOutageTransition,
         OutageState,
     )
 except ImportError:
-    from guard_message_policy import FIELDS as MESSAGE_POLICY_FIELDS, validate_policy_config
-    from guard_media import image_target
-    from guard_expression_help import HELP as EXPRESSION_HELP
-    from guard_engine import GATE_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT, GateEngine, Decision
-    from guard_probe_input import parse_probe, ProbeInputError
-    from guard_understanding import audio_capable
-    from guard_native_reply import NativeReply, NativeReplyError
-    from guard_native_settings import NativeSettings
-    from guard_image_settings import ImageSettings
-    from guard_flow import build_flow
-    from guard_coupling import snapshot as coupling_snapshot, SPECS as COUPLING_SPECS
-    from guard_classifier_outage import (
+    from gate.guard_message_policy import FIELDS as MESSAGE_POLICY_FIELDS, validate_policy_config
+    from images.guard_media import image_target
+    from console.guard_expression_help import HELP as EXPRESSION_HELP
+    from gate.guard_engine import GATE_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT, GateEngine, Decision
+    from input.guard_probe_input import parse_probe, ProbeInputError
+    from input.guard_understanding import audio_capable
+    from reply.guard_native_reply import NativeReply, NativeReplyError
+    from integrations.guard_native_settings import NativeSettings
+    from images.guard_image_settings import ImageSettings
+    from console.guard_flow import build_flow
+    from integrations.guard_coupling import snapshot as coupling_snapshot, SPECS as COUPLING_SPECS
+    from gate.guard_classifier_outage import (
         COOLDOWN_SECONDS,
         ClassifierOutageRecovery,
         InvalidOutageTransition,
@@ -62,7 +62,9 @@ except ImportError:
     )
 
 PLUGIN_NAME = "astrbot_plugin_LivingHello"
-SCHEMA_PATH = Path(__file__).resolve().parent / "_conf_schema.json"
+# 控制台模块在 console/，配置仍由插件根目录提供。
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+SCHEMA_PATH = PLUGIN_ROOT / "_conf_schema.json"
 
 # key -> (类型, 下限, 上限)。字符串型没有范围，单独处理。
 NUMERIC_FIELDS: dict[str, tuple[str, float, float]] = {
@@ -224,9 +226,9 @@ def _provider_catalog_revision(plugin: Any) -> str | None:
     """只读本地注册/连接信息；凭据只参与摘要，不进入缓存或前端回执。"""
     try:
         try:
-            from .guard_router_connections import router_connections
+            from ..integrations.guard_router_connections import router_connections
         except ImportError:
-            from guard_router_connections import router_connections
+            from integrations.guard_router_connections import router_connections
 
         def signature(provider):
             getter = getattr(provider, "get_model", None)
@@ -319,9 +321,9 @@ async def _build_providers(plugin: Any) -> list[dict[str, Any]]:
     - 原生 provider（``id=provider_id``）：选它就是该 provider 自家模型。
     """
     try:
-        from .guard_router_connections import router_connections, CHAT_TYPES
+        from ..integrations.guard_router_connections import router_connections, CHAT_TYPES
     except ImportError:
-        from guard_router_connections import router_connections, CHAT_TYPES
+        from integrations.guard_router_connections import router_connections, CHAT_TYPES
     connections = router_connections(plugin.context)
     items: dict[str, dict[str, Any]] = {}
     skipped_disabled = 0
@@ -847,7 +849,7 @@ def _outage_status(
 
 # 控制台首屏每次都拉 state；2 核机器上并发请求会互相拖慢，
 # 1.5 秒内复用同一份结果，避免 15 秒轮询与人工刷新重复触发同一批计算。
-_STATE_CACHE: dict[str, Any] = {"at": 0.0, "data": None}
+_STATE_CACHE: dict[str, Any] = {"at": 0.0, "data": None, "owner": None}
 STATE_CACHE_TTL_SECONDS = 1.5
 
 
@@ -855,13 +857,16 @@ def _invalidate_state() -> None:
     """任何写入成功后调用：下次读 state 必须重新计算。"""
     _STATE_CACHE["data"] = None
     _STATE_CACHE["at"] = 0.0
+    _STATE_CACHE["owner"] = None
     # 参数/统计写入只清状态；模型目录由本地连接修订和TTL独立失效。
 
 
 async def _state(plugin: Any) -> dict[str, Any]:
     cached = _STATE_CACHE["data"]
-    if cached is not None and time.monotonic() - _STATE_CACHE["at"] < STATE_CACHE_TTL_SECONDS:
-        return cached
+    # 热重载后的新实例不能读到旧实例状态；返回副本避免调用方污染缓存。
+    if (cached is not None and _STATE_CACHE["owner"] is plugin
+            and time.monotonic() - _STATE_CACHE["at"] < STATE_CACHE_TTL_SECONDS):
+        return copy.deepcopy(cached)
 
     engine = plugin.engine
     marks: list[tuple[str, float]] = []
@@ -926,7 +931,8 @@ async def _state(plugin: Any) -> dict[str, Any]:
         logger.warning(f"[LivingHello] state 计算 {total:.0f}ms | {detail}")
     _STATE_CACHE["data"] = data
     _STATE_CACHE["at"] = time.monotonic()
-    return data
+    _STATE_CACHE["owner"] = plugin
+    return copy.deepcopy(data)
 
 
 def _congling_compat(plugin: Any) -> dict[str, Any]:
@@ -968,9 +974,9 @@ def _load_schema_subset() -> dict[str, Any]:
 def _coerce(key: str, value: Any) -> Any:
     if key == "outage_notify_admin_qq":
         try:
-            from .guard_reply_health import qq_ids
+            from ..reply.guard_reply_health import qq_ids
         except ImportError:
-            from guard_reply_health import qq_ids
+            from reply.guard_reply_health import qq_ids
         parts = value if isinstance(value, (list, tuple)) else re.split(r"[\s,，;；]+", str(value or "").strip())
         parts = [str(v).strip() for v in parts if str(v).strip()]
         valid = qq_ids(parts)
@@ -1049,7 +1055,8 @@ async def handle_state(plugin: Any):
         return _response(await _state(plugin))
     except Exception as exc:
         logger.exception(f"[LivingHello] 控制台状态读取失败: {exc}")
-        return _failure(str(exc), 500)
+        # 内部异常可能带路径或上游凭据；页面只返回可读的故障提示。
+        return _failure("读取控制台状态时发生内部错误，已记录日志", 500)
 
 
 def _fragment_age_warning(plugin: Any) -> str:
@@ -1242,9 +1249,9 @@ async def handle_decisions(plugin: Any):
 
 async def handle_request_trace(plugin):
     try:
-        from .guard_request_trace import ID_RE
+        from ..observability.guard_request_trace import ID_RE
     except ImportError:
-        from guard_request_trace import ID_RE
+        from observability.guard_request_trace import ID_RE
     params = getattr(request, "query", None)
     if params is None:
         params = getattr(request, "args", {})

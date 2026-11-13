@@ -7,10 +7,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from guard_image_history import ImageHistory
-from guard_livingemotion import STATE_MARKER
-from guard_segments import ReplySegments
-from image_history import SUMMARY_PREFIX, TOOL_NAME, reference_id
+from images.guard_image_history import ImageHistory
+from integrations.guard_livingemotion import STATE_MARKER
+from reply.guard_segments import ReplySegments
+from images.image_history import SUMMARY_PREFIX, TOOL_NAME, reference_id
 from test_context_policy import SequenceProvider, output
 from test_fragment_wait import request
 from test_gate import gate_config, plugin
@@ -110,11 +110,11 @@ class RuntimeFlowAuditTests(unittest.IsolatedAsyncioTestCase):
                 self.service, self.scope = service, scope
         module = types.ModuleType("astrbot.core.agent.tool")
         module.ToolSet = ToolSet
-        wrapper = types.ModuleType("guard_history_image_tool")
+        wrapper = types.ModuleType("images.guard_history_image_tool")
         wrapper.ReadHistoryImageTool = HistoryTool
         with patch.dict(sys.modules, {
             "astrbot.core.agent.tool": module,
-            "guard_history_image_tool": wrapper,
+            "images.guard_history_image_tool": wrapper,
         }):
             await guard.attach_reply_contract(event, req)
         self.assertIn(TOOL_NAME, [t.name for t in req.func_tool.tools])
@@ -262,7 +262,7 @@ class HistoryAuthorizationAuditTests(unittest.IsolatedAsyncioTestCase):
             self.policy.revision = "v2"
             return self.provider, {}
         self.resolve.side_effect = resolve
-        with patch("guard_image_history.image_target",
+        with patch("images.guard_image_history.image_target",
                    return_value=SimpleNamespace(provider=self.provider, model="fixture")):
             result = await self.service.read(self.event, self.scope, "hist-img-test")
         self.provider.text_chat.assert_not_awaited()
@@ -281,7 +281,7 @@ class HistoryAuthorizationAuditTests(unittest.IsolatedAsyncioTestCase):
                         self.event.set_extra("_livinghello_history_image_scope", {})
                     return SimpleNamespace(completion_text="不得回填的旧图片结果")
                 self.provider.text_chat.side_effect = respond
-                with patch("guard_image_history.image_target",
+                with patch("images.guard_image_history.image_target",
                            return_value=SimpleNamespace(provider=self.provider, model="fixture")):
                     result = await self.service.read(self.event, self.scope, "hist-img-test")
                 self.assertIn("失效", result)
@@ -289,7 +289,7 @@ class HistoryAuthorizationAuditTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(self.scope["used"])
 
     async def test_valid_authorization_returns_bounded_result_once(self):
-        with patch("guard_image_history.image_target",
+        with patch("images.guard_image_history.image_target",
                    return_value=SimpleNamespace(provider=self.provider, model="fixture")):
             result = json.loads(await self.service.read(self.event, self.scope, "hist-img-test"))
         self.assertTrue(result["untrusted"])

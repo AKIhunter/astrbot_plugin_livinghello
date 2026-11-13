@@ -8,15 +8,15 @@ from tempfile import TemporaryDirectory
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from guard_engine import Decision, DecisionLog, GateEngine, decision_identity
-from guard_classifier_outage import (
+from gate.guard_engine import Decision, DecisionLog, GateEngine, decision_identity
+from gate.guard_classifier_outage import (
     BackfillStatus,
     ClassifierOutageRecovery,
     OutageState,
 )
-import guard_webui
+from console import guard_webui
 from test_gate import gate_config, plugin
 import test_multimodal
 from test_multimodal import Provider
@@ -109,7 +109,7 @@ class RecordsTest(unittest.TestCase):
             self.assertEqual(reloaded.stats["judged"], 7)
 
 
-class SaveTest(unittest.TestCase):
+class _SaveFixture(unittest.TestCase):
     def save(self, updates, fail=False):
         class Config(dict):
             def save_config(self):
@@ -131,10 +131,50 @@ class SaveTest(unittest.TestCase):
             result = asyncio.run(guard_webui.handle_config(guard))
         return guard, result, before
 
+
+class StateCacheTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self):
+        guard_webui._invalidate_state()
+
+    async def test_reload_reads_new_instance_records_within_cache_ttl(self):
+        first, second = plugin(gate_config()), plugin(gate_config())
+        first.engine.stats["judged"] = 11
+        second.engine.stats["judged"] = 22
+        first.engine.log.add({"gid": "1001", "ts": 1, "raw": "first-instance"})
+        second.engine.log.add({"gid": "1002", "ts": 2, "raw": "second-instance"})
+        with patch.object(guard_webui, "_providers", AsyncMock(return_value=[])):
+            before = await guard_webui._state(first)
+            after = await guard_webui._state(second)
+        self.assertEqual(before["today"]["judged"], 11)
+        self.assertEqual(after["today"]["judged"], 22)
+        self.assertEqual(after["decisions"][0]["gid"], "1002")
+
+    async def test_caller_cannot_mutate_cached_state(self):
+        guard = plugin(gate_config())
+        with patch.object(guard_webui, "_providers", AsyncMock(return_value=[])) as providers:
+            first = await guard_webui._state(guard)
+            first["config"]["gate_mode"] = "caller-mutated"
+            second = await guard_webui._state(guard)
+        self.assertEqual(second["config"]["gate_mode"], "enforce")
+        self.assertEqual(providers.await_count, 1)
+
+    async def test_save_invalidation_reads_runtime_change_immediately(self):
+        guard = plugin(gate_config())
+        with patch.object(guard_webui, "_providers", AsyncMock(return_value=[])):
+            await guard_webui._state(guard)
+            guard.engine.stats["judged"] = 9
+            guard_webui._invalidate_state()
+            after = await guard_webui._state(guard)
+        self.assertEqual(after["today"]["judged"], 9)
+
+
+class SaveTest(_SaveFixture):
+
     def test_rhythm_save_preserves_logs_and_both_statistics(self):
         guard, result, _ = self.save({"fragment_wait_seconds": 4})
-        self.assertEqual(result["data"]["today"]["judged"], 17)
-        self.assertEqual(result["data"]["lifetime"]["total"], 30)
+        self.assertTrue(result["data"]["saved"])
+        self.assertEqual(guard.engine.stats["judged"], 17)
+        self.assertEqual(guard.participation_stats["total"], 30)
         self.assertEqual(guard.engine.log.recent()[0]["ts"], 1)
         self.assertNotIn("口径", result["data"]["save_notice"])
 
@@ -192,7 +232,8 @@ class SaveTest(unittest.TestCase):
         guard, result, _ = self.save({"classifier_outage_recovery_enabled": True})
         self.assertIs(guard.config["classifier_outage_recovery_enabled"], True)
         self.assertEqual(guard.classifier_outage.state, OutageState.HEALTHY)
-        self.assertEqual(result["data"]["outage_recovery"]["state"], "healthy")
+        self.assertTrue(result["data"]["saved"])
+        self.assertEqual(guard_webui._outage_status(guard, [])["state"], "healthy")
 
     def test_config_save_and_provider_switch_trigger_immediate_outage_probe(self):
         class Config(dict):
@@ -417,11 +458,11 @@ class ConsolePageContractTest(unittest.TestCase):
     def test_recent_decision_table_uses_conversation_id_and_historical_threshold(self):
         page = (Path(__file__).resolve().parents[1] / "pages/guard/index.html").read_text()
         self.assertIn(
-            "<tr><th>对话ID</th><th>request_id</th><th>文字判断结果</th>"
+            "<tr><th>时间</th><th>对话ID</th><th>request_id</th><th>文字判断结果</th>"
             "<th>总耗时</th><th>参与适合度</th><th>判断结果</th><th>查看详情</th></tr>",
             page,
         )
-        self.assertEqual(page.count('colspan="7"'), 2)
+        self.assertEqual(page.count('colspan="8"'), 2)
         self.assertIn("/:(?:GroupMessage|group):(\\d+)$/i", page)
         self.assertIn('const threshold=hasThreshold?Number(row.th):null;', page)
         self.assertIn("const passed=score>=threshold;", page)
@@ -475,7 +516,8 @@ class ConsolePageContractTest(unittest.TestCase):
     def test_reply_page_appends_outage_recovery_without_reordering_old_cards(self):
         page = (Path(__file__).resolve().parents[1] / "pages/guard/index.html").read_text()
         links = (
-            '<a href="#expression">回复方式</a><a href="#nativeSegments">原生分段</a>'
+            '<a href="#expression">回复方式</a><a href="#integration">功能耦合</a>'
+            '<a href="#nativeSegments">原生分段</a>'
             '<a href="#rhythm">回复节奏</a><a href="#recall">撤回保护</a>'
             '<a href="#mentions">称呼私聊</a><a href="#understanding">内容理解</a>'
             '<a href="#outageRecovery">断线恢复</a>'
@@ -498,13 +540,14 @@ class ConsolePageContractTest(unittest.TestCase):
             self.assertIn(f'{state}: [', page)
         self.assertIn('key: "classifier_outage_recovery_enabled"', page)
         self.assertIn('id="outageRecoveryFields"', page)
-        self.assertIn("固定 10 分钟", page)
+        self.assertIn('key: "classifier_short_cooldown_seconds"', page)
+        self.assertIn('key: "classifier_cooldown_seconds"', page)
         refresh = page[
             page.index("if (full || !state.data)"):
             page.index("} catch (err)", page.index("if (full || !state.data)"))
         ]
         self.assertIn("renderOutageRecovery(data.outage_recovery)", refresh)
-        self.assertNotIn("renderFields()", refresh)
+        self.assertIn("&& !state.dirty.size", refresh)
 
 
 class OutageConsoleStatusTest(unittest.TestCase):
@@ -527,7 +570,7 @@ class OutageConsoleStatusTest(unittest.TestCase):
                 "qq:group:private-scope", BackfillStatus.RETRY_PENDING, at=1020
             )
             guard.context.get_config = lambda: {
-                "admins_id": ["admin-1", "admin-1", "astrbot", "admin-2"]
+                "admins_id": ["10001", "10001", "astrbot", "10002"]
             }
             status = guard_webui._outage_status(guard, [{
                 "id": "provider-a",
@@ -537,7 +580,7 @@ class OutageConsoleStatusTest(unittest.TestCase):
 
         self.assertEqual(status["state"], "cooling")
         self.assertEqual(status["provider_display"], "文字判定 A · text-small")
-        self.assertEqual(status["admins"], ["admin-1", "admin-2"])
+        self.assertEqual(status["admins"], ["10001", "10002"])
         self.assertEqual(status["affected_session_count"], 1)
         self.assertEqual(status["backfill"]["retry_pending"], 1)
         self.assertEqual(status["last_error_category"], "timeout")

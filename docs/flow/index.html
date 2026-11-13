@@ -578,11 +578,11 @@ flowchart TB
         <p>依据 LivingHello 2.7.5 源码及本轮合成反例。设置表展示代码默认值，不代表服务器当前值。页面不连接服务器、不调用模型；源码链接指向 GitHub，完整接入与验证说明随仓库提供。</p>
         <ol>
           <li id="cite-1"><span class="src-title">主流程：请求、普通群入口、判定、响应与发送。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/main.py" target="_blank" rel="noopener">main.py</a></li>
-          <li id="cite-2"><span class="src-title">参与判定：补查、语义否决与阈值。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/guard_engine.py" target="_blank" rel="noopener">guard_engine.py</a></li>
-          <li id="cite-3"><span class="src-title">原生发送、撤回与重复保护。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/guard_reply_delivery.py" target="_blank" rel="noopener">guard_reply_delivery.py</a></li>
-          <li id="cite-4"><span class="src-title">事件失败重试与后备模型。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/guard_reply_fallback.py" target="_blank" rel="noopener">guard_reply_fallback.py</a></li>
-          <li id="cite-5"><span class="src-title">私聊摘要、旧图工具及调用前后授权复核。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/guard_image_history.py" target="_blank" rel="noopener">guard_image_history.py</a></li>
-          <li id="cite-6"><span class="src-title">本地理解、从绫文字兼容及图片分支。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/guard_understanding.py" target="_blank" rel="noopener">guard_understanding.py</a></li>
+          <li id="cite-2"><span class="src-title">参与判定：补查、语义否决与阈值。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/gate/guard_engine.py" target="_blank" rel="noopener">gate/guard_engine.py</a></li>
+          <li id="cite-3"><span class="src-title">原生发送、撤回与重复保护。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/reply/guard_reply_delivery.py" target="_blank" rel="noopener">reply/guard_reply_delivery.py</a></li>
+          <li id="cite-4"><span class="src-title">事件失败重试与后备模型。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/reply/guard_reply_fallback.py" target="_blank" rel="noopener">reply/guard_reply_fallback.py</a></li>
+          <li id="cite-5"><span class="src-title">私聊摘要、旧图工具及调用前后授权复核。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/images/guard_image_history.py" target="_blank" rel="noopener">images/guard_image_history.py</a></li>
+          <li id="cite-6"><span class="src-title">本地理解、从绫文字兼容及图片分支。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/input/guard_understanding.py" target="_blank" rel="noopener">input/guard_understanding.py</a></li>
           <li id="cite-7"><span class="src-title">故障等待与允许再试；允许再试不等于模型已经恢复。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/main.py" target="_blank" rel="noopener">main.py</a></li>
         </ol>
       </div>

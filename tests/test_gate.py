@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from astrbot.api.message_components import At
 from astrbot.core.platform.message_type import MessageType
 
-from guard_engine import GateEngine, normalize_text, parse_gate_response
+from gate.guard_engine import GateEngine, normalize_text, parse_gate_response
 from main import Main
 
 

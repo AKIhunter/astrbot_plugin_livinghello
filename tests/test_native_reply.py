@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from astrbot.api.message_components import At, Image, Plain, Reply
-from guard_native_reply import NativeReply, NativeReplyError, migrate, validate, second_period_regex, managed_options
+from reply.guard_native_reply import NativeReply, NativeReplyError, migrate, validate, second_period_regex, managed_options
 from test_gate import gate_config, plugin
 from test_reply_delivery import Chain, Event
 
@@ -302,7 +302,7 @@ class ReplyModeTests(unittest.IsolatedAsyncioTestCase):
     async def test_private_and_invalid_message_id_do_not_fake_headers(self):
         guard = plugin(gate_config(expression_takeover_enabled=True, reply_quote_enabled=True,
                                    reply_mention_enabled=True))
-        for group, mid, expected_quote in (("", "m1", True), ("1001", "0", False)):
+        for group, mid, expected_quote in (("", "m1", False), ("1001", "0", False)):
             event = Event(group=group, mid=mid)
             delivery = guard._delivery()
             await delivery.prepare(event)

@@ -13,10 +13,10 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from astrbot.api.message_components import At, Plain
-from guard_engine import DecisionLog
-from guard_reply_health import KEY, ReplyHealth, safe_excerpt
-from guard_reply_fallback import ReplyFallback
-from guard_webui import EDITABLE, _coerce
+from gate.guard_engine import DecisionLog
+from reply.guard_reply_health import KEY, ReplyHealth, safe_excerpt
+from reply.guard_reply_fallback import ReplyFallback
+from console.guard_webui import EDITABLE, _coerce
 from test_gate import FakeProvider, gate_config, plugin
 from test_reply_delivery import Chain, Event
 
@@ -109,7 +109,7 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
         runner = Runner(outcomes)
         self.assertTrue(self.retry.bind(self.event, runner))
         # 离线框架LLMResponse是object；仅替换构造器，生产重试代码保持原样。
-        with patch("guard_reply_fallback.LLMResponse", side_effect=lambda **kw: response(
+        with patch("reply.guard_reply_fallback.LLMResponse", side_effect=lambda **kw: response(
                 kw["completion_text"], role=kw["role"])):
             result = [item async for item in runner._iter_llm_responses_with_fallback()]
         return runner, result
@@ -482,7 +482,7 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
                 break
         scheduler = object.__new__(scheduler_cls)
         scheduler.stages = [SimpleNamespace(process=flow)]
-        with patch("guard_reply_fallback.LLMResponse", side_effect=lambda **kw:
+        with patch("reply.guard_reply_fallback.LLMResponse", side_effect=lambda **kw:
                    response(kw["completion_text"], role=kw["role"])):
             await asyncio.create_task(scheduler.execute(event))
         await asyncio.sleep(0)

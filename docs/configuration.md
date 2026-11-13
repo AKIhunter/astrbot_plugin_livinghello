@@ -1,6 +1,6 @@
 # 配置参考
 
-面向使用者与维护者：查参数、默认值及保存范围。插件默认值以 [_conf_schema.json](../_conf_schema.json) 为唯一来源；原生字段来自 [guard_native_settings.py](../guard_native_settings.py)、[guard_native_reply.py](../guard_native_reply.py)，独立生图默认值来自 [guard_image_settings.py](../guard_image_settings.py) 的 `DEFAULTS`。已核对源码：2026-11-04；字段变化时同步更新并运行校验。
+面向使用者与维护者：查参数、默认值及保存范围。插件默认值以 [_conf_schema.json](../_conf_schema.json) 为唯一来源；原生字段来自 [integrations/guard_native_settings.py](../integrations/guard_native_settings.py)、[reply/guard_native_reply.py](../reply/guard_native_reply.py)，独立生图默认值来自 [images/guard_image_settings.py](../images/guard_image_settings.py) 的 `DEFAULTS`。已核对源码：2026-11-13；字段变化时同步更新并运行校验。
 
 主模型失败后的重试、管理员提醒和停止条件见[主模型失败兜底](reply_fallback.md)。该开关默认关闭，与文字判定断线恢复独立。
 
@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | LivingHello 参数 | AstrBot 保存的本插件配置 | 本插件；已保存值优先于下表默认值 |
 | 原生模型、人格、语音、排版、分段 | 所选 AstrBot 原生配置 | 实际分配到该配置的会话 |
-| 固定人格 | 原插件数据目录 native_persona_pins.json | 按原生配置固定，兼容已有技术 ID |
+| 固定人格 | 所选原生配置 agent_runner.config.persona.persona_id | 覆盖会话旧人格；旧 native_persona_pins.json 不再读取 |
 | 独立AI生图 | 本插件 image_generation.json | 全插件能力，复用所选模型连接 |
 
 统一保存栏逐域返回结果，失败草稿保留。后端检查字段白名单、类型、范围和读取版本，共享保存锁，合并最新磁盘字段并刷新对应原生流水线。保存失败恢复本次触及字段及人格固定，不持久化运行时临时唤醒词或动态路由配置。选择原生配置只改变编辑目标；不替代 AstrBot 的会话分配。
@@ -23,10 +23,10 @@
 | 参数 | 默认值 | 用途 |
 | --- | --- | --- |
 | `expression_takeover_enabled` | `true` | 启用回复方式管理 |
-| `expression_private_reuse` | `false` | 私聊是否复用回复方式；关闭时直接回复，不引用当前消息，不复用本卡片的 Emoji 清理；开启后沿用引用与清理开关，@仍仅用于群聊 |
+| `expression_private_reuse` | `false` | 私聊是否复用 |
 | `reply_quote_enabled` | `true` | 引用当前消息 |
 | `reply_mention_enabled` | `false` | @当前发送者 |
-| `reply_typing_chars_per_second` | `0` | 模拟打字速度（0=不模拟，字/秒） |
+| `reply_typing_chars_per_second` | `0` | 模拟打字速度（0=不模拟） |
 | `reply_recall_group` | `false` | 群聊撤回消息不回复 |
 | `reply_recall_private` | `false` | 私聊撤回消息不回复 |
 | `expression_strip_emoji` | `true` | 清理文本Emoji和颜文字 |
@@ -37,15 +37,15 @@
 | `understand_quote_depth` | `3` | 引用链展开层数 |
 | `understand_card_parse` | `true` | 解析卡片和小程序 |
 | `understand_image_enabled` | `true` | 图片理解 |
-| `understand_image_provider_id` | `""` | 图片理解模型 |
+| `understand_image_provider_id` | `""` | 图片理解模型（可选覆盖） |
 | `understand_voice_enabled` | `false` | 语音转文字理解 |
 | `understand_voice_provider_id` | `""` | 语音理解模型 |
-| `gate_mode` | `"enforce"` | 闸门模式（总开关） |
+| `gate_mode` | `"enforce"` | 参与模式 |
 | `participation_confidence_threshold` | `65` | 普通群消息参与判断 |
 | `classifier_provider_id` | `""` | 判定用的小模型 |
 | `classifier_timeout_seconds` | `3.5` | 判定超时（秒） |
 | `reply_fallback_enabled` | `false` | 兜底回复（主模型失败重试） |
-| `vision_provider_id` | `""` | 需要看图时的多模态小模型 |
+| `vision_provider_id` | `""` | 判定看图模型（可选覆盖） |
 | `gate_image_cache_ttl_seconds` | `300` | 图片观察缓存时间（秒） |
 | `vision_timeout_seconds` | `6` | 多模态判定超时（秒） |
 | `gate_main_fallback_enabled` | `true` | 多模态异常时使用会话主模型兜底 |
@@ -56,9 +56,8 @@
 | `gate_min_length` | `2` | 最短参与长度（字） |
 | `gate_context_max_age_seconds` | `300` | 上下文最长保留时间（秒） |
 | `gate_reply_max_age_seconds` | `30` | 自主回复机会有效期（秒） |
-| `private_watermark_window_seconds` | `15` | 水位时间（秒）；0=关闭水位顶替 |
-| `watermark_scope` | `"private"` | 水位生效范围：private / all |
-| `gate_congling_prepare_compat` | `true` | 适配从绫爬楼准备耗时 |
+| `private_watermark_window_seconds` | `15` | 水位时间（秒） |
+| `watermark_scope` | `"private"` | 水位生效范围 |
 | `gate_memory_timeout_seconds` | `1.5` | 背景记忆检索超时（秒） |
 | `gate_hourly_budget` | `60` | 每群每小时判定上限 |
 | `bot_names` | `["恰比姐", "恰比"]` | 机器人称呼 |
@@ -73,6 +72,41 @@
 | `proactive_cooldown_seconds` | `8` | 主动回复冷却（秒） |
 | `proactive_group_judge` | `"whitelist_empty"` | 群消息主动判定范围 |
 | `duplicate_window_seconds` | `120` | 相同消息去重窗口（秒） |
+| `message_blacklist_qq` | `[]` | 黑名单 QQ 号 |
+| `message_blacklist_groups` | `[]` | 黑名单 QQ 群号 |
+| `message_graylist_qq` | `[]` | 灰名单 QQ 号 |
+| `message_graylist_groups` | `[]` | 灰名单 QQ 群号 |
+| `message_whitelist_qq` | `[]` | 白名单 QQ 号 |
+| `message_whitelist_groups` | `[]` | 白名单 QQ 群号 |
+| `expression_forbid_phrases` | `[]` | 口头禅禁忌 |
+| `classifier_outage_recovery_enabled` | `false` | 回复断线监测与恢复 |
+| `outage_notify_admin_qq` | `[]` | 断线提醒管理员 QQ |
+| `reply_health_timeout_seconds` | `900` | 回复流程最长等待（秒） |
+| `reasoning_retry_enabled` | `true` | 空正文自动补答 |
+| `reasoning_retry_provider_id` | `"deepseek/deepseek-flash-quiet"` | 补答使用的模型 |
+| `reasoning_retry_timeout_seconds` | `120` | 补答超时（秒） |
+| `vision_shared_provider_id` | `""` | 视觉模型（共用） |
+| `integrate_livingemotion_catchup` | `true` | 启用 LivingEmotion 爬楼配合：醒来窗口读取睡眠期未读时，把爬楼耗时从回复有效期里扣除。 |
+| `outage_watch_classifier` | `true` | 判断模型出错时提醒管理员 |
+| `outage_watch_vision` | `true` | 判定看图模型出错时提醒管理员 |
+| `outage_watch_understand_image` | `true` | 图片理解模型出错时提醒管理员 |
+| `outage_watch_understand_voice` | `true` | 语音转写模型出错时提醒管理员 |
+| `outage_watch_main_model` | `true` | 主对话模型出错时提醒管理员 |
+| `outage_watch_tts` | `false` | 语音回复模型异常时提醒（间接感知） |
+| `outage_watch_image_gen` | `true` | AI 生图模型出错时提醒管理员 |
+| `outage_notify_interval_minutes` | `10` | 两次提醒的最小间隔（分钟） |
+| `classifier_short_cooldown_seconds` | `120` | 偶发故障冷却（秒） |
+| `classifier_cooldown_seconds` | `600` | 需人工故障冷却（秒） |
+| `gate_upstream_fanout_enabled` | `true` | 判定按上游轮转 |
+| `gate_upstream_try_timeout_seconds` | `3.0` | 单上游尝试超时（秒） |
+| `reply_early_ack_seconds` | `20` | 慢请求先回一句（秒，0关闭） |
+| `reply_early_ack_texts` | `["稍等，我想一下。","我看一下，马上说。","等一下，我确认下。"]` | 垫场句（多条按分钟轮换） |
+| `classifier_needs_attention_retry_seconds` | `300` | 故障重探间隔（秒） |
+| `classifier_outage_self_heal_seconds` | `1800` | 故障自愈放行（秒） |
+| `understand_hard_timeout_seconds` | `20` | 图片理解总预算（秒） |
+| `reply_early_ack_cooldown_seconds` | `600` | 垫场句每群冷却（秒） |
+| `coupling_livingemotion_enabled` | `false` | 接入 LivingEmotion |
+| `coupling_livingmemory_enabled` | `false` | 接入 LivingMemory |
 <!-- schema-defaults:end -->
 
 ### 时限与预算如何配合
@@ -132,6 +166,8 @@ LivingMemory / LivingEmotion 接入开关均默认关闭，安装插件不等于
 “AstrBot配置人格”统一显示编辑配置及原生人格，模型、语音和排版使用可展开二级分组；问号解释保存位置与用途。编辑配置保存到插件数据目录的 `native_selected_profile.json`，刷新与插件重载后继续选择同一配置，不依赖 iframe 本地存储。选择配置不会修改人格，也不会替代宿主会话分配；人格仍须手动保存后固定。主模型改变不连带改变判定小模型。此编辑目标是本控制台共用的选择记录。
 
 多 API 路由的具体聊天 Provider 可用于主模型与回退模型，下拉显示路由配置中的 API 名称和模型名，保存稳定的 `provider_id:upstream_N`。旧版 `provider::model` 虚拟项仍仅用于插件内部判定，不写入原生主模型。
+
+人格以原生 `persona_id` 为唯一真源，原生页面修改后立即按该值解析，刷新和重载不会恢复旧固定副本。指定人格被删除时明确报错，需重新选择或保存 `[%None]`；不会静默切换身份。路由编号是否稳定由路由插件决定，增删或排序后应核对所有已保存引用。
 
 语音回复候选只读取 AstrBot 已注册的 TTS Provider，与聊天模型严格分开。`tts_enabled` 和 `tts_provider_id` 双向同步所选原生配置；`trigger_probability`、`dual_output`、`use_file_service` 不由本页编辑。开启语音回复仍需有效 Provider、会话允许且触发概率通过。
 

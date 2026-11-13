@@ -5,11 +5,11 @@ import {fileURLToPath} from "node:url";
 import {startServer} from "./server.mjs";
 
 const require=createRequire(import.meta.url);
-const {chromium}=require(fileURLToPath(new URL("../../../astrbot_plugin_livingemotion/tests/ui/node_modules/playwright",import.meta.url)));
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE || fileURLToPath(new URL("../../../astrbot_plugin_livingemotion/tests/ui/node_modules/playwright",import.meta.url)));
 const {server,url}=await startServer();
 const browser=await chromium.launch({headless:true});
 const report={scope:"真实页面/保存处理器，隔离插件注册表；无真实模型或外网调用",cases:[],pageErrors:[],externalRequests:[]};
-const output="/tmp/lh-compact-coupling-20261110/local-ui";
+const output=fileURLToPath(new URL("./evidence/coupling/",import.meta.url));
 async function run(name, task, connected=true, width=1280) {
   const context=await browser.newContext({viewport:{width,height:1000}});
   const page=await context.newPage();

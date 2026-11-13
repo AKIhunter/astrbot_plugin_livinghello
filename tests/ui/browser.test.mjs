@@ -20,13 +20,13 @@ const browser = await chromium.launch({ headless: true });
 const productStates = ["disabled", "healthy", "cooling", "probing", "recovering", "needs_attention"];
 const expectedState = {
   disabled: ["已关闭", "功能关闭；文字判定失败继续按现有规则静默"],
-  healthy: ["正常", "文字判定依赖当前正常"],
+  healthy: ["正常", "当前未记录未送达故障"],
   cooling: ["冷却中", "已暂停普通文字判定调用"],
   probing: ["探测中", "冷却结束，正在检查文字判定依赖"],
   recovering: ["恢复中", "依赖已恢复，正在补读受影响会话"],
   needs_attention: ["需处理", "认证、配置或 Provider 需要管理员处理"],
 };
-const expectedLinks = ["回复方式", "原生分段", "回复节奏", "撤回保护", "称呼私聊", "内容理解", "断线恢复"];
+const expectedLinks = ["回复行为", "原生配置", "称呼与理解", "黑白灰名单", "断线恢复"];
 const report = {
   environment: {
     os: `${os.platform()} ${os.release()}`,
@@ -46,7 +46,7 @@ const report = {
   externalRequests: [],
   screenshots: [],
 };
-for (const name of ["pages/guard/index.html", "guard_webui.py", "guard_classifier_outage.py"]) {
+for (const name of ["pages/guard/index.html", "console/guard_webui.py", "gate/guard_classifier_outage.py"]) {
   const source = await readFile(new URL(`../../${name}`, import.meta.url));
   report.source_sha256[name] = createHash("sha256").update(source).digest("hex");
 }
@@ -118,7 +118,7 @@ function matrixMetrics() {
     }
     return overlaps;
   };
-  const sectionLinks = [...document.querySelectorAll("#panel-reply .section-links a")]
+  const sectionLinks = [...document.querySelectorAll("#replySubTabs button")]
     .map(node => node.textContent.trim());
   return {
     width: innerWidth,
@@ -131,7 +131,7 @@ function matrixMetrics() {
     replyVisible: !document.querySelector("#panel-reply").hidden,
     outageVisible: document.querySelector("#outageRecovery").checkVisibility({ checkVisibilityCSS: true }),
     globalOverflow: document.documentElement.scrollWidth > innerWidth || document.body.scrollWidth > innerWidth,
-    sectionLinkOverlaps: pairOverlaps("#panel-reply .section-links a"),
+    sectionLinkOverlaps: pairOverlaps("#replySubTabs button"),
     outageCardOverlaps: pairOverlaps(".outage-status-item"),
     tabOverlaps: pairOverlaps(".page-tabs button"),
     outageColumns: getComputedStyle(document.querySelector(".outage-status-grid")).gridTemplateColumns.split(" ").length,
@@ -148,7 +148,7 @@ function contrastRatio(foreground, background) {
 }
 
 try {
-  await caseRun("320/390/1280 × 浅深主题：七按钮、同页跳转、全恢复状态、无全局溢出", async () => {
+  await caseRun("320/390/1280 × 浅深主题：五子页、全恢复状态、无全局溢出", async () => {
     for (const width of [320, 390, 1280]) {
       for (const theme of ["light", "dark"]) {
         const height = width === 320 ? 720 : width === 390 ? 844 : 900;
@@ -170,17 +170,17 @@ try {
           };
           report.outageStates.push(observed);
           assert.deepEqual([observed.badge, observed.description], expectedState[state]);
-          if (state === "cooling") assert.match(observed.cooldown, /剩余 10 分钟 · 固定 10 分钟/);
+          if (state === "cooling") assert.match(observed.cooldown, /间隔 10 分钟/);
         }
         await page.goto(`${url}?outage=healthy`, { waitUntil: "domcontentloaded" });
         await ready(page);
         await page.getByRole("tab", { name: "回复与私聊" }).click();
         const beforePath = new URL(page.url()).pathname;
-        const links = page.locator("#panel-reply .section-links a");
+        const links = page.locator("#replySubTabs button");
         assert.deepEqual(await links.allTextContents(), expectedLinks);
         await links.filter({ hasText: "断线恢复" }).click();
         assert.equal(new URL(page.url()).pathname, beforePath);
-        assert.equal(new URL(page.url()).hash, "#outageRecovery");
+        assert.equal(new URL(page.url()).hash, "#page-reply");
         const metrics = await page.evaluate(matrixMetrics);
         report.matrix.push(metrics);
         assert.equal(metrics.tabCount, 4);
@@ -326,9 +326,12 @@ try {
     const origin = new URL(url).origin;
     await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
     await context.addInitScript(() => {
-      const nativeSetInterval = window.setInterval.bind(window);
-      window.setInterval = (callback, timeout, ...args) =>
-        nativeSetInterval(callback, timeout === 15000 ? 120 : timeout, ...args);
+      // 当前轮询在上次读取结束后setTimeout；同时兼容旧setInterval夹具。
+      for (const name of ["setInterval", "setTimeout"]) {
+        const original = window[name].bind(window);
+        window[name] = (callback, timeout, ...args) =>
+          original(callback, timeout === 15000 ? 120 : timeout, ...args);
+      }
     });
     const page = await context.newPage();
     page.on("pageerror", error => report.pageErrors.push({ suffix: "draft", message: error.message }));
@@ -355,6 +358,7 @@ try {
     await page.keyboard.press("Escape");
     assert.equal(await page.evaluate(() => document.activeElement.classList.contains("decision-action")), true);
     await page.getByRole("tab", { name: "回复与私聊" }).click();
+    await page.locator('#replySubTabs [data-sub="outage"]').click();
     const outageSwitch = page.locator("#field-classifier_outage_recovery_enabled");
     await outageSwitch.check();
     assert.equal(await page.locator("#saveBar").getAttribute("class"), "save-bar show");
@@ -386,6 +390,7 @@ try {
     const { context, page } = await open({}, "?outage=disabled");
     await ready(page);
     await page.getByRole("tab", { name: "回复与私聊" }).click();
+    await page.locator('#replySubTabs [data-sub="outage"]').click();
     const fallback = page.locator("#field-reply_fallback_enabled");
     const admins = page.locator("#field-outage_notify_admin_qq");
     assert.equal(await fallback.isChecked(), false);

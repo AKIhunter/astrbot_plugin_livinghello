@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import AsyncMock
 
 from astrbot.core.agent.message import TextPart
-from guard_reasoning_retry import DEFAULT_PROVIDER, KEY, REQUEST_KEY, ReasoningRetry
+from reply.guard_reasoning_retry import DEFAULT_PROVIDER, KEY, REQUEST_KEY, ReasoningRetry
 from test_gate import gate_config, plugin
 from test_reply_delivery import Event
 

@@ -99,7 +99,7 @@ def check(root: Path) -> list[str]:
             failures.append(f"配置标题过期: {key}")
 
     # 独立生图配置不在宿主schema中，直接以源码DEFAULTS核对。
-    defaults = literal_assignment(root / "guard_image_settings.py", "DEFAULTS")
+    defaults = literal_assignment(root / "images/guard_image_settings.py", "DEFAULTS")
     image_rows = re.findall(r"(?m)^\| `([^`]+)` \| `([^`]+)` \|",
                             marked_table(table, "image-defaults", failures))
     image_listed = {}
@@ -115,7 +115,7 @@ def check(root: Path) -> list[str]:
     for key in set(image_listed) & set(defaults):
         if json.dumps(image_listed[key]) != json.dumps(defaults[key]):
             failures.append(f"生图默认值过期: {key}")
-    native_fields = literal_assignment(root / "guard_native_settings.py", "FIELDS")
+    native_fields = literal_assignment(root / "integrations/guard_native_settings.py", "FIELDS")
     section = re.search(r"## AstrBot 原生字段\n(.*?)\n## AstrBot 原生分段", table, re.S)
     native_rows = re.findall(r"(?m)^\| ([a-z0-9_]+) \| ([a-z0-9_.]+) \|", section[1] if section else "")
     documented_native = dict(native_rows)
@@ -133,7 +133,7 @@ def check(root: Path) -> list[str]:
         failures.append("metadata.version 不是语义版本")
     else:
         version = version_match[1]
-        for path in (root / "README.md", root / "CHANGELOG.md", root / "guard_webui.py"):
+        for path in (root / "README.md", root / "CHANGELOG.md", root / "console/guard_webui.py"):
             if version not in path.read_text(encoding="utf-8"):
                 failures.append(f"{path.name} 缺少当前版本 {version}")
 
@@ -155,6 +155,6 @@ if __name__ == "__main__":
         print(f"[FAIL] {error}")
     if not errors:
         count = len(json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8")))
-        image_count = len(literal_assignment(ROOT / "guard_image_settings.py", "DEFAULTS"))
+        image_count = len(literal_assignment(ROOT / "images/guard_image_settings.py", "DEFAULTS"))
         print(f"[PASS] 文档链接、{count}+{image_count} 项默认值、原生字段、版本、图片及 tests/ 布局")
     sys.exit(bool(errors))

@@ -14,15 +14,15 @@ from dataclasses import dataclass
 
 from astrbot.api.message_components import At, Plain, Reply
 try:
-    from .guard_request_trace import emit, TRACE_KEY
+    from ..observability.guard_request_trace import emit, TRACE_KEY
     from .guard_reply_health import KEY as HEALTH_KEY, send_accepted
 except ImportError:
-    from guard_request_trace import emit, TRACE_KEY
-    from guard_reply_health import KEY as HEALTH_KEY, send_accepted
+    from observability.guard_request_trace import emit, TRACE_KEY
+    from reply.guard_reply_health import KEY as HEALTH_KEY, send_accepted
 try:
     from .guard_thinking_filter import strip_thinking_chain
 except ImportError:
-    from guard_thinking_filter import strip_thinking_chain
+    from reply.guard_thinking_filter import strip_thinking_chain
 
 # 兼容用的历史标识：congling/core/rhythm.py 仍按这个键名和 "at_guard" 值判断
 # 回复归属，改名会让从绫把 LivingHello 的回复当成自己的。不要改。

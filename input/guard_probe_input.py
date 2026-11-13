@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 import re
 try:
-    from .guard_message_policy import normalize_id, QQ_PLATFORMS
+    from ..gate.guard_message_policy import normalize_id, QQ_PLATFORMS
 except ImportError:
-    from guard_message_policy import normalize_id, QQ_PLATFORMS
+    from gate.guard_message_policy import normalize_id, QQ_PLATFORMS
 
 
 class ProbeInputError(ValueError):

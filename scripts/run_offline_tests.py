@@ -2,6 +2,7 @@
 import enum
 import importlib.util
 import logging
+import os
 from pathlib import Path
 import sys
 import types
@@ -69,7 +70,10 @@ def install_framework_stubs():
     mod("astrbot.core")
     mod("astrbot.core.agent")
     message = mod("astrbot.core.agent.message")
-    class TextPart(Plain):
+    class TextPart:
+        type = "text"
+        def __init__(self, text=""):
+            self.text = text
         def mark_as_temp(self):
             self.no_save = True
             return self
@@ -80,6 +84,13 @@ def install_framework_stubs():
         GROUP_MESSAGE = "group"
         FRIEND_MESSAGE = "friend"
     message_type.MessageType = MessageType
+    if os.environ.get("ASTRBOT_NATIVE_SOURCE"):
+        # 显式提供快照时验证真实工具契约，仍不初始化宿主或平台。
+        tests_dir = str(Path(__file__).resolve().parents[1] / "tests")
+        if tests_dir not in sys.path:
+            sys.path.insert(0, tests_dir)
+        from host_fixtures import install_tools
+        install_tools()
     web = mod("astrbot.api.web")
     web.request = types.SimpleNamespace()
     web.json_response = lambda data: data

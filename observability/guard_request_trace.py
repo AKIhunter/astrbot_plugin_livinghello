@@ -40,6 +40,8 @@ LISTENERS = {
 META_KEYS = {"reason", "model", "calls", "ms", "span_id", "tool", "count", "before",
              "after", "synced", "judged", "types", "source", "collected", "enabled", "parent_span",
              "merged_into", "api_calls", "packets", "error_type", "role",
+             # 仅投递失败时写入脱敏后的工具错误原文，用于定位宿主拒绝原因。
+             "detail",
              "parse_reason", "parse_format", "format_retry"}
 
 

@@ -4,9 +4,9 @@ from __future__ import annotations
 import copy
 
 try:
-    from .guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+    from ..images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
 except ImportError:
-    from guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+    from images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
 
 GATE = [
     ("input", "候选输入", "取得当前消息、上一句、上下文；名单先于参与判断和观察模式生效。"),

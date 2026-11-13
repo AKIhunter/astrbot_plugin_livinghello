@@ -8,9 +8,9 @@ from pathlib import Path
 import tempfile
 
 try:
-    from .guard_native_reply import NativeReply, NativeReplyError, revision
+    from ..reply.guard_native_reply import NativeReply, NativeReplyError, revision
 except ImportError:
-    from guard_native_reply import NativeReply, NativeReplyError, revision
+    from reply.guard_native_reply import NativeReply, NativeReplyError, revision
 
 
 FIELDS = {
@@ -159,11 +159,8 @@ class NativeSettings(NativeReply):
                 return pid, None, pid, False
             persona = next((p for p in manager.personas_v3 if p["name"] == pid), None)
             if persona is None:
-                # 配置里的人格已被删除：回退原生解析，不阻断回复。
-                self.plugin.logger.warning(
-                    "[LivingHello] 配置人格 %r 不存在，回退宿主原生选择", pid)
-                return await original(umo=umo, conversation_persona_id=conversation_persona_id,
-                                      platform_name=platform_name, provider_settings=provider_settings)
+                # 固定人格丢失时明确报错，防止无声切换到会话旧人格。
+                raise NativeReplyError("固定人格不存在，请在原生设置中重新选择人格", 503)
             return pid, persona, pid, False
         selected._livinghello_original = original
         self._original, self._wrapper = original, selected

@@ -104,7 +104,7 @@ class Expression:
         try:
             from .guard_thinking_filter import strip_thinking
         except ImportError:
-            from guard_thinking_filter import strip_thinking
+            from reply.guard_thinking_filter import strip_thinking
         text = strip_thinking(text)[0]
         return strip_forbidden(text, forbid_phrases(self.config))
 

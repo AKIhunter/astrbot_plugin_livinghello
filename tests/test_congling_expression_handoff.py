@@ -44,6 +44,12 @@ def methods(relative, selected):
         "MARKER_PREFIX": "<!--congling:perceived:",
         "SELF_ACTION_RULE": "原生身份", "DREAM_RECALL_RULE": "原生隐私",
     }
+    policy_spec = importlib.util.spec_from_file_location(
+        "handoff_message_policy_test", ROOT / "core/message_policy.py")
+    policy = importlib.util.module_from_spec(policy_spec)
+    policy_spec.loader.exec_module(policy)
+    namespace.update(policy_for=policy.policy_for, CONTRACT=policy.CONTRACT,
+                     source_of=policy.source_of)
     # 从绫新增来源记录后，编译交接方法也要装配真实辅助函数；正文捕获仍隔离。
     helper_path = ROOT / "core/prompt_parts.py"
     if helper_path.is_file():

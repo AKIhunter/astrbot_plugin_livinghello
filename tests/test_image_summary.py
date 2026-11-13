@@ -5,9 +5,9 @@ import unittest
 from types import SimpleNamespace
 
 from astrbot.api.message_components import Image
-from guard_engine import parse_gate_details, parse_image_summaries, GateEngine
-from guard_media import supports_images
-from guard_webui import _providers, _write_schema_options
+from gate.guard_engine import parse_gate_details, parse_image_summaries, GateEngine
+from images.guard_media import supports_images
+from console.guard_webui import _providers, _write_schema_options
 import test_multimodal as fixtures
 from test_context_policy import output
 from test_gate import GateEvent, gate_config, plugin

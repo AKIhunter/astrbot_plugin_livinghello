@@ -8,8 +8,8 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from astrbot.api.message_components import At, Plain
-from guard_livingemotion import PLUGIN, STATE_MARKER, availability_reason, state_lines
-from guard_engine import Decision
+from integrations.guard_livingemotion import PLUGIN, STATE_MARKER, availability_reason, state_lines
+from gate.guard_engine import Decision
 from test_gate import gate_config, plugin
 from test_reply_delivery import Chain, Event
 
@@ -195,7 +195,7 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 cancelled.set()
         self.api.get_availability.side_effect = pending
-        with patch("guard_livingemotion.API_TIMEOUT", 0.01):
+        with patch("integrations.guard_livingemotion.API_TIMEOUT", 0.01):
             self.assertEqual(await availability_reason(
                 self.guard.context, self.event, unsolicited=True), "")
         self.assertTrue(cancelled.is_set())

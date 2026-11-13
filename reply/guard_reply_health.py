@@ -504,6 +504,9 @@ class ReplyHealth:
         fault = {"layer": layer, "category": category, "at": at,
                  **{key: row[key] for key in ("provider_id", "model", "provider_evidence")
                     if row.get(key)}}
+        # cron 发送工具失败：把 tool_failed 已脱敏的原文写进 reply_error.detail。
+        if category == "tool_call_failed" and row.get("tool_error_reason"):
+            fault["detail"] = row["tool_error_reason"]
         # 只记录当前消息；不复制历史图片、引用正文或其他会话的上下文。
         group = str(event.get_group_id() or "")
         fallback = {"ts": int(at), "gid": group,

@@ -7,8 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from astrbot.api.message_components import Image
-from guard_image_cache import ImageObservationCache
-from guard_engine import GateEngine
+from images.guard_image_cache import ImageObservationCache
+from gate.guard_engine import GateEngine
 from test_gate import GateEvent, gate_config, plugin
 from test_multimodal import Provider, IMAGE, NEED_IMAGE
 from test_context_policy import output

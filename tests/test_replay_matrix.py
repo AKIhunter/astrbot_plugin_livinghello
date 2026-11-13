@@ -1,7 +1,7 @@
 """离线回放矩阵：用合成数据压 12 类回复终态路径。
 
-数据来源固定标注为「合成」：本轮不读取任何线上历史库，也不代表历史数据已验证。
-真实历史回放入口见文末 RealReplayDataTests（目录缺失时明确跳过）。
+主矩阵数据来源固定标注为「合成」。
+文末 RealReplayDataTests 单独回放本地脱敏历史；不连接线上库或复用真实模型。
 
 硬约束：
 - 零真实模型调用：StubProvider 只返回四种本地结果。
@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sys
 import unittest
 from dataclasses import dataclass, field
@@ -23,7 +25,8 @@ from unittest.mock import AsyncMock, patch
 
 DATA_SOURCE = "合成"
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-REPLAY_DIR = PLUGIN_ROOT.parents[1] / "回放数据"
+REPLAY_DIR = Path(os.environ.get("LIVINGHELLO_REPLAY_DIR",
+                                str(PLUGIN_ROOT.parents[1] / "回放数据")))
 
 MATRIX: list["Row"] = []
 
@@ -109,8 +112,8 @@ class Harness:
         from astrbot.api.message_components import Plain
         from test_gate import gate_config, plugin
         from test_reply_delivery import Chain, Event
-        from guard_reply_health import ReplyHealth
-        from guard_request_trace import RequestTrace
+        from reply.guard_reply_health import ReplyHealth
+        from observability.guard_request_trace import RequestTrace
 
         self.Plain, self.Chain, self.Event = Plain, Chain, Event
         self._gate_config, self._plugin = gate_config, plugin
@@ -136,7 +139,7 @@ class Harness:
         return guard._trace(event)
 
     def terminal(self, guard, event, request_id=None):
-        from guard_request_trace import ID_KEY
+        from observability.guard_request_trace import ID_KEY
         rid = request_id or event.get_extra(ID_KEY)
         row = guard.request_trace.rows.get(rid) or {}
         reason = ""
@@ -314,7 +317,7 @@ class ReplayMatrixTests(unittest.IsolatedAsyncioTestCase):
 
     # ④ 碎片合并 ---------------------------------------------------------
     async def test_04_fragment_merging(self):
-        from guard_fragments import FragmentWait
+        from input.guard_fragments import FragmentWait
 
         async def run(seconds, gap, scope_key):
             clock = FakeClock()
@@ -425,7 +428,7 @@ class ReplayMatrixTests(unittest.IsolatedAsyncioTestCase):
             "failed/tool_not_called", got["state"], got["reason"],
             "failed", got["packets"], expect_reason="tool_not_called",
         ))
-        from guard_reply_health import KEY
+        from reply.guard_reply_health import KEY
         await asyncio.sleep(0)  # 让被取消的 watchdog 真正结束
         self.assertTrue(event.get_extra(KEY)["watchdog"].cancelled())
 
@@ -434,27 +437,26 @@ class ReplayMatrixTests(unittest.IsolatedAsyncioTestCase):
                          event=None):
         sys.path.insert(0, str(PLUGIN_ROOT.parent))
         import astrbot_plugin_livingemotion.runtime.application as app
-        original_window, original_last = app.reply_freshness_window, app.last_activity
-
-        def fake_window(_host):
-            return window
-
-        async def fake_last(_store, _context):
-            return latest
-
-        app.reply_freshness_window = fake_window
-        app.last_activity = fake_last
-        try:
-            probe = SimpleNamespace(bridge=SimpleNamespace(host=object()), store=object(),
-                                    _discard=app.Application._discard)
-            lease = {"watermark": lease_watermark, "started_at": started}
-            event = event or self.h.event(group="")
-            valid = await app.Application._private_freshness_valid(
-                probe, event, SimpleNamespace(scene_kind="private", scope_key="s1"),
-                lease, watermark)
-            return valid, event.get_extra("_at_guard_delivery_blocked")
-        finally:
-            app.reply_freshness_window, app.last_activity = original_window, original_last
+        # 当前契约由 Hello 拥有水位，Emotion 只执行事件上的发送检查。
+        guard = self.h.guard(expression_takeover_enabled=True,
+                             private_watermark_window_seconds=window)
+        event = event or self.h.event(group="")
+        event.set_extra("_at_guard_received_at", started)
+        guard._note_reply_turn(event)
+        if watermark != lease_watermark:
+            later = self.h.event(group="", mid="new-watermark")
+            later.set_extra("_at_guard_received_at", latest)
+            guard._note_reply_turn(later)
+        event.set_extra("_at_guard_send_check",
+                        lambda: guard._stale_reason(event, guard._group_key(event)))
+        async def human_watermark(_context):
+            return watermark
+        probe = SimpleNamespace(store=SimpleNamespace(human_watermark=human_watermark),
+                                _discard=app.Application._discard)
+        lease = {"watermark": lease_watermark, "started_at": started}
+        valid = await app.Application._native_freshness_valid(
+            probe, event, SimpleNamespace(scene_kind=app.SceneKind.PRIVATE, scope_key="s1"), lease)
+        return valid, event.get_extra("_at_guard_delivery_blocked")
 
     async def test_06_private_watermark(self):
         equal, _ = await self._freshness(window=15, watermark=8, lease_watermark=8,
@@ -471,23 +473,24 @@ class ReplayMatrixTests(unittest.IsolatedAsyncioTestCase):
                                            started=100, latest=130)
         self.add(self.h.row(
             "06a", "水位 相等/窗口内", "watermark 8→8；9→8 且 14.9s/15.0s",
-            "均通过（True/True/True）",
-            f"{equal}/{within}/{boundary}", "", "True/True/True", 0,
-            note="调用真实 _private_freshness_valid，仅替换宿主窗口与最后活跃时间。",
+            "无新消息通过，窗口内与边界顶替（True/False/False）",
+            f"{equal}/{within}/{boundary}", "", "True/False/False", 0,
+            note="调用真实 Hello 水位登记及 Emotion _native_freshness_valid。",
         ))
-        self.assertTrue(equal and within and boundary)
+        self.assertTrue(equal)
+        self.assertFalse(within or boundary)
         self.add(self.h.row(
             "06b", "水位 越界/严格", "15.1s、window=0、30s",
-            "均拒绝（False/False/False）",
-            f"{beyond}/{strict}/{outside}", "", "False/False/False", 0,
+            "窗口外或关闭水位仍通过（True/True/True）",
+            f"{beyond}/{strict}/{outside}", "", "True/True/True", 0,
         ))
-        self.assertFalse(beyond or strict or outside)
+        self.assertTrue(beyond and strict and outside)
 
         # 被新私聊顶替后的终态：LivingEmotion 先写 blocked，pipeline 结束即收尾
         guard = self.h.guard()
         event = self.h.event(group="", mid="m6")
         valid, blocked = await self._freshness(
-            window=15, watermark=9, lease_watermark=8, started=100, latest=130,
+            window=15, watermark=9, lease_watermark=8, started=100, latest=114,
             event=event)
         self.assertFalse(valid)
         self.assertEqual(blocked, "superseded_by_new_message")
@@ -618,7 +621,7 @@ class ReplayMatrixTests(unittest.IsolatedAsyncioTestCase):
 
     # ⑨ 工具成功 / 失败 / 超时 -------------------------------------------
     async def test_09_tool_outcomes(self):
-        from guard_reply_health import tool_result_delivered
+        from reply.guard_reply_health import tool_result_delivered
 
         def result(text, is_error=False):
             return SimpleNamespace(isError=is_error, content=[SimpleNamespace(text=text)])
@@ -658,7 +661,7 @@ class ReplayMatrixTests(unittest.IsolatedAsyncioTestCase):
 
     # ⑩ 主模型空体 / protocol_error / 图片理解 12s -----------------------
     async def test_10_model_body_errors(self):
-        from guard_reply_health import error_category
+        from reply.guard_reply_health import error_category
 
         # 空正文
         guard = self.h.guard()
@@ -718,7 +721,7 @@ class ReplayMatrixTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(got["state"], "cancelled")
 
         # 休眠：LivingEmotion 下发 block_chat
-        from guard_livingemotion import availability_reason
+        from integrations.guard_livingemotion import availability_reason
 
         class Api:
             api_version = 1
@@ -812,21 +815,101 @@ class ReplayMatrixTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(got["state"], "failed")
 
 
-class RealReplayDataTests(unittest.TestCase):
-    """真实历史回放入口：文件未到位时明确跳过，不伪造结论。"""
+class RealReplayDataTests(unittest.IsolatedAsyncioTestCase):
+    """回放脱敏历史的存储、关联和文字判定结果；不声称重跑原始聊天。"""
 
     REQUIRED = ["request_traces.sqlite3", "decisions.jsonl", "logs"]
     # 配置文件名随插件改名变化：新导出用 LivingHello，旧导出仍是 at_guard。
     CONFIG_FILES = ("astrbot_plugin_LivingHello_config.json",
                     "astrbot_plugin_at_guard_config.json")
 
-    def test_real_replay_data_ready(self):
+    def setUp(self):
         missing = [name for name in self.REQUIRED if not (REPLAY_DIR / name).exists()]
         if not missing and not any((REPLAY_DIR / name).exists() for name in self.CONFIG_FILES):
             missing.append(" 或 ".join(self.CONFIG_FILES))
         if missing:
             self.skipTest(f"真实回放数据未到位（{REPLAY_DIR}）：缺少 {', '.join(missing)}"
                           f"；本轮结论仅来自{DATA_SOURCE}数据")
+
+    async def test_trace_storage_and_decision_join_replay(self):
+        import sqlite3
+        from gate.guard_engine import DecisionLog
+        from observability.guard_request_trace import RequestTrace, TERMINAL
+        with sqlite3.connect(f"file:{REPLAY_DIR}/request_traces.sqlite3?mode=ro", uri=True) as db:
+            captures = {rid: json.loads(raw) for rid, raw in
+                        db.execute("SELECT request_id,payload_json FROM requests")}
+        self.assertGreater(len(captures), 0)
+        service = RequestTrace(None, REPLAY_DIR)
+        got = await service.batch(list(captures))
+        self.assertEqual(set(got), set(captures))
+        for rid, expected in captures.items():
+            with self.subTest(request_id=rid):
+                self.assertEqual(got[rid]["summary"], expected["summary"])
+                self.assertEqual(got[rid]["session_id"], expected["session_id"])
+                self.assertEqual(got[rid]["state"], expected["state"] if
+                                 expected["state"] in TERMINAL else "incomplete")
+        log = DecisionLog(REPLAY_DIR / "decisions.jsonl")
+        recent = log.recent(600)
+        ids = [row["request_id"] for row in recent if row.get("request_id")]
+        self.assertEqual(len(ids), len(set(ids)), "同一请求的最终结果不得重复展示")
+        for row in await service.enrich(recent):
+            capture = got.get(row.get("request_id"))
+            self.assertEqual(row["trace_summary"]["state"] if row["trace_summary"] else None,
+                             capture["state"] if capture else None)
+
+    async def test_captured_text_decision_results_replay(self):
+        from dataclasses import replace
+        from gate.guard_engine import GateEngine
+        from test_gate import gate_config, FakeProvider, GateEvent, plugin
+        path = REPLAY_DIR / "gate_cases.json"
+        if not path.exists():
+            self.skipTest("脱敏导出缺少gate_cases.json；不能声称文字结果回放通过")
+        cases = json.loads(path.read_text())
+        self.assertGreater(len(cases), 0)
+        for index, case in enumerate(cases):
+            provider = FakeProvider(json.dumps(case["result"]))
+            async def resolve():
+                return provider
+            engine = GateEngine(gate_config(
+                participation_confidence_threshold=case["threshold"]), None, SimpleNamespace())
+            with self.subTest(history_index=index):
+                result = await engine.decide(
+                    group_key="offline-history", current_text="脱敏的历史消息",
+                    context_lines=[], bot_line="", is_private=False,
+                    resolve_provider=resolve, dry_run=True)
+                final_reason = case.get("final_reason")
+                # 记录的是Main最终结果；这三类拦截发生在小模型判定之后。
+                downstream = final_reason in {"message_expired", "reply_no_vision", "context_changed"}
+                self.assertEqual((result.action, result.score),
+                                 ("reply" if downstream else case["expected_action"],
+                                  case["expected_score"]))
+                if not downstream:
+                    continue
+                guard = plugin(gate_config(gate_reply_max_age_seconds=30))
+                event = GateEvent("脱敏历史事件")
+                event.get_sender_id = lambda: "offline-sender"
+                event.message_obj = SimpleNamespace(message_id=f"history-{index}")
+                req = SimpleNamespace(extra_user_content_parts=[], image_urls=[])
+                async def captured_decision(**_):
+                    if final_reason == "message_expired":
+                        event.set_extra("_at_guard_recorded_at", __import__("time").monotonic() - 90)
+                    elif final_reason == "context_changed":
+                        guard._record_incoming(GateEvent("后来到达的群消息"), "1001")
+                    return replace(result, image_count=1 if final_reason == "reply_no_vision" else 0,
+                                   image_handoff="original")
+                guard.engine.decide = captured_decision
+                guard.context.get_using_provider_async = AsyncMock(
+                    return_value=SimpleNamespace(provider_config={}, get_model=lambda: "text-only"))
+                await guard.guard_llm_request(event, req)
+                actual = event.get_extra("_at_guard_decision")
+                if final_reason == "context_changed":
+                    # 旧版静默策略已废弃：群友新消息只标记上下文推进，保留有效结论。
+                    self.assertEqual(actual["action"], "reply")
+                    self.assertTrue(event.get_extra("_at_guard_context_advanced"))
+                else:
+                    self.assertEqual((actual["action"], actual["reason"]),
+                                     (case["expected_action"], final_reason))
+                await guard.terminate()
 
 
 def main():

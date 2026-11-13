@@ -4,8 +4,8 @@ import types
 import unittest
 from unittest.mock import AsyncMock
 
-from guard_image_history import ImageHistory
-from image_history import TOOL_NAME, reference_id
+from images.guard_image_history import ImageHistory
+from images.image_history import TOOL_NAME, reference_id
 
 
 class Event:
@@ -46,7 +46,7 @@ class HistoryImageToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_one_lookup_result_is_bounded_and_identified(self):
         from unittest.mock import patch
-        with patch("guard_image_history.image_target",
+        with patch("images.guard_image_history.image_target",
                    return_value=types.SimpleNamespace(provider=self.provider, model="fixture")):
             result = json.loads(await self.service.read(self.event, self.scope, self.key))
         self.assertEqual(result["image_id"], self.key)
@@ -90,7 +90,7 @@ class HistoryImageToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_failure_consumes_budget_and_hides_exception(self):
         from unittest.mock import patch
         self.provider.text_chat.side_effect = RuntimeError("SECRET /private/data")
-        with patch("guard_image_history.image_target",
+        with patch("images.guard_image_history.image_target",
                    return_value=types.SimpleNamespace(provider=self.provider, model="fixture")):
             result = await self.service.read(self.event, self.scope, self.key)
         self.assertNotIn("SECRET", result)
@@ -119,7 +119,7 @@ class HistoryImageToolTests(unittest.IsolatedAsyncioTestCase):
     def test_native_tool_attaches_with_scope_and_hides_refs_in_repr(self):
         try:
             from astrbot.core.agent.tool import ToolSet
-            from guard_history_image_tool import ReadHistoryImageTool
+            from images.guard_history_image_tool import ReadHistoryImageTool
         except ImportError:
             self.skipTest("native FunctionTool unavailable in lightweight stubs")
         req = types.SimpleNamespace(
@@ -134,6 +134,10 @@ class HistoryImageToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(tool, ReadHistoryImageTool)
         self.assertNotIn("base64", repr(tool))
         self.assertNotIn("scope=", repr(tool))
+        schema = req.func_tool.openai_schema()[0]["function"]["parameters"]
+        self.assertEqual(schema["required"], ["image_id"])
+        self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(schema["properties"]["image_id"]["type"], "string")
 
     def test_group_blacklist_with_unknown_old_author_prevents_tool(self):
         self.policy.black_active = True
