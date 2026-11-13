@@ -118,8 +118,18 @@ class ReasoningRetry:
             return False
         started = time.monotonic()
         try:
+            payload = self._payload(request)
+            history_view = getattr(self.plugin, "history_view", None)
+            if history_view is not None:
+                try:
+                    from ..input.guard_history_view import supports_search_reader
+                except ImportError:
+                    from input.guard_history_view import supports_search_reader
+                payload["contexts"] = history_view.for_provider(
+                    event, payload["contexts"],
+                    search_available=supports_search_reader(provider))
             retry = await asyncio.wait_for(
-                provider.text_chat(**self._payload(request)), self.timeout())
+                provider.text_chat(**payload), self.timeout())
         except asyncio.TimeoutError:
             event.set_extra(KEY, "timeout")
             emit(event, "main_model_retry", "failed", reason="timeout")
