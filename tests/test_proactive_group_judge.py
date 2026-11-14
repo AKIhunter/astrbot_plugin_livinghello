@@ -18,7 +18,7 @@ class JudgeEvent(FragmentEvent):
 
 
 def group_config(**overrides):
-    config = gate_config(fragment_wait_seconds=0, bot_names=["恰比"])
+    config = gate_config(fragment_wait_seconds=0, bot_names=["助手"])
     config.update(overrides)
     return config
 
@@ -123,7 +123,7 @@ class ProactiveGroupJudgeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_fragment_batch_triggers_only_once_with_merged_text(self):
         clock = Clock()
-        guard = plugin(gate_config(fragment_wait_seconds=3, bot_names=["恰比"]), self.provider)
+        guard = plugin(gate_config(fragment_wait_seconds=3, bot_names=["助手"]), self.provider)
         guard.fragment_wait = FragmentWait(clock)
         first = JudgeEvent("我想问")
         second = JudgeEvent("这个任务怎么做", mid="2")

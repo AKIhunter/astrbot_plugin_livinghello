@@ -229,7 +229,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.clock = Clock()
         self.provider = SequenceProvider(output())
-        self.guard = plugin(gate_config(fragment_wait_seconds=3, bot_names=["恰比"]),
+        self.guard = plugin(gate_config(fragment_wait_seconds=3, bot_names=["助手"]),
                             self.provider)
         self.guard.fragment_wait = FragmentWait(self.clock)
         self.archived = []
@@ -316,7 +316,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_plain_at_text_still_uses_participation_model(self):
         self.guard.context.provider = SequenceProvider(output("silent", 20, False, "others_talking"))
-        event = await self.incoming(FragmentEvent("@恰比 现在回我"))
+        event = await self.incoming(FragmentEvent("@助手 现在回我"))
         await self.finish(event)
         await self.judge(event)
         self.assertTrue(event.stopped)
@@ -411,7 +411,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_name_call_waits_and_can_be_silenced_by_complete_intent(self):
         self.guard.context.provider = SequenceProvider(output("silent", 20, True, "conversation_ended"))
-        a = await self.incoming(FragmentEvent("恰比，帮我看看"))
+        a = await self.incoming(FragmentEvent("助手，帮我看看"))
         b = await self.incoming(FragmentEvent("算了，不用回了", mid="2"), 2)
         await self.finish(a)
         await self.finish(b)
@@ -425,7 +425,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.guard.config["proactive_cooldown_seconds"] = 60
         self.guard.proactive_inflight_until["1001"] = time.monotonic() + 30
         inflight = self.guard.proactive_inflight_until["1001"]
-        event = await self.incoming(FragmentEvent("恰比，在吗"))
+        event = await self.incoming(FragmentEvent("助手，在吗"))
         await self.finish(event)
         await self.judge(event)
         self.assertFalse(event.stopped)
@@ -439,7 +439,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.guard.context.provider = SequenceProvider(output("silent", 20, True, "conversation_ended"))
         self.guard.proactive_inflight_until["1001"] = time.monotonic() + 30
         inflight = self.guard.proactive_inflight_until["1001"]
-        event = await self.incoming(FragmentEvent("恰比，别回"))
+        event = await self.incoming(FragmentEvent("助手，别回"))
         await self.finish(event)
         await self.judge(event)
         self.assertTrue(event.stopped)
@@ -457,7 +457,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.provider.prompts), 1)
 
     async def test_other_user_not_in_batch_and_does_not_reset_original_deadline(self):
-        a = await self.incoming(FragmentEvent("恰比，我想问"))
+        a = await self.incoming(FragmentEvent("助手，我想问"))
         await self.incoming(FragmentEvent("别人说话", sender="bob", mid="2"), 2)
         self.assertEqual(a.extra["_at_guard_fragment_ticket"].batch.deadline, 3)
         await self.finish(a)
@@ -565,7 +565,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
     async def test_earlier_image_and_reply_metadata_are_passed_to_model(self):
         image = Image.fromURL("https://example.invalid/fragment.png")
         quoted = Reply(id="old", sender_id="bob", message_str="被引用的问题")
-        a = await self.incoming(FragmentEvent("恰比，看看", components=[Plain("恰比，看看"), image, quoted]))
+        a = await self.incoming(FragmentEvent("助手，看看", components=[Plain("助手，看看"), image, quoted]))
         b = await self.incoming(FragmentEvent("这张图片", mid="2"), 2)
         await self.finish(a)
         await self.finish(b)
@@ -576,7 +576,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(a.components[1], image)
 
     async def test_long_earlier_text_is_not_lost_to_current_text_limit(self):
-        text = "恰比，" + "背景" * 600 + "末尾关键要求"
+        text = "助手，" + "背景" * 600 + "末尾关键要求"
         a = await self.incoming(FragmentEvent(text))
         b = await self.incoming(FragmentEvent("请统一回答", mid="2"), 2)
         await self.finish(a)
@@ -586,7 +586,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("末尾关键要求", req.extra_user_content_parts[0].text)
 
     async def test_new_context_after_judgment_keeps_explicit_generated_reply(self):
-        event = await self.incoming(FragmentEvent("恰比，看看这个问题"))
+        event = await self.incoming(FragmentEvent("助手，看看这个问题"))
         await self.finish(event)
         await self.judge(event)
         self.guard._record_incoming(FragmentEvent("后续新内容", mid="2"), "1001")
@@ -597,7 +597,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_earlier_source_recall_blocks_complete_batch_before_generation(self):
         self.guard.config.update(reply_recall_group=True, reply_recall_private=True)
-        a = await self.incoming(FragmentEvent("恰比，原问题"))
+        a = await self.incoming(FragmentEvent("助手，原问题"))
         b = await self.incoming(FragmentEvent("补充", mid="2"), 2)
         await self.guard.prepare_reply_delivery(recall(a, mid="1"))
         await self.finish(a)
@@ -608,7 +608,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_earlier_recall_after_window_does_not_block_response(self):
         self.guard.config.update(reply_recall_group=True, reply_recall_private=True)
-        a = await self.incoming(FragmentEvent("恰比，原问题"))
+        a = await self.incoming(FragmentEvent("助手，原问题"))
         b = await self.incoming(FragmentEvent("补充", mid="2"), 2)
         await self.finish(a)
         await self.finish(b)
@@ -621,7 +621,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(b.sent)
 
     async def test_notice_and_bot_own_message_do_not_reset_wait(self):
-        event = await self.incoming(FragmentEvent("恰比，问题"))
+        event = await self.incoming(FragmentEvent("助手，问题"))
         self.clock.now = 2
         notice = recall(event)
         notice.message_str = "不是用户消息"
@@ -634,7 +634,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_recall_registration_does_not_delay_fragment_arrival_clock(self):
         self.guard.config.update(reply_recall_group=True)
-        a = FragmentEvent("恰比，我想问")
+        a = FragmentEvent("助手，我想问")
         await self.guard.observe_message_fragments(a)
         await self.guard.prepare_reply_delivery(a)
         self.clock.now = 2
@@ -645,7 +645,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_arrival_keeps_generated_reply_before_new_message_processing(self):
         self.guard.config.update(reply_recall_group=True)
-        event = await self.incoming(FragmentEvent("恰比，旧问题"))
+        event = await self.incoming(FragmentEvent("助手，旧问题"))
         await self.finish(event)
         await self.judge(event)
         new = FragmentEvent("更新的问题", mid="2")
@@ -657,7 +657,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(event.get_extra("_at_guard_delivery_blocked"))
 
     async def test_reload_stops_pending_pipeline_without_reply(self):
-        event = await self.incoming(FragmentEvent("恰比，问题"))
+        event = await self.incoming(FragmentEvent("助手，问题"))
         waiting = asyncio.create_task(self.guard.coalesce_message_fragments(event).__anext__())
         await asyncio.sleep(0)
         await self.guard.terminate()

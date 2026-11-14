@@ -3555,7 +3555,7 @@ class Main(Star):
         return any(normalized.startswith(name) for name in self._bot_names())
 
     def _bot_names(self) -> list[str]:
-        names = self.config.get("bot_names", ["恰比姐", "恰比"])
+        names = self.config.get("bot_names", ["助手", "bot"])
         if isinstance(names, str):
             names = [names]
         if not isinstance(names, list):

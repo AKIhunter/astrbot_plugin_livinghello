@@ -62,7 +62,7 @@
 | `watermark_scope` | `"private"` | 水位生效范围 |
 | `gate_memory_timeout_seconds` | `1.5` | 背景记忆检索超时（秒） |
 | `gate_hourly_budget` | `60` | 每群每小时判定上限 |
-| `bot_names` | `["恰比姐", "恰比"]` | 机器人称呼 |
+| `bot_names` | `["助手", "bot"]` | 机器人称呼 |
 | `empty_mention_mode` | `"fixed"` | 仅 @机器人时的回复方式 |
 | `empty_mention_reply` | `"嗯？有事就说。"` | 仅 @机器人时的固定文案 |
 | `empty_mention_persona_prompt` | `"群友刚才只@了你，没有附带其他内容。请严格沿用当前会话已经选择的AstrBot人格，用符合该人格身份、关系、语气和说话习惯的一句简短自然话回应。不要解释任务，不要提到AI、系统、人设或提示词，也不要替用户虚构意图。"` | 仅 @机器人时的人格回复要求 |

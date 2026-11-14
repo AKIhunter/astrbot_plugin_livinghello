@@ -141,10 +141,10 @@ class RuntimePolicyTest(unittest.IsolatedAsyncioTestCase):
     async def test_gray_actual_at_and_name_bypass_model_even_private(self):
         for group, components, text in (
                 ("456", [At(qq="999"), Plain("帮我")], "帮我"),
-                ("456", [Plain("恰比 帮我")], "恰比 帮我"),
-                ("", [Plain("恰比 帮我")], "恰比 帮我")):
+                ("456", [Plain("助手 帮我")], "助手 帮我"),
+                ("", [Plain("助手 帮我")], "助手 帮我")):
             provider = SimpleNamespace(text_chat=AsyncMock(side_effect=AssertionError("灰名单唤醒不能参与打分")))
-            guard = plugin(gate_config(message_graylist_qq=["123"], bot_names=["恰比"]), provider)
+            guard = plugin(gate_config(message_graylist_qq=["123"], bot_names=["助手"]), provider)
             event = QQEvent(group=group, text=text, components=components)
             await guard.check_incoming_message_policy(event)
             req = SimpleNamespace(extra_user_content_parts=[], image_urls=[])

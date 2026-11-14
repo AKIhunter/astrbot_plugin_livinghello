@@ -314,7 +314,7 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         event = Event(group="native")
         url = "https://example.invalid/history.png"
         event.message_obj.message = [
-            Reply(id="quoted-message", sender_nickname="恰比",
+            Reply(id="quoted-message", sender_nickname="助手",
                   chain=[Image(url=url)]),
             Plain("你在哪儿找的这些图"),
         ]
@@ -332,7 +332,7 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(req.extra_user_content_parts), 1)
         prompt = req.extra_user_content_parts[0].text
         self.assertIn("LivingHello独立图片理解", prompt)
-        self.assertIn("用户引用了恰比的历史图片消息", prompt)
+        self.assertIn("用户引用了助手的历史图片消息", prompt)
         self.assertIn("画面里有三张蓝色风景图", prompt)
         self.assertNotIn(url, prompt)
         self.assertNotIn("你在哪儿找的这些图", prompt)
@@ -352,7 +352,7 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         )
         event = Event(group="native")
         event.message_obj.message = [
-            Reply(id="quoted-text", sender_nickname="恰比",
+            Reply(id="quoted-text", sender_nickname="助手",
                   chain=[Plain("只是文字")]),
         ]
         event.set_extra("_livinghello_image_owner", "livinghello")

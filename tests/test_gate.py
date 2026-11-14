@@ -232,7 +232,7 @@ class StrictGateTest(unittest.TestCase):
                 return global_config
 
         instance.context = Context()
-        instance.config["bot_names"] = ["龙", "恰比"]
+        instance.config["bot_names"] = ["龙", "助手"]
 
         asyncio.run(instance.initialize())
 
@@ -476,7 +476,7 @@ class HardGateTest(unittest.TestCase):
 
     def test_at_message_bypasses_gate(self):
         provider = FakeProvider('{"act":"silent","conf":1}')
-        instance, event, req = self._ready("恰比姐在吗", provider)
+        instance, event, req = self._ready("助手在吗", provider)
         event.is_at_or_wake_command = True
 
         asyncio.run(instance.guard_llm_request(event, req))
