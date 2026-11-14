@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.5-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.6-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -353,7 +353,7 @@ Find a recent record in **Overview**, copy its `request_id`, and inspect receivi
 
 ## 📦 Changelog
 
-Current version **2.7.5** fixes the ordinary group-message decision path, private-chat image summaries, history retrieval and historical-image authorization. The current repository also includes model-selected image generation, text-before-image delivery, revised-prompt feedback and native LivingMemory scope integration.
+Current version **2.7.6** adds first-frame GIF understanding and video frame sampling, trims the decision log to the latest 100 entries, and records why a decision was skipped (including quiet-hours blocks). Image-generation HTTP errors now use the plugin logger.
 
 [Read the full changelog](CHANGELOG.md)
 

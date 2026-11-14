@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.5-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.6-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -351,7 +351,7 @@ flowchart TD
 
 ## 📦 更新日志
 
-当前版本 **2.7.5**：修复普通群聊判定入口、私聊图片摘要、历史记忆补查及旧图授权检查。当前仓库也包含“模型自主选择生图、先文字后图片、实际画法回传”和 LivingMemory 原生作用域适配。
+当前版本 **2.7.6**：新增动图首帧与视频抽帧理解，判定记录精简到最近 100 条，并补齐作息拦截与各静默出口的留痕；生图接口的 HTTP 错误改用插件自身日志。
 
 [查看完整版本记录](CHANGELOG.md)
 

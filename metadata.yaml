@@ -9,7 +9,7 @@ desc: >-
   群白名单为空时普通群消息也会主动进入判定，可按开关关闭或放开到全部群消息。
 author: AKIhunter
 repo: https://github.com/AKIhunter/astrbot_plugin_livinghello
-version: 2.7.5
+version: 2.7.6
 astrbot_version: ">=4.29.1"
 social_link: https://github.com/AKIhunter
 tags:
