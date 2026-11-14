@@ -1908,6 +1908,8 @@
     { key: "reply_quote_enabled", label: "引用当前消息", type: "bool" },
     { key: "reply_mention_enabled", label: "@当前发送者", type: "bool" },
     { key: "expression_strip_emoji", label: "清理文本Emoji和颜文字", type: "bool" },
+    { key: "expression_punct_cleanup", label: "标点清理", type: "bool" },
+    { key: "expression_punct_space", label: "清理后空格数", type: "select", options: [["1", "1 个空格"], ["2", "2 个空格"], ["random", "1~2 随机"]] },
     { key: "expression_forbid_phrases", label: "口头禅禁忌", type: "list", placeholder: "行吧，我认, 这谁啊" },
   ];
   const INTEGRATION_FIELDS = [
@@ -2010,6 +2012,20 @@
     reply_quote_enabled: { desc: "首条回复引用你这条消息，群里能看清在回谁。", ex: "开启：回复挂在原消息下方；关闭：直接发正文。" },
     reply_mention_enabled: { desc: "在群聊回复开头 @ 当前发送者；私聊不适用。", ex: "开启：群消息显示 @某人；私聊仍直接发正文。" },
     expression_strip_emoji: { desc: "发送前删掉正文里的 Emoji 和颜文字，避免和人格设定冲突。", ex: "开启：「好的😊」变成「好的」；代码块内不改动。" },
+    expression_punct_cleanup: {
+      desc: "把书面标点换成间隔：行末句号、逗号、顿号、分号都换成空格；句中句号保留；感叹号、问号、省略号不动。代码块内不改动。",
+      examples: [
+        "开启：「才聊过两句，你上来就这个。」变成「才聊过两句 你上来就这个」",
+        "关闭：标点原样发出，适合排错时对照模型原话。",
+      ],
+    },
+    expression_punct_space: {
+      desc: "替换标点时插入几个空格。只影响替换出来的间隔，不改动原有换行和正文里的其他空白。",
+      examples: [
+        "选「2 个空格」：「才聊过两句  你上来就这个」，停顿更明显。",
+        "选「1~2 随机」：每处独立随机，像手打出来的，节奏不整齐。",
+      ],
+    },
     integrate_livingemotion_catchup: { desc: "与爬楼插件配合，让它先把上下文备好再判定；未安装该插件时无效果。", ex: "开启且装了从绫：判定前先拿到爬楼上下文；未装则自动跳过。" },
     understand_expand_forward: { desc: "收到合并转发时展开里面的内容再理解，而不是只看到「合并转发」四个字。", ex: "开启：转发里的 10 条消息都会被读到；关闭只按标题判断。" },
     understand_forward_max_nodes: { desc: "展开转发时最多读多少条，防止超大转发把输入撑爆。", ex: "设 50 条：转发里有 300 条也只读前 50 条。" },
@@ -2598,6 +2614,9 @@
       reply_mention_enabled: currentConfig("expression_takeover_enabled") === true,
       expression_strip_emoji: currentConfig("expression_takeover_enabled") === true,
       expression_forbid_phrases: currentConfig("expression_takeover_enabled") === true,
+      expression_punct_cleanup: currentConfig("expression_takeover_enabled") === true,
+      expression_punct_space: currentConfig("expression_takeover_enabled") === true
+        && currentConfig("expression_punct_cleanup") === true,
     };
     Object.entries(active).forEach(([key, enabled]) => {
       const control = el("field-" + key);
@@ -4079,7 +4098,7 @@
   });
   el("flowReload").addEventListener("click", loadFlow);
   el("imageGroupHelp").addEventListener("click",ev=>{
-    ev.preventDefault();nativeHelp("AI生图","独立于BiliBot。选择AstrBot模型或多API路由的具体上游，使用已保存连接；API必须支持生图。主模型通过工具按需生成或编辑本次图片，按服务器自然日共用次数上限。每次请求计数，0禁止；超时和结果未知不自动重试。");
+    ev.preventDefault();nativeHelp("AI生图","独立于BiliBot。选择AstrBot模型或多API路由的具体上游，使用已保存连接；API必须支持生图。主模型通过工具按需生成或编辑本次图片，按服务器自然日共用次数上限。每次请求计数，0禁止；超时和结果未知不自动重试。全局风格提示词会自动附加在每次描述之后，留空则不加。");
   });
   window.addEventListener("resize",()=>["gateGraph","generateGraph"].forEach(id=>drawArrows(el(id))));
   el("decisionCategories").addEventListener("click", ev => {

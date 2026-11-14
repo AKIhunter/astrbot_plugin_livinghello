@@ -1,6 +1,7 @@
 """主回复方式：确定性引用/@与Emoji清理；断句和媒体处理遵循宿主。"""
 from __future__ import annotations
 
+import random
 import re
 
 from astrbot.api.message_components import At, Plain, Reply
@@ -15,6 +16,86 @@ _TRAILING_SPACE = re.compile(r"[ \t]+$", re.MULTILINE)
 _TAIL_PUNCT = r"[，,、；;：:。．.！!？?~…]*"
 # 删除后只清理行首行尾的停顿号，句末的。！？属于正文语气，保留。
 _EDGE_PUNCT = re.compile(r"^[，,、；;：:]+|[，,、；;：:]+[ \t]*$", re.MULTILINE)
+
+
+# ── 标点规范化 ──────────────────────────────────────────────────────────
+# 行末句号换成间隔；句中句号保留；逗号、顿号、分号换成间隔。
+# 感叹号、问号、省略号承载语气，一律不动。代码块与 ASCII 小数点不碰。
+_CN_TO_SPACE = re.compile(r"[，、；;]")
+_CN_PERIOD = re.compile(r"[。．]")
+# 行末（含行尾空白）的连续句号整段换成间隔；句中的句号不受影响。
+_TRAILING_PERIOD = re.compile(r"[。．]+[ \t]*$", re.MULTILINE)
+_ASCII_COMMA_CJK = re.compile(r"(?<=[\u4e00-\u9fff\u3000-\u303f]),(?=[\u4e00-\u9fff\u3000-\u303f0-9A-Za-z])")
+_LINE_TRAIL = re.compile(r"[ \t]+$", re.MULTILINE)
+_MANY_BLANK = re.compile(r"\n{3,}")
+_INLINE_EDGE = re.compile(r"^[ \t]+|[ \t]+$", re.MULTILINE)
+_MULTI_SPACE = re.compile(r"[ \t]{2,}")
+# 目标宽度为 2 时只能压 3 个以上，否则二次调用会把两个空格压回一个。
+_MULTI_SPACE_WIDE = re.compile(r"[ \t]{3,}")
+# 占位符：先记「这里要断开」，等空白全部收拢完再统一换成 N 个空格。
+_GAP = "\x00"
+_GAP_RUN = re.compile(r"\x00(?:[ \t]*\x00)*")
+_GAP_PAD = re.compile(r"[ \t]*\x00[ \t]*")
+_GAP_EDGE = re.compile(r"(?m)^[ \t]*\x00|\x00[ \t]*$")
+
+
+def punct_gap_width(mode):
+    """把配置值翻译成实际空格数。未知值退回 1，不抛异常。"""
+    if mode == "2":
+        return 2
+    if mode == "random":
+        return random.choice((1, 2))
+    return 1
+
+
+def normalize_punctuation(text, keep_inner_period=True, space="1"):
+    """把标点换成间隔。幂等：重复调用结果不变。
+
+    keep_inner_period=True  句中句号保留（2026-11-14 用户指定）
+    space  '1' 一个空格 / '2' 两个空格 / 'random' 每处随机 1~2
+    """
+    if not text:
+        return text
+    parts = _FENCE.split(text)
+    for index, part in enumerate(parts):
+        if not part or part.startswith(("```", "~~~")):
+            continue
+        value = part
+        # 先处理行末句号，再处理句中；顺序反了会误伤刚换出来的占位。
+        value = _TRAILING_PERIOD.sub(_GAP, value)
+        if not keep_inner_period:
+            value = _CN_PERIOD.sub(_GAP, value)
+        value = _ASCII_COMMA_CJK.sub(_GAP, value)
+        value = _CN_TO_SPACE.sub(_GAP, value)
+        value = _GAP_RUN.sub(_GAP, value)
+        value = _GAP_PAD.sub(_GAP, value)
+        if space == "1":
+            value = _MULTI_SPACE.sub(" ", value)
+        else:
+            value = _MULTI_SPACE_WIDE.sub("  ", value)
+        value = _GAP_EDGE.sub("", value)
+        value = _LINE_TRAIL.sub("", value)
+        value = _MANY_BLANK.sub("\n\n", value)
+        value = _INLINE_EDGE.sub("", value)
+        value = re.sub(_GAP, lambda _m: " " * punct_gap_width(space), value)
+        parts[index] = value
+    return "".join(parts)
+
+
+def punct_cleanup_enabled(config):
+    """开关：默认开。读不到配置时保持开启，避免静默失效。"""
+    getter = getattr(config, "get", None)
+    if not callable(getter):
+        return True
+    value = getter("expression_punct_cleanup")
+    return True if value is None else bool(value)
+
+
+def punct_space_mode(config):
+    """空格宽度：'1' / '2' / 'random'。未知值按 1 处理。"""
+    getter = getattr(config, "get", None)
+    value = getter("expression_punct_space") if callable(getter) else None
+    return value if value in ("1", "2", "random") else "1"
 
 
 def forbid_phrases(config):

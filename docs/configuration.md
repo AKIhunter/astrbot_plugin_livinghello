@@ -30,6 +30,8 @@
 | `reply_recall_group` | `false` | 群聊撤回消息不回复 |
 | `reply_recall_private` | `false` | 私聊撤回消息不回复 |
 | `expression_strip_emoji` | `true` | 清理文本Emoji和颜文字 |
+| `expression_punct_cleanup` | `true` | 标点清理 |
+| `expression_punct_space` | `"1"` | 标点清理的空格数 |
 | `understand_expand_forward` | `true` | 展开合并转发 |
 | `understand_forward_max_nodes` | `60` | 最多展开条数 |
 | `understand_forward_max_depth` | `2` | 转发最大层数 |
@@ -194,10 +196,17 @@ LivingMemory / LivingEmotion 接入开关均默认关闭，安装插件不等于
 | `protocol` | `"images"` | 标准 images/generations / images/edits；chat_images 使用 chat/completions 的 image 模态 |
 | `daily_limit` | `20` | 全插件按服务器本地自然日共享，0禁止生图，范围0–1000 |
 | `size` | `"1024x1024"` | 支持auto、预设尺寸及512–2048像素的自定义宽高 |
+| `style_prompt` | `""` | 全局风格提示词，每次生图附加在描述之后；默认不附加，最多1000字 |
 | `timeout_seconds` | `90` | 10–500秒；不自动切换上游或重试 |
 <!-- image-defaults:end -->
 
 每次请求1张，调用前持久预占额度；失败、超时、取消后的已请求次数不退回。`image_generation_quota.sqlite3` 保存散列请求标识及计数，重载不清零，同消息相同请求不重复生成。生成图片保存在 `generated_images/`，后续生图时清理超过7天的文件。
+
+风格提示词固定附加在每次描述之后，用户这轮明确要求画风时以用户描述为准；两者合计超过4000字时只截断风格部分，描述保持完整。可以直接整段替换成想要的画风，例如：
+
+- 像素游戏：`像素游戏画面，16位色，硬边像素，有限调色板，等距视角，无抗锯齿，画面内不出现文字与水印。`
+- 水彩手绘：`水彩手绘，纸张纹理，颜料自然晕染，边缘柔和，留白充足，不出现文字和水印。`
+- 日系胶片：`日系胶片人像，35mm 胶片质感，轻微颗粒，柔和逆光，低饱和，真实皮肤质感。`
 
 ## 请求诊断存储
 

@@ -7,12 +7,16 @@ from astrbot.api.message_components import Plain
 from astrbot.core.agent.message import TextPart
 
 try:
-    from .guard_expression import forbid_phrases, strip_forbidden
+    from .guard_expression import (forbid_phrases, strip_forbidden,
+                                       normalize_punctuation, punct_cleanup_enabled,
+                                       punct_space_mode)
     from .guard_native_reply import managed_options, second_period_regex
     from ..observability.guard_request_trace import emit
     from .guard_thinking_filter import strip_thinking
 except ImportError:
-    from reply.guard_expression import forbid_phrases, strip_forbidden
+    from reply.guard_expression import (forbid_phrases, strip_forbidden,
+                                          normalize_punctuation, punct_cleanup_enabled,
+                                          punct_space_mode)
     from reply.guard_native_reply import managed_options, second_period_regex
     from observability.guard_request_trace import emit
     from reply.guard_thinking_filter import strip_thinking
@@ -102,6 +106,11 @@ class ReplySegments:
             text = strip_forbidden(
                 text, forbid_phrases(getattr(self.plugin, "config", None) or {})
             )
+            # 标点规范化必须在这里：它是所有非流式正文的唯一汇合点，
+            # 早于分段，所以每条气泡各自干净，也不会在合并时又拼出逗号。
+            _pcfg = getattr(self.plugin, "config", None)
+            if punct_cleanup_enabled(_pcfg):
+                text = normalize_punctuation(text, space=punct_space_mode(_pcfg))
             pending = ""
             if not text.strip():
                 return

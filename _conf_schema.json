@@ -91,6 +91,19 @@
     "default": true,
     "description": "清理文本Emoji和颜文字"
   },
+  "expression_punct_cleanup": {
+    "type": "bool",
+    "default": true,
+    "description": "标点清理",
+    "hint": "开：行末句号换空格、逗号顿号分号换空格、句中句号保留。关：标点原样发出。"
+  },
+  "expression_punct_space": {
+    "type": "string",
+    "default": "1",
+    "options": ["1", "2", "random"],
+    "description": "标点清理的空格数",
+    "hint": "1=固定一个空格；2=固定两个空格；random=每处随机 1 或 2 个。只影响替换标点时插入的间隔，原有换行不变。"
+  },
   "expression_forbid_phrases": {
     "type": "list",
     "default": [],

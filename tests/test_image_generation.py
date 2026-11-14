@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock, patch
 
 from astrbot.api.message_components import Image, Plain
 from main import Main
-from images.guard_image_settings import ImageSettings, MAX_IMAGE_BYTES
+from images.guard_image_settings import (DEFAULTS, MAX_PROMPT_CHARS, STYLE_MAX_CHARS,
+                                         ImageSettings, MAX_IMAGE_BYTES)
 from reply.guard_native_reply import NativeReplyError
 
 
@@ -102,6 +103,64 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         for patch in (dict(size="2049x2048"), dict(size="511x1024"), dict(timeout_seconds=501)):
             with self.assertRaises(NativeReplyError):
                 await self.service.save(self.body(**patch))
+
+    def test_legacy_config_without_style_prompt_is_migrated_on_load(self):
+        legacy = {key: value for key, value in self.service.values.items() if key != "style_prompt"}
+        legacy.update(enabled=True, provider_id="native-image")
+        self.service.path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+        loaded = ImageSettings(self.plugin)
+        self.assertFalse(loaded.error)
+        self.assertEqual(loaded.values["style_prompt"], DEFAULTS["style_prompt"])
+        # 迁移只在内存补默认值，旧文件保持原样；下一次保存写回完整键集合。
+        self.assertNotIn("style_prompt", json.loads(self.service.path.read_text(encoding="utf-8")))
+
+    async def test_save_on_legacy_disk_config_is_not_rejected(self):
+        legacy = {key: value for key, value in self.service.values.items() if key != "style_prompt"}
+        self.service.path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+        service = ImageSettings(self.plugin)
+        service.ensure_tool = lambda: object()
+        result = await service.save(dict(expected_revision=service.read()["revision"],
+                                         values={"style_prompt": "统一水彩风格"}))
+        self.assertEqual(result["values"]["style_prompt"], "统一水彩风格")
+        self.assertIn("style_prompt", json.loads(self.service.path.read_text(encoding="utf-8")))
+
+    async def test_external_disk_change_returns_conflict_not_unreadable(self):
+        await self.service.save(self.body(style_prompt="水彩"))
+        stored = json.loads(self.service.path.read_text(encoding="utf-8"))
+        stored["daily_limit"] = 7
+        self.service.path.write_text(json.dumps(stored, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaises(NativeReplyError) as raised:
+            await self.service.save(self.body(style_prompt="油画"))
+        self.assertEqual(raised.exception.status, 409)
+        self.assertIn("已变化", str(raised.exception))
+
+    async def test_corrupt_disk_config_reports_unreadable(self):
+        self.service.path.write_text("{not json", encoding="utf-8")
+        with self.assertRaises(NativeReplyError) as raised:
+            await self.service.save(self.body(style_prompt="水彩"))
+        self.assertEqual(raised.exception.status, 503)
+        self.assertIn("不可读", str(raised.exception))
+
+    async def test_style_prompt_saves_reloads_and_rejects_oversize(self):
+        await self.service.save(self.body(style_prompt="统一水彩风格"))
+        replacement = ImageSettings(self.plugin)
+        self.assertEqual(replacement.values["style_prompt"], "统一水彩风格")
+        with self.assertRaises(NativeReplyError):
+            await self.service.save(self.body(style_prompt="风" * (STYLE_MAX_CHARS + 1)))
+        with self.assertRaises(NativeReplyError):
+            await self.service.save(self.body(style_prompt=False))
+
+    def test_style_prompt_is_appended_after_description_with_length_guard(self):
+        self.assertEqual(ImageSettings.styled_prompt("画猫", ""), "画猫")
+        self.assertEqual(ImageSettings.styled_prompt("画猫", "   "), "画猫")
+        self.assertEqual(ImageSettings.styled_prompt("画猫", " 水彩 "), "画猫\n水彩")
+        # 描述本身过长时保持原样，不因为风格再被截断。
+        oversized = "猫" * MAX_PROMPT_CHARS
+        self.assertEqual(ImageSettings.styled_prompt(oversized, "水彩"), oversized)
+        # 合计超限只截断风格，用户描述完整保留。
+        combined = ImageSettings.styled_prompt("猫" * (MAX_PROMPT_CHARS - 2), "风" * STYLE_MAX_CHARS)
+        self.assertTrue(combined.startswith("猫" * (MAX_PROMPT_CHARS - 2) + "\n"))
+        self.assertEqual(len(combined), MAX_PROMPT_CHARS)
 
     def test_dashscope_image_response_is_preserved(self):
         self.assertEqual(ImageSettings.extract({"output": {"choices": [{"message": {
@@ -331,6 +390,17 @@ class ImageHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.received[0][1]["n"],1)
         self.assertEqual(self.received[1][1]["image"],self.output.read_bytes())
         self.assertEqual(self.received[2][1]["modalities"],["image"])
+
+    async def test_style_prompt_reaches_both_generation_protocols(self):
+        values={**self.service.values,"style_prompt":"统一水彩风格"}
+        connection=(self.base,"local-fixture-key","image-model")
+        await ImageSettings._request(self.service,values,connection,"画猫",None)
+        values={**values,"protocol":"chat_images"}
+        await ImageSettings._request(self.service,values,connection,"画猫",
+                                     (self.output.read_bytes(),"image/png"))
+        self.assertEqual(self.received[0][1]["prompt"],"画猫\n统一水彩风格")
+        self.assertEqual(self.received[1][1]["messages"][0]["content"][0]["text"],
+                         "画猫\n统一水彩风格")
 
     async def test_trace_counts_real_http_api_and_successful_image_delivery(self):
         from observability.guard_request_trace import RequestTrace, ID_KEY

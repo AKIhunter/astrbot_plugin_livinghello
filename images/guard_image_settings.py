@@ -13,6 +13,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import random
 import sqlite3
 import tempfile
 import time
@@ -32,6 +33,8 @@ except ImportError:
 
 TOOL_NAME = "livinghello_generate_image"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_PROMPT_CHARS = 4000
+STYLE_MAX_CHARS = 1000
 IMAGE_EVENT = ContextVar("livinghello_image_event", default=None)
 FIELDS = {
     "enabled": ("启用AI生图", "bool", "主模型可按需要调用文生图或图生图工具，关闭后不提供工具。"),
@@ -40,10 +43,13 @@ FIELDS = {
     "protocol": ("生图接口", "protocol", "标准图片接口使用images/generations和images/edits；对话生图接口使用chat/completions的image模态。"),
     "daily_limit": ("每日生图次数上限", "int", "全插件共用，按服务器本地自然日重置。每次上游请求计一次，失败和结果未知也计数；0禁止生图，重载不清零。"),
     "size": ("生成尺寸", "size", "使用服务支持的尺寸，建议分辨率范围512x512~2048x2048；可选自定义宽高。每次只请求1张图片。"),
+    "style_prompt": ("画面风格提示词（全局）", "text", "每次生图自动附加在描述之后，用来固定整套出图风格；留空则完全不附加。用户明确要求画风时以用户描述为准，本段作为补充。最多1000字；与描述合计超过4000字时只截断风格部分。"),
     "timeout_seconds": ("生图超时（秒）", "int", "10~500秒，超时不会换上游补发，防止重复收费。原自主回复时效仍生效。"),
 }
 DEFAULTS = dict(enabled=False, provider_id="", model="", protocol="images",
-                daily_limit=20, size="1024x1024", timeout_seconds=90)
+                daily_limit=20, size="1024x1024",
+                style_prompt="",
+                timeout_seconds=90)
 
 
 class ImageSettings:
@@ -57,18 +63,64 @@ class ImageSettings:
         self.ledger = self.directory / "image_generation_quota.sqlite3" if self.directory else None
         self.values = copy.deepcopy(DEFAULTS)
         self.error = ""
+        self._stamp = None
         if self.path and self.path.exists():
             try:
-                loaded = json.loads(self.path.read_text(encoding="utf-8"))
-                if not isinstance(loaded, dict) or set(loaded) != set(DEFAULTS):
-                    raise ValueError("invalid settings")
-                self._validate(loaded)
-                self.values = loaded
+                self.values = self._load(self.path)
+                self._stamp = self._mtime(self.path)
             except Exception:
                 self.error = "生图配置损坏，请恢复备份；当前禁止生图。"
         self._tool = None
         self._closed = False
         self._tasks = set()
+
+    @staticmethod
+    def _mtime(path):
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def refresh(self):
+        """磁盘配置被外部改过就重载一次；写坏了保留旧值，不打断在线生图。
+
+        以前只在插件加载时读一次，直接改 image_generation.json 必须重启才生效，
+        表现为「改了额度还是画不了」。这里按 mtime 判断，每轮只多一次 stat。
+        """
+        path = self.path
+        if not path:
+            return
+        stamp = self._mtime(path)
+        if stamp is None or stamp == self._stamp:
+            return
+        try:
+            values = self._load(path)
+        except Exception:
+            # 外部写坏了：保留上一份可用配置，只留警告，不把功能锁死。
+            self._stamp = stamp
+            self.plugin.logger.warning("[LivingHello] 生图配置热重载失败，继续使用旧值")
+            return
+        self.values = values
+        self._stamp = stamp
+        self.error = ""
+        self.plugin.logger.warning(
+            "[LivingHello] 生图配置已热重载：enabled=%r limit=%r provider=%r",
+            values["enabled"], values["daily_limit"], values["provider_id"])
+
+    @classmethod
+    def _load(cls, path):
+        """读取磁盘配置并按旧版缺省字段迁移，返回与内存同口径的值。
+
+        旧文件没有 style_prompt：补默认值后再校验。加载与保存比较
+        共用这一套键，避免把「旧格式」误判成磁盘已被外部改动。
+        """
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if (not isinstance(loaded, dict) or set(loaded) - set(DEFAULTS)
+                or set(DEFAULTS) - {"style_prompt"} - set(loaded)):
+            raise ValueError("invalid settings")
+        loaded.setdefault("style_prompt", DEFAULTS["style_prompt"])
+        cls._validate(loaded)
+        return loaded
 
     def targets(self):
         """连接秘密仅在服务端使用，返回浏览器的列表只保留ID和模型名。"""
@@ -127,6 +179,7 @@ class ImageSettings:
             return db.execute("SELECT COUNT(*) FROM calls WHERE day=?", (self.today(),)).fetchone()[0]
 
     def read(self):
+        self.refresh()
         providers = self._public_targets()
         try:
             used = self.used()
@@ -152,6 +205,8 @@ class ImageSettings:
                 valid = isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
             elif key == "protocol":
                 valid = isinstance(value, str) and value in {"images", "chat_images"}
+            elif key == "style_prompt":
+                valid = isinstance(value, str) and len(value) <= STYLE_MAX_CHARS
             elif key == "size":
                 valid = isinstance(value, str) and value in {"auto", "1024x1024", "1536x1024", "1024x1536"}
                 if not valid and isinstance(value, str):
@@ -171,10 +226,13 @@ class ImageSettings:
             if body["expected_revision"] != revision(self.values):
                 raise NativeReplyError("生图设置已变化，请重新读取；草稿保留", 409)
             try:
-                if self.path.exists() and json.loads(self.path.read_text()) != self.values:
-                    raise NativeReplyError("生图磁盘配置已变化，请重新读取", 409)
+                disk = self._load(self.path) if self.path.exists() else None
             except (ValueError, OSError) as exc:
                 raise NativeReplyError("生图磁盘配置不可读，请恢复备份", 503) from exc
+            # 冲突必须在 try 之外抛出：NativeReplyError 本身就是 ValueError，
+            # 放在 try 里会被上面的 except 吞掉并误报成「配置不可读」。
+            if disk is not None and disk != self.values:
+                raise NativeReplyError("生图磁盘配置已变化，请重新读取", 409)
             patch = body["values"]
             if not isinstance(patch, dict) or not patch or set(patch) - set(FIELDS):
                 raise NativeReplyError("只能保存独立生图公开字段")
@@ -193,6 +251,8 @@ class ImageSettings:
             except OSError as exc:
                 raise NativeReplyError("生图配置保存失败，运行设置未改变", 500) from exc
             self.values = values
+            # 记下自己写的版本，避免紧接着的 read() 把刚存的内容当成外部改动重载。
+            self._stamp = self._mtime(self.path)
             return self.read()
 
     def _write(self, values):
@@ -248,6 +308,8 @@ class ImageSettings:
         return True
 
     def attach(self, event, req):
+        # 面板保存之外的外部改动（直接改 JSON）也要在下一轮生效。
+        self.refresh()
         if self._closed or self.error or not self.values["enabled"] or self.values["daily_limit"] == 0:
             emit(event, "image_tool_attachment", "disabled", reason="image_unavailable")
             return
@@ -266,12 +328,23 @@ class ImageSettings:
         if not any(t.name == TOOL_NAME for t in tools.tools):
             tools.add_tool(tool)
         req.func_tool = tools
+        if getattr(self.plugin, "_livinghello_detached_enabled", False):
+            instruction = ("生图需求必须先调用livinghello_generate_image取得本轮决定，"
+                           "然后才给承接或婉拒的文字；工具决定前不要承诺会画。")
+            if instruction not in (getattr(req, "system_prompt", "") or ""):
+                req.system_prompt = (getattr(req, "system_prompt", "") or "") + "\n" + instruction
         # 标记本次请求挂过生图工具，供最晚钩子复核它是否被后续插件覆盖。
         event.set_extra("_livinghello_image_tool_attached", True)
         emit(event, "image_tool_attachment", "success", tool=TOOL_NAME,
              count=len(tools.tools), types=[t.name for t in tools.tools])
 
     def blocked(self, event):
+        if getattr(self.plugin, "_livinghello_detached_enabled", False):
+            if event.get_extra("_at_guard_superseded"):
+                return True
+            check = getattr(self.plugin, "_stale_reason", None)
+            if check and check(event, self.plugin._group_key(event)):
+                return True
         if self._closed or event.get_extra("_at_guard_delivery_blocked"):
             return True
         if self.plugin._delivery().recalled(event):
@@ -324,7 +397,142 @@ class ImageSettings:
                                   if type(c).__name__ == "Image")
         return result[:1]
 
-    async def generate(self, event, prompt, use_reference=False):
+    async def prepare_image_job(self, event, prompt, use_reference):
+        self.refresh()
+        cached = event.get_extra("_livinghello_image_job")
+        if cached:
+            return cached.get("reply") or "这条生图请求正在确认，请勿重复调用；不要提前承诺。"
+        if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 4000 \
+                or not isinstance(use_reference, bool):
+            return "生图参数无效。"
+        if self.blocked(event) or self._closed or self.error or not self.values["enabled"]:
+            self.plugin.logger.warning(
+                "[LH-img] job 拒绝：blocked=%r closed=%r error=%r enabled=%r superseded=%r",
+                self.blocked(event), self._closed, bool(self.error), self.values["enabled"],
+                event.get_extra("_at_guard_superseded"))
+            return "当前不能生图，请自然回应，不要承诺。"
+        job = dict(status="deciding", prompt=prompt.strip(), use_reference=use_reference,
+                   values=copy.deepcopy(self.values), reply="")
+        event.set_extra("_livinghello_image_job", job)
+        try:
+            from ..integrations.guard_livingemotion import current_emotion
+        except ImportError:
+            from integrations.guard_livingemotion import current_emotion
+        mood = await current_emotion(self.context, event, getattr(self.plugin, "config", None))
+        job["emotion"] = mood
+        negative = bool(mood) and max(mood["emotions"][k] for k in
+                                     ("anger", "sadness", "fear")) >= .6
+        # 用户确认的负面阈值；每个事件只抽一次，拒绝不占生图额度。
+        draw = random.random() if negative else None
+        job["draw"] = draw
+        if negative and draw < .5:
+            job.update(status="refused", reply=(
+                "当前情绪明显负面，这轮决定不生图。请结合当前情绪自然地婉拒，"
+                "仍正常文字回应；不要积极承诺、不要自动重试此工具。当前情绪："
+                + json.dumps(mood, ensure_ascii=False)))
+            return job["reply"]
+        if self.blocked(event):
+            job.update(status="cancelled", reply="本轮已被新消息顶替，不要再回应或生图。")
+            return job["reply"]
+        if use_reference and not self.references(event):
+            job.update(status="failed", reply="需要参考图，请自然地请用户补图，不要承诺已经开画。")
+            return job["reply"]
+        try:
+            self.connection(job["values"])
+            if self.used() >= self.values["daily_limit"]:
+                raise NativeReplyError("今日生图次数已用完", 429)
+        except Exception as exc:
+            self.plugin.logger.warning(
+                "[LH-img] job 预检失败：provider=%r used=%r limit=%r err=%r",
+                job["values"].get("provider_id"), self.used(), self.values["daily_limit"],
+                f"{type(exc).__name__}: {exc}"[:120])
+            # 额度用尽属于每日上限，不是接口故障；必须让模型说人话，
+            # 否则它会把「画不了」解释成「接口没缓过来」，把人带偏去查 provider。
+            if isinstance(exc, NativeReplyError) and getattr(exc, "status_code", None) == 429:
+                job.update(status="quota", reply=(
+                    "今日生图额度已经用完（每日上限，不是接口故障）。"
+                    "请自然告诉用户今天画满了、明天再画，不要说接口坏了、正在修复或稍后重试。"))
+            else:
+                job.update(status="failed", reply="现在暂时画不了，请自然说明；不要重试此工具。")
+            return job["reply"]
+        job.update(status="prepared", reply=(
+            "生图已准备，尚未请求上游。请先用一句自然的话承接需求，不要说图片已完成；"
+            "你的文字投递成功后才后台生成并发图，请勿再调用本工具。"))
+        if mood:
+            job["reply"] += "当前情绪：" + json.dumps(mood, ensure_ascii=False)
+        return job["reply"]
+
+    def start_image_job(self, event):
+        job = event.get_extra("_livinghello_image_job")
+        if not job or job["status"] != "prepared":
+            self.plugin.logger.warning(
+                "[LH-img] start 跳过：job=%r status=%r",
+                bool(job), (job or {}).get("status"))
+            return
+        if self.blocked(event) or job["values"] != self.values:
+            job["status"] = "cancelled"
+            self.plugin.logger.warning(
+                "[LH-img] start 取消：blocked=%r values_changed=%r superseded=%r",
+                self.blocked(event), job["values"] != self.values,
+                event.get_extra("_at_guard_superseded"))
+            return
+        job["status"] = "running"
+        task = asyncio.create_task(self._run_image_job(event, job))
+        event.set_extra("_livinghello_image_task", task)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _run_image_job(self, event, job):
+        try:
+            self.plugin.logger.warning("[LH-img] 后台开跑：prompt=%d字", len(job["prompt"]))
+            response = await self.generate(
+                event, job["prompt"], job["use_reference"], _execute=True)
+            if self.blocked(event):
+                job["status"] = "cancelled"
+                self.plugin.logger.warning(
+                    "[LH-img] 后台结果被拦：blocked=True resp=%r", str(response)[:80])
+                return
+            pending = event.get_extra("_livinghello_pending_image")
+            if pending:
+                event.set_extra("_livinghello_pending_image", None)
+                request_id = pending["request_id"]
+                try:
+                    from astrbot.api.message_components import Image
+                    await event.send(event.chain_result([Image.fromFileSystem(pending["path"])]))
+                except Exception:
+                    self.mark(request_id, "unknown")
+                    job["status"] = "unknown"
+                    return  # 平台投递不明确：不追加回复、不自动重发。
+                self.mark(request_id, "sent")
+                job["status"] = "sent"
+            else:
+                job["status"] = "unknown" if "结果未知" in response else "failed"
+                self.plugin.logger.warning(
+                    "[LH-img] 后台无图：status=%r resp=%r", job["status"], str(response)[:120])
+                from astrbot.api.message_components import Plain
+                mood = job.get("emotion")
+                line = "这张图暂时没顺利出来……先放一放吧。"
+                if mood and max(mood["emotions"][k] for k in
+                                ("anger", "sadness", "fear")) >= .6:
+                    dominant = max(("anger", "sadness", "fear"), key=mood["emotions"].get)
+                    feeling = {"anger": "有点烦", "sadness": "心情有点低落",
+                               "fear": "有点紧张"}[dominant]
+                    line = f"这会儿{feeling}，图也没顺利出来……先缓缓吧。"
+                if not self.blocked(event):
+                    await event.send(event.chain_result([Plain(line)]))
+        except asyncio.CancelledError:
+            job["status"] = "cancelled"
+            raise
+        except Exception:
+            job["status"] = "unknown"
+        finally:
+            clear = getattr(self.plugin, "_clear_reply_turn", None)
+            if clear:
+                clear(event)
+
+    async def generate(self, event, prompt, use_reference=False, *, _execute=False):
+        if getattr(self.plugin, "_livinghello_detached_enabled", False) and not _execute:
+            return await self.prepare_image_job(event, prompt, use_reference)
         service = event.get_extra(TRACE_KEY)
         # 同步工具内部步骤关联宿主span，次数仍只在实际调用边界累计。
         parent_span = next(reversed(event.get_extra("_livinghello_tool_spans", {}).values()), None)
@@ -337,7 +545,7 @@ class ImageSettings:
             emit(event, "image_preflight", status, reason=reason)
             if service:
                 service.end(event, span, status, reason=reason)
-        if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 4000 or not isinstance(use_reference, bool):
+        if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= MAX_PROMPT_CHARS or not isinstance(use_reference, bool):
             outcome("failed", "invalid_parameters")
             return "生图参数无效：需要1~4000字的描述及图生图开关。"
         if self._closed or self.error or not self.values["enabled"]:
@@ -509,10 +717,26 @@ class ImageSettings:
             raise NativeReplyError("当前图片文件不可用或过大")
         return self._check_image(path.read_bytes())
 
+    @staticmethod
+    def styled_prompt(prompt, style):
+        """把全局风格追加到本次描述末尾，两种生图协议都走这一处。
+
+        风格为空时原样返回；描述本身才是这轮真正要的画面，总量超过
+        上限时只截断风格部分，保证用户描述完整。
+        """
+        style = (style or "").strip()
+        if not style:
+            return prompt
+        room = MAX_PROMPT_CHARS - len(prompt) - 1
+        if room <= 0:
+            return prompt
+        return prompt + "\n" + style[:room]
+
     async def _request(self, values, connection, prompt, reference):
         import aiohttp
         base, key, model = connection
         headers = {"Authorization": f"Bearer {key}"}
+        prompt = self.styled_prompt(prompt, values.get("style_prompt", ""))
         request = dict(model=model, prompt=prompt, n=1, size=values["size"])
         protocol = values["protocol"]
         if protocol == "chat_images":

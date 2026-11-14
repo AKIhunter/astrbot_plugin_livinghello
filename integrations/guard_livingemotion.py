@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import math
 from collections.abc import Mapping
 try:
     from .guard_coupling import enabled as coupling_enabled
@@ -12,6 +13,35 @@ except ImportError:
 PLUGIN = "astrbot_plugin_livingemotion"
 STATE_MARKER = "<!--livingemotion:state:v1-->"
 API_TIMEOUT = 0.5
+
+
+async def current_emotion(context, event, config=None):
+    """读取公开 v1 快照；不可用/越界/重载均不猜测情绪。"""
+    api, scope = await _current(context, event, "get_current_emotion", config)
+    if api is None:
+        return None
+    try:
+        value = await asyncio.wait_for(
+            api.get_current_emotion(context=scope, event=event), API_TIMEOUT)
+        data = value.get("data") if isinstance(value, dict) else None
+        if (not _same_request(context, event, api, scope)
+                or value.get("status") != "ok" or value.get("api_version") != 1
+                or not isinstance(data, dict) or data.get("mode") != "active"
+                or data.get("may_influence_reply") is not True):
+            return None
+        if config is not None and not coupling_enabled(context, config, "livingemotion"):
+            return None
+        emotions = data.get("emotions")
+        if not isinstance(emotions, dict):
+            return None
+        for key in ("anger", "sadness", "fear"):
+            n = emotions.get(key)
+            if isinstance(n, bool) or not isinstance(n, (int, float)) \
+                    or not math.isfinite(n) or not 0 <= n <= 1:
+                return None
+        return dict(emotions=emotions.copy(), labels=list(data.get("labels") or [])[:8])
+    except Exception:
+        return None
 
 
 def is_state_line(text):

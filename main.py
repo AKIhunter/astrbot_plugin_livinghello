@@ -1053,6 +1053,17 @@ class Main(Star):
             if event.get_extra("_at_guard_recorded_at") is None:
                 self._record_incoming(event, self._group_key(event))
             return
+        # 纯 QQ 表情（Face/Mface：大拇指、爱心这些）既不进 message_str，
+        # 也不算 Image/File/Record/Video，宿主会判定「空消息且无媒体」直接
+        # 跳过 LLM 请求 —— 表现就是发表情包没反应。这里把占位文本写回事件，
+        # 让宿主认为有内容，判定的也是同一份文本。
+        # 只对私聊生效：群里一个表情就触发回复会刷屏，群聊维持原行为。
+        if (event.get_message_type() != MessageType.GROUP_MESSAGE
+                and not str(getattr(event, "message_str", "") or "").strip()):
+            placeholder = self._text_or_face(event)
+            if placeholder.strip():
+                event.message_str = placeholder
+                self.logger.warning("[LivingHello] 纯表情消息补占位：%s", placeholder)
         touch(event, "input_parse")
         # 先登记本轮起点，再解析图片：首条是图片时也要能被后续新消息顶替。
         self._note_reply_turn(event)
@@ -1077,9 +1088,11 @@ class Main(Star):
         # 当前会话启用从绫时，感知与记忆都按其原生钩子处理。
         if not self._delivery().recalled(event):
             await self._understanding().attach(event, req)
+        self.logger.warning("[LH-trace] 感知钩子返回，接下来轮到情绪/记忆/契约")
 
     @filter.on_llm_request(priority=-maxsize)
     async def attach_reply_contract(self, event: AstrMessageEvent, req: ProviderRequest):
+        self.logger.warning("[LH-trace] 契约钩子开始")
         clean_request(req,
                       emotion=coupling_enabled(self.context, self.config, "livingemotion"),
                       memory=coupling_enabled(self.context, self.config, "livingmemory"))
@@ -1161,6 +1174,7 @@ class Main(Star):
 
         # 复用线上最终装配钩子，避免新增重复监听或覆盖图片/思考清理。
         await self.fit_final_request_images(event, req)
+        self.logger.warning("[LH-trace] 契约钩子完成，即将请求主模型")
 
     @filter.on_llm_request(priority=-maxsize - 10)
     async def verify_image_tool(self, event: AstrMessageEvent, req: ProviderRequest):
@@ -1930,8 +1944,11 @@ class Main(Star):
             0, int(self.config.get("duplicate_window_seconds", 120))
         )
         self._prune_fingerprints(now, duplicate_window)
+        # 去重是给群聊防刷屏用的；私聊里连发同一个表情（👍）会被当成刷屏
+        # 直接吞掉，用户只看到「没回」。私聊不做这道拦截。
         if (
             fingerprint
+            and is_group
             and (group_key, fingerprint) in self.replied_fingerprints
             and now - self.replied_fingerprints[(group_key, fingerprint)]
             < duplicate_window

@@ -1027,6 +1027,8 @@ def _coerce(key: str, value: Any) -> Any:
             raise ValueError(f"未知的水位范围: {text}")
         if key == "proactive_group_judge" and text not in {"off", "whitelist_empty", "all"}:
             raise ValueError(f"未知的群消息主动判定范围: {text}")
+        if key == "expression_punct_space" and text not in {"1", "2", "random"}:
+            raise ValueError(f"未知的空格数: {text}")
         if key == "empty_mention_mode" and text not in {"fixed", "persona"}:
             raise ValueError(f"未知的 @ 回复方式: {text}")
         if key == "empty_mention_reply":
