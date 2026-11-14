@@ -118,6 +118,7 @@ class Main(Star):
         self.context_revision: dict[str, int] = defaultdict(int)
         # 水位轮次：按会话记录仍在生成/待发送的事件，供新消息顶替旧回复。
         self.active_reply_turns: dict[str, dict] = {}
+        self._livinghello_detached_enabled = True
         self.recent_images = defaultdict(lambda: deque(maxlen=30))
         self.image_cache = ImageObservationCache()
         self.engine = GateEngine(self.config, self.data_dir, self.logger)
@@ -1666,6 +1667,9 @@ class Main(Star):
         await self._delivery().prepare(event)
 
     async def terminate(self):
+        turns = getattr(self, "_reply_turns", None)
+        if turns is not None:
+            turns.close()
         fallback = getattr(self, "reply_fallback", None)
         if fallback is not None:
             await fallback.close()
@@ -1756,6 +1760,7 @@ class Main(Star):
 
     async def initialize(self) -> None:
         """Register the console bridge, then install bot names as wake prefixes."""
+        self.logger.info("[LivingHello] 独立回复已启用：短锁保存输入，旧任务停止后不等待收尾；生图先文字后生成")
         self._ensure_classifier_probe_runtime()
         self._classifier_probe_closed = False
         self._normalize_gate_mode()
@@ -2866,6 +2871,19 @@ class Main(Star):
         生图工具只在事件上留下待发路径，不自己发图；顺序交给宿主：
         文字回复先出去，这里补图，节奏更接近真人。发送失败不重试。
         """
+        if event.get_extra("_livinghello_image_job"):
+            # 试跑异步生图：先确认最后一个文字气泡已投递，再启动后台请求。
+            plan = event.get_extra("_at_guard_delivery_plan")
+            if plan and plan.get("failed"):
+                event.get_extra("_livinghello_image_job")["status"] = "cancelled"
+                return
+            if plan and not plan.get("failed"):
+                chain = getattr(event.get_result(), "chain", None) or []
+                if any(not isinstance(c, (Reply, At)) and
+                       id(c) not in plan.get("attempted", {}) for c in chain):
+                    return
+            self._image_generation().start_image_job(event)
+            return
         pending = event.get_extra("_livinghello_pending_image")
         if not pending:
             return
@@ -3097,6 +3115,9 @@ class Main(Star):
                 and not self._event_policy(event).get("requires_explicit", False))
 
     def _clear_reply_turn(self, event: AstrMessageEvent) -> None:
+        job = event.get_extra("_livinghello_image_job")
+        if job and job.get("status") in {"deciding", "prepared", "running"}:
+            return  # 文字已发，后台图仍需接受后续消息顶替。
         turns = getattr(self, "active_reply_turns", None)
         if not turns:
             return
@@ -3123,7 +3144,7 @@ class Main(Star):
 
         起点是消息到达时间 `_at_guard_received_at`，不是 lease、也不是主模型开始；
         因此首条是图片、还卡在视觉理解前也能被后续新消息顶替。
-        这里只打标记，不打断生成：真正的丢弃发生在发送前复核与分段发送处。
+        先标记顶替并发停止信号，不等待旧任务；发送前仍复核归属。
         """
         if not self._watermark_applies(event):
             return
@@ -3158,12 +3179,30 @@ class Main(Star):
                     if not old.get_extra("_at_guard_delivery_blocked"):
                         old.set_extra("_at_guard_delivery_blocked",
                                       "superseded_by_new_message")
+                    coordinator = old.get_extra("_livinghello_reply_turns")
+                    if coordinator is not None:
+                        coordinator.cancel(old)
                     emit(old, "watermark", "superseded", age_ms=round(age * 1000, 1))
                     self.logger.debug(
                         "[LivingHello] 水位内新消息顶替旧回复: key=%s age=%.2fs window=%.1fs",
                         key, age, window)
         # 强引用事件本体：生成/视觉批次还在跑时，靠这条记录找到旧事件打标记。
         turns[key] = {"event": event, "received_at": now}
+        if getattr(self, "_livinghello_detached_enabled", False):
+            # 仅接管原水位覆盖的会话，窗口外继续保留原顺序。
+            try:
+                from .reply.guard_reply_turns import ReplyTurns
+            except ImportError:
+                from reply.guard_reply_turns import ReplyTurns
+            coordinator = getattr(self, "_reply_turns", None)
+            if coordinator is None:
+                coordinator = self._reply_turns = ReplyTurns()
+            event.set_extra("_livinghello_reply_turns", coordinator)
+            if previous and previous.get("event") is not event:
+                old = previous["event"]
+                if not old.get_extra("_at_guard_superseded"):
+                    event.set_extra("_livinghello_reply_predecessor",
+                                    coordinator.tasks.get(id(old), (None, None))[1])
 
     def _stale_reason(self, event: AstrMessageEvent, group_key: str) -> str:
         """只返回「必须拦下」的原因：消息已撤回、正文明显过期、或被新消息顶替。
