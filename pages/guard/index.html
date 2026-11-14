@@ -3042,7 +3042,7 @@
   const TRACE_STATUS={registered:"已注册",unregistered:"未注册",unsupported:"宿主不支持",unverified:"无法核实",
     running:"执行中",success:"成功",failed:"失败",timeout:"超时",cancelled:"已取消",disabled:"未开启",
     skipped:"未调用 / 跳过",uncollected:"未采集",completed:"已完成",awaiting_delivery:"等待最终投递",
-    active:"进行中",incomplete:"结束状态未采集",silent:"已静默",observed:"仅记录",merged:"已合并"};
+    active:"进行中",incomplete:"结束状态未采集",interrupted:"已中断",silent:"已静默",observed:"仅记录",merged:"已合并"};
   const LISTENER_STATUS={registered:"正常",unregistered:"未注册",unsupported:"宿主不支持",unverified:"无法核实"};
   const TRACE_NAMES={livingemotion:"LivingEmotion 接入",livingmemory:"LivingMemory 接入",message_policy:"消息名单",message_policy_archive:"归档后名单",message_policy_request:"请求名单",
     receive:"消息接收",input_parse:"输入解析",fragments:"碎片合并",recall:"撤回保护",
@@ -3060,7 +3060,7 @@
     "silent","skipped","disabled","uncollected"];
   const TRACE_TONES={
     normal:new Set(["registered","success","completed","silent"]),
-    abnormal:new Set(["unregistered","failed","timeout","cancelled","incomplete"]),
+    abnormal:new Set(["unregistered","failed","timeout","cancelled","incomplete","interrupted"]),
     observe:new Set(["observed","running","awaiting_delivery","active"]),
   };
   function traceTone(status) {
@@ -3077,6 +3077,14 @@
   function shortTraceReason(value) {
     const text=String(value ? (REASON_LABEL[value]||value) : "").trim();
     return text.length>42 ? text.slice(0,41)+"…" : text;
+  }
+  // 请求已到终止态，但内部某个步骤还停在 running/active：
+  // 那一轮不可能再往下走了（进程退出、服务重启或请求被丢弃），
+  // 留着「执行中」会让人一直等一个永远不会来的结果。
+  const TRACE_TERMINAL=new Set(["completed","silent","merged","incomplete","cancelled","failed"]);
+  function settleStatus(trace, status) {
+    if((status==="running" || status==="active") && TRACE_TERMINAL.has(trace.state)) return "interrupted";
+    return status;
   }
   function traceStage(trace, keys, fallback) {
     const states=keys.map(key=>trace.features?.[key]?.status).filter(Boolean);
@@ -3156,15 +3164,15 @@
         : row.src==="error"
           ? (row.reason==="timeout" || row.reason==="deadline" ? "timeout" : "failed")
           : observed ? "observed" : row.action==="reply" ? "success" : "silent";
-      const modelStatus=traceStage(trace,["main_model","response","agent_done"],
-        observed || row.action==="reply" ? "uncollected" : "skipped");
+      const modelStatus=settleStatus(trace,traceStage(trace,["main_model","response","agent_done"],
+        observed || row.action==="reply" ? "uncollected" : "skipped"));
       const toolCalls=trace.summary?.tool_calls;
       const toolStatus=toolCalls===0 ? "skipped" :
-        traceStage(trace,["tools","image_tool","image_preflight","image_quota","image_api","image_download",
-          "image_delivery"],"uncollected");
+        settleStatus(trace,traceStage(trace,["tools","image_tool","image_preflight","image_quota","image_api",
+          "image_download","image_delivery"],"uncollected"));
       const sendStatus=trace.state==="completed" ? "success" :
         trace.state==="silent" ? "skipped" :
-        traceStage(trace,["delivery","send","lifecycle"],trace.state||"uncollected");
+        settleStatus(trace,traceStage(trace,["delivery","send","lifecycle"],trace.state||"uncollected"));
       const stages=[
         ["接收消息",traceStage(trace,["receive","input_parse","fragments"],"uncollected"),
           trace.features?.fragments?.status==="success"?"已完成碎片整理":"消息进入处理链路"],
@@ -3174,6 +3182,7 @@
           : row.action==="reply"?"放行，允许进入回复生成":
             "静默 · "+traceReason(row.reason||decisionData(row).model_reason||"")],
         ["生成回复",modelStatus,modelStatus==="skipped"?"判断静默，未进入回复生成":
+          modelStatus==="interrupted"?"主模型生成期间进程退出或被重启，本轮没有写完":
           traceReason(trace.features?.main_model?.reason)||"主模型生成与Agent完成状态"],
         ["执行工具",toolStatus,(toolCalls??"未采集")+" 次工具调用 · "+
           (trace.summary?.image_api_calls??"未采集")+" 次绘图API"],
