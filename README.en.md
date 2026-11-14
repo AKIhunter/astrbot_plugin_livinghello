@@ -8,7 +8,8 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
 [![Version](https://img.shields.io/badge/version-2.7.5-3a8060)](CHANGELOG.md)
-[![Languages](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87%20%2F%20English-66736c)](README.md)
+
+[简体中文](README.md) · **English**
 
 **Follow the topic · Decide when to join · Organize replies · Draw when needed**
 

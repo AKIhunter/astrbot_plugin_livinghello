@@ -8,7 +8,8 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
 [![Version](https://img.shields.io/badge/version-2.7.5-3a8060)](CHANGELOG.md)
-[![Languages](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87%20%2F%20English-66736c)](README.en.md)
+
+**简体中文** · [English](README.en.md)
 
 **👂 听懂话题 · 🤔 判断接话 · 💬 整理回复 · 🎨 按需画图**
 
