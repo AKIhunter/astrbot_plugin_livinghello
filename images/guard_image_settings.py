@@ -778,7 +778,7 @@ class ImageSettings:
                         detail = (await response.text())[:400]
                     except Exception:
                         detail = "<响应体不可读>"
-                    logging.getLogger("astrbot").warning(
+                    self.plugin.logger.warning(
                         "[LivingHello] 生图接口 HTTP %s endpoint=%s model=%s resp=%s",
                         response.status, endpoint, model, " ".join(detail.split()))
                     raise NativeReplyError(f"生图接口HTTP {response.status}")

@@ -240,11 +240,11 @@ flowchart TD
 接入位置：**AstrBot → 插件 → LivingHello → 配置 → 接入 LivingMemory / 接入 LivingEmotion**。两个开关默认关闭，安装插件本身不会自动开启联动。
 
 <details>
-<summary>🔌 记忆写入、从绫与模型路由</summary>
+<summary>🔌 记忆写入、配套插件与模型路由</summary>
 
 **记忆：** Hello 的接入开关控制召回；关闭它不会关闭 Memory 自身的归档或写工具。长期写入需要实际启用写工具，由主模型成功调用，不能把“计划写入”当作已保存。
 
-**从绫：** 保留感知与固定人格兼容；动态情绪、关系和记忆使用统一功能耦合。[配套说明](docs/architecture.md#从绫配套)。
+**配套插件：** 保留感知与固定人格兼容；动态情绪、关系和记忆使用统一功能耦合。[配套说明](docs/architecture.md#配套插件联用)。
 
 **多 API 路由：** 使用已注册 Provider 或支持的具体上游；看图、生图、语音和对话模型的能力需要分别核对。
 

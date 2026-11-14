@@ -444,11 +444,13 @@ class DecisionLog:
     def __init__(
         self,
         path: Path | None,
-        ring_size: int = 600,
+        ring_size: int = 100,
         max_bytes: int = 1024 * 1024,
+        keep_archives: int = 3,
     ) -> None:
         self.path = path
         self.max_bytes = max_bytes
+        self.keep_archives = max(0, int(keep_archives))
         self.ring: deque[dict[str, Any]] = deque(maxlen=ring_size)
         if path is not None:
             self._load_tail()
@@ -505,8 +507,23 @@ class DecisionLog:
             if self.path.stat().st_size > self.max_bytes:
                 rotated = self.path.with_name(self.path.name + f".archive-{time.time_ns():020d}")
                 self.path.replace(rotated)
+                self._prune_archives()
         except OSError:
             pass
+
+    def _prune_archives(self) -> None:
+        """只留最近几个归档，避免历史无限堆积。"""
+        if self.path is None or self.keep_archives <= 0:
+            return
+        try:
+            archives = sorted(self.path.parent.glob(self.path.name + ".archive-*"))
+        except OSError:
+            return
+        for old in archives[:max(0, len(archives) - self.keep_archives)]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
 
     def recent(self, limit: int = 60, query: str = "", category: str = "") -> list[dict[str, Any]]:
         q = str(query or "").strip().casefold()[:120]

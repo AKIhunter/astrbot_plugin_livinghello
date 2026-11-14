@@ -27,7 +27,7 @@ FIELDS = {
     "tts_provider_id": ("provider_tts_settings.provider_id", "语音回复", "默认 TTS 模型", "tts",
                        "同步所选AstrBot原生配置的默认文本转语音模型。留空时可由会话单独选择。"),
     "persona_id": ("agent_runner.config.persona.persona_id", "人格", "人格（保存后固定）", "persona",
-                   "手动选择并保存后固定此配置的人格，覆盖会话旧人格和从绫人格选择；不会因刷新或试跑自动换人。"),
+                   "手动选择并保存后固定此配置的人格，覆盖会话旧人格和配套插件的人格选择；不会因刷新或试跑自动换人。"),
     "t2i": ("t2i", "文本排版转图", "启用文本排版转图", "bool",
             "把回复文字排版成图片，适合长回复；不是AI文生图。"),
     "t2i_word_threshold": ("t2i_word_threshold", "文本排版转图", "转图字数阈值", "int",

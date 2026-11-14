@@ -115,7 +115,7 @@ git archive --format=zip HEAD -o /tmp/livinghello-release.zip
 
 | 字段 | 含义 |
 | --- | --- |
-| `reference_messages_old_to_new` | 本地流水优先，再追加从绫感知块中未重复的近期消息 |
+| `reference_messages_old_to_new` | 本地流水优先，再追加配套插件感知块中未重复的近期消息 |
 | `reference_count` | 排除省略提示后的去重消息总数 |
 | `background_memory` | 长期事实、关系状态及无法安全解析的原块 |
 
@@ -133,7 +133,7 @@ git archive --format=zip HEAD -o /tmp/livinghello-release.zip
 | vector_adapter | 旧宿主无法拆分的向量检索总等待 |
 | retrieval_* | LivingMemory 各并发检索分支等待 |
 
-总等待包含子步骤，并发分支可能等同一个任务，**不能相加当作总耗时**。指标不包含碎片等待、从绫爬楼和主回复生成。未调用显示“未调用”，旧记录未采集显示“未采集”，不冒充 0 ms。失败和取消也在 finally 中采集。
+总等待包含子步骤，并发分支可能等同一个任务，**不能相加当作总耗时**。指标不包含碎片等待、配套插件爬楼和主回复生成。未调用显示“未调用”，旧记录未采集显示“未采集”，不冒充 0 ms。失败和取消也在 finally 中采集。
 
 LivingMemory 的 `core/retrieval/request_timing.py` 可通过请求局部 ContextVar 传指标；并发隔离、嵌套恢复，不改变身份、查询或隐私边界。配套没有采集器时不要猜细分时间。
 

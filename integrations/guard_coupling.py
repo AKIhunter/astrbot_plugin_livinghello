@@ -59,7 +59,7 @@ def clean_request(req, *, emotion, memory):
     if not memory:
         prefixes += ["<RAG-Faiss-Memory>", "<Agent-Recall-Policy>",
                      "<at_guard_memory", "<!--livingemotion:memory:v2-->"]
-    # 从绫动态层由协作入口让位；清理旧请求残留，固定人设和感知仍保留。
+    # 配套插件的动态层由协作入口让位；清理旧请求残留，固定人设和感知仍保留。
     prefixes += ["<!--congling:state-->", "<!--congling:memory-->",
                  "<!--congling:crawled_history-->", "<!--congling:wake_reply-->",
                  "<!--congling:night-->"]

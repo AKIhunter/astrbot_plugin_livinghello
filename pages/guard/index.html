@@ -866,7 +866,7 @@
   <button class="btn primary" id="saveBtn">保存参数</button>
   <span class="msg" id="saveMsg" role="status"></span>
 </div>
-<p class="sub">可独立使用，也可与从绫配套，仅管理回复判定与发送方式。</p>
+<p class="sub">可独立使用，也可与配套插件联用，仅管理回复判定与发送方式。</p>
 
 <nav class="page-tabs" role="tablist" aria-label="控制台页面">
   <button id="tab-overview" role="tab" aria-controls="panel-overview" aria-selected="true" tabindex="0" data-page="overview">运行概览</button>
@@ -1067,7 +1067,7 @@
     <div id="mentionFields"></div>
   </section>
   <section data-sub="mention" class="card reply-card reply-compact-card" id="understanding">
-    <h2>内容理解</h2><p class="sub" id="understandingMode">当前独立处理转发、引用、卡片、图片和语音。</p>
+    <h2>内容理解</h2><p class="sub" id="understandingMode">当前独立处理转发、引用、卡片、图片、动图、视频和语音。</p>
     <div id="understandingFields"></div>
   </section>
 </div>
@@ -1738,7 +1738,7 @@
     el("policyWhiteStatus").textContent=snap.whitelist_active ? "白名单已启用 · 仅回复命中范围" : "白名单未启用 · 不限制回复范围";
     const companion=snap.companion||{};
     el("policyCompanion").textContent=!snap.healthy ? "名单配置异常 · 保护策略生效" :
-      companion.active ? (companion.supported?"从绫：已支持历史过滤":"从绫：需更新配套") : "独立模式";
+      companion.active ? (companion.supported?"配套插件：已支持历史过滤":"配套插件：需更新版本") : "独立模式";
     el("policyCompanion").className=!snap.healthy || companion.supported===false ? "err" : "msg";
   }
   function renderPolicyFields() {
@@ -1828,6 +1828,14 @@
     image_cache_busy: "同会话图片判断正在进行",
     at_call: "明确呼叫 @ 机器人，直接回复",
     wake: "称呼唤醒，直接回复",
+    "blocked_by_state:night_sleep": "LivingEmotion 睡觉时间",
+    "blocked_by_state:night_drowsy": "LivingEmotion 犯困中",
+    "blocked_by_state:night_deep_sleep": "LivingEmotion 深度睡眠",
+    "blocked_by_state": "LivingEmotion 作息不参与",
+    "blocked_by_night:night_sleep": "LivingEmotion 睡觉时间",
+    "blocked_by_night:night_drowsy": "LivingEmotion 犯困中",
+    "blocked_by_night:night_deep_sleep": "LivingEmotion 深度睡眠",
+    "blocked_by_night": "LivingEmotion 作息不参与",
     private_off: "私聊关闭判定，交给主模型回复",
     classifier_cooling: "判定模型断线冷却中",
     classifier_needs_attention: "判定模型故障待处理",
@@ -1924,6 +1932,11 @@
     { key: "understand_card_parse", label: "解析卡片和小程序", type: "bool" },
     { key: "understand_image_enabled", label: "图片理解", type: "bool" },
     { key: "understand_image_provider_id", label: "图片理解模型（可选覆盖）", type: "provider", role: "vision" },
+    { key: "understand_gif_enabled", label: "动图按首帧理解", type: "bool" },
+    { key: "understand_video_enabled", label: "视频理解", type: "bool" },
+    { key: "understand_video_max_seconds", label: "视频最长处理时长", type: "number", min: 3, max: 120, step: 1, unit: "秒" },
+    { key: "understand_video_frames", label: "视频抽帧张数", type: "number", min: 1, max: 12, step: 1, unit: "张" },
+    { key: "understand_video_provider_id", label: "视频理解模型（可选覆盖）", type: "provider", role: "vision" },
     { key: "understand_voice_enabled", label: "语音转文字理解", type: "bool" },
     { key: "understand_voice_provider_id", label: "语音理解模型", type: "provider", role: "speech" },
   ];
@@ -2008,7 +2021,7 @@
     classifier_outage_self_heal_seconds: { desc: "故障持续超过这段时间仍不恢复时，放弃拦截直接放行判定，避免一条上游故障把整个群永久卡死。质量会降级，但不会全静默。", ex: "设 1800 秒：上游挂了半小时还没好，就先恢复对话，不再让所有消息静默。" },
     understand_hard_timeout_seconds: { desc: "解析加理解合计最多等多久；超过就按本次没看懂图片处理，并提醒回复模型不要猜画面。", ex: "设 20 秒：一张图解析加识别合计 20 秒仍未完成，本次按没看懂处理。" },
     reply_typing_chars_per_second: { desc: "模拟打字的换算速度；0=不模拟（默认），正文生成完立即发送。数值越大等待越短，模拟等待会从回复有效期里扣除。", ex: "设 8 字/秒：60 字回复约等 7.5 秒；设 0：完全不等待。" },
-    expression_takeover_enabled: { desc: "本页接管回复的发送方式（引用、@、清理）；关闭则交给从绫或宿主原生方式，下面几项同时失效。", ex: "开启：可控制引用与@；关闭：完全沿用宿主原有发送行为。" },
+    expression_takeover_enabled: { desc: "本页接管回复的发送方式（引用、@、清理）；关闭则交给配套插件或宿主原生方式，下面几项同时失效。", ex: "开启：可控制引用与@；关闭：完全沿用宿主原有发送行为。" },
     reply_quote_enabled: { desc: "首条回复引用你这条消息，群里能看清在回谁。", ex: "开启：回复挂在原消息下方；关闭：直接发正文。" },
     reply_mention_enabled: { desc: "在群聊回复开头 @ 当前发送者；私聊不适用。", ex: "开启：群消息显示 @某人；私聊仍直接发正文。" },
     expression_strip_emoji: { desc: "发送前删掉正文里的 Emoji 和颜文字，避免和人格设定冲突。", ex: "开启：「好的😊」变成「好的」；代码块内不改动。" },
@@ -2026,7 +2039,7 @@
         "选「1~2 随机」：每处独立随机，像手打出来的，节奏不整齐。",
       ],
     },
-    integrate_livingemotion_catchup: { desc: "与爬楼插件配合，让它先把上下文备好再判定；未安装该插件时无效果。", ex: "开启且装了从绫：判定前先拿到爬楼上下文；未装则自动跳过。" },
+    integrate_livingemotion_catchup: { desc: "与爬楼插件配合，让它先把上下文备好再判定；未安装该插件时无效果。", ex: "开启且装了配套插件：判定前先拿到爬楼上下文；未装则自动跳过。" },
     understand_expand_forward: { desc: "收到合并转发时展开里面的内容再理解，而不是只看到「合并转发」四个字。", ex: "开启：转发里的 10 条消息都会被读到；关闭只按标题判断。" },
     understand_forward_max_nodes: { desc: "展开转发时最多读多少条，防止超大转发把输入撑爆。", ex: "设 50 条：转发里有 300 条也只读前 50 条。" },
     understand_forward_max_depth: { desc: "转发里套转发时最多往下钻几层；0 表示不继续展开嵌套。", ex: "设 2 层：A 转发 B、B 转发 C，读到 C 就停。" },
@@ -2399,7 +2412,7 @@
       const boolHint = () => field.key === "gate_main_fallback_enabled"
         ? (input.checked ? "视觉异常时兜底一次" : "视觉异常则静默")
         : field.key === "apply_to_private" ? (input.checked ? "私聊也走判定" : "私聊直接放行")
-        : field.key === "expression_takeover_enabled" ? (input.checked ? "主回复按本页方式发送" : "使用从绫或宿主的原生方式")
+        : field.key === "expression_takeover_enabled" ? (input.checked ? "主回复按本页方式发送" : "使用配套插件或宿主的原生方式")
         : (input.checked ? "已开启" : "已关闭");
       tip.textContent = boolHint();
       input.addEventListener("change", () => {
@@ -2518,8 +2531,8 @@
   }
 
   function renderConglingCompat() {
-    // 从绫已移除；此处仅维护理解模式的静态说明。
-    el("understandingMode").textContent = "当前独立处理转发、引用、卡片、图片和语音。";
+    // 配套插件已移除；此处仅维护理解模式的静态说明。
+    el("understandingMode").textContent = "当前独立处理转发、引用、卡片、图片、动图、视频和语音。";
   }
 
   function currentConfig(key) {
@@ -2819,12 +2832,16 @@
     if(row.src==="bypass") return "直接回复 · " + (REASON_LABEL[row.reason] || row.reason);
     if(row.src==="rule") return "规则过滤：" + (REASON_LABEL[row.reason] || row.reason);
     if(row.src==="error") return "未完成有效判定：" + (REASON_LABEL[row.reason] || row.reason);
+    if(row.src==="peer") return "未参与判定 · " + (REASON_LABEL[row.reason] || row.reason || "外部插件拦截");
     const act=d.act==="reply" ? "模型建议参与" : d.act==="silent" ? "模型建议静默" : "未记录模型动作";
     return act + " · " + understanding(d.understood);
   }
 
   function textDecisionSummary(row) {
     if(row.reply_error) return replyErrorSummary(row);
+    if(row.src==="peer") {
+      return "未判定 · " + (REASON_LABEL[row.reason] || row.reason || "外部插件拦截");
+    }
     const attempts=Array.isArray(row.attempts)?row.attempts.filter(a=>a.stage==="text"):[];
     if(!attempts.length) {
       if(["rule","bypass","delivery"].includes(row.src)) {

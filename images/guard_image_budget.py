@@ -59,6 +59,63 @@ def _shrink(data: bytes) -> tuple[bytes, str]:
         return data, ""
 
 
+GIF_MAX_BYTES = 10 * 1024 * 1024
+_GIF_STILL = True
+
+
+def set_gif_still(enabled: bool) -> None:
+    """由插件按配置调用；默认开启，改配置后下一次请求即生效。"""
+    global _GIF_STILL
+    _GIF_STILL = bool(enabled)
+
+
+def _looks_like_gif(url: str) -> bool:
+    head = url[:300].lower()
+    return ".gif" in head or "image/gif" in head
+
+
+def _gif_first_frame(data: bytes) -> tuple[bytes, str]:
+    """GIF 取第一帧转 JPEG；失败返回 (b"", "")。"""
+    try:
+        from PIL import Image
+    except ImportError:
+        return b"", ""
+    try:
+        image = Image.open(io.BytesIO(data))
+        image.seek(0)
+        if image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+        image.thumbnail((MAX_SIDE, MAX_SIDE))
+        out = io.BytesIO()
+        image.save(out, format="JPEG", quality=QUALITY, optimize=True)
+        return out.getvalue(), "image/jpeg"
+    except Exception:
+        return b"", ""
+
+
+def _fetch_gif(url: str, timeout: float = 8.0) -> bytes:
+    import urllib.request
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read(GIF_MAX_BYTES + 1)
+
+
+def _gif_to_still_uri(url: str) -> str:
+    """下载 GIF 并转成静态首帧的 data URI；任何异常都返回空串。"""
+    if not _GIF_STILL or not _looks_like_gif(url):
+        return ""
+    try:
+        raw = _fetch_gif(url)
+    except Exception:
+        return ""
+    if not raw or len(raw) > GIF_MAX_BYTES:
+        return ""
+    data, mime = _gif_first_frame(raw)
+    if not data or not mime:
+        return ""
+    return "data:%s;base64,%s" % (mime, base64.b64encode(data).decode())
+
+
 def _priority_order(urls: list[str]) -> list[str]:
     """超量时决定留谁：保头保尾，先砍中间。
 
@@ -89,6 +146,11 @@ def fit_sync(urls: list[str]) -> tuple[list[str], int]:
             continue
         seen.add(url)
         if url.startswith(DIRECT_PREFIX) or url.startswith("/"):
+            still = _gif_to_still_uri(url)
+            if still and total + len(still) <= MAX_TOTAL_B64:
+                total += len(still)
+                kept.append(still)
+                continue
             kept.append(url)
             continue
         if len(url) > MAX_SINGLE_B64:

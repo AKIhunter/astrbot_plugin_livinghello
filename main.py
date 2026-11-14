@@ -304,6 +304,63 @@ class Main(Star):
             return {"read_allowed": False, "reply_allowed": False,
                     "reason": "gate_unavailable"}
 
+    def note_peer_block(self, *, peer="", reason="", group_id="", platform="",
+                        adapter_id="", session_kind="", sender_id="", message_id="",
+                        session_id="", detail=""):
+        """记录一条「被其他插件拦下」的判定，供对端插件调用。
+
+        只追加到 decisions.jsonl 让「最近判定」看得见，不进判定统计、
+        不消耗模型预算、也不改变任何放行结果。
+        去重：同一条消息（peer+reason+group+message_id）只记一次；
+        拿不到 message_id 时退化成「同群同原因每分钟一条」，避免刷屏。
+        """
+        engine = getattr(self, "engine", None)
+        decision_log = getattr(engine, "log", None)
+        if decision_log is None or not callable(getattr(decision_log, "add", None)):
+            return False
+        peer = str(peer or "")
+        reason = str(reason or "blocked_by_peer")
+        group_id = str(group_id or "")
+        if str(session_kind or "") != "group":
+            return False
+        if not group_id:
+            return False
+        dedupe = (peer, reason, group_id,
+                  str(message_id or "") or int(time.time() // 60))
+        seen = getattr(self, "_peer_block_seen", None)
+        if seen is None:
+            seen = self._peer_block_seen = deque(maxlen=400)
+            self._peer_block_seen_set = set()
+        if dedupe in self._peer_block_seen_set:
+            return False
+        self._peer_block_seen_set.add(dedupe)
+        seen.append(dedupe)
+        if len(self._peer_block_seen_set) > 800:
+            self._peer_block_seen_set = set(seen)
+        try:
+            import hashlib
+            request_id = hashlib.md5(
+                ("%s|%s|%s" % (group_id, message_id, str(peer))).encode("utf-8")
+            ).hexdigest()
+        except Exception:
+            request_id = ""
+
+        try:
+            decision_log.add({
+                "ts": int(time.time()), "gid": group_id,
+                "request_id": request_id,
+                "session_id": session_id or "%s:GroupMessage:%s" % (
+                    adapter_id or platform or "", group_id),
+                "session_type": "group", "group_id": group_id, "private_qq": "",
+                "action": "silence", "reason": reason, "src": "peer",
+                "mode": "enforce", "score": 0, "th": 0, "ms": 0,
+                "act": "silent", "ground": "none", "mdl": "",
+                "peer": peer, "detail": str(detail or "")[:200],
+            })
+        except Exception:
+            return False
+        return True
+
     def _block_message_policy(self, event, reason):
         # 只读静默保留消息定位；黑名单拒读时禁止诊断快照绕过名单读取正文。
         try:
@@ -343,7 +400,7 @@ class Main(Star):
     async def stop_readonly_message_policy(self, event: AstrMessageEvent):
         result = self._event_policy(event)
         if not result["reply_allowed"]:
-            # 从绫基础归档已完成；这里只记录规则静默，不伪造参与分数。
+            # 配套插件基础归档已完成；这里只记录规则静默，不伪造参与分数。
             if result["read_allowed"]:
                 emit(event, "message_policy", "skipped", reason=result["reason"], calls=0)
                 self._trace().finish(event, "silent", result["reason"])
@@ -458,7 +515,7 @@ class Main(Star):
         return remove
 
     async def resume_classifier_recovery(self) -> bool:
-        """插件重载后由从绫领取已冻结的同一恢复事件。"""
+        """插件重载后由配套插件领取已冻结的同一恢复事件。"""
         work = self.pending_classifier_recovery()
         if work is None:
             self._schedule_classifier_recovery_retry()
@@ -522,7 +579,7 @@ class Main(Star):
                 raise
             except Exception:
                 self.logger.warning(
-                    "[LivingHello] 从绫恢复入口未完成，相关会话已保留待重试。"
+                    "[LivingHello] 配套插件恢复入口未完成，相关会话已保留待重试。"
                 )
                 result = self._classifier_recovery_fallback(
                     current, "retry_pending"
@@ -1085,7 +1142,7 @@ class Main(Star):
     @filter.on_llm_request(priority=maxsize - 105)
     async def understand_reply_input(self, event: AstrMessageEvent, req: ProviderRequest):
         touch(event, "understanding")
-        # 当前会话启用从绫时，感知与记忆都按其原生钩子处理。
+        # 启用配套插件时，感知与记忆都按其原生钩子处理。
         if not self._delivery().recalled(event):
             await self._understanding().attach(event, req)
         self.logger.warning("[LH-trace] 感知钩子返回，接下来轮到情绪/记忆/契约")
@@ -1489,7 +1546,7 @@ class Main(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 30)
     async def observe_message_fragments(self, event: AstrMessageEvent):
-        """在任何等待之前登记原消息；不改正文/组件，让从绫逐条归档。"""
+        """在任何等待之前登记原消息；不改正文/组件，让配套插件逐条归档。"""
         result = self._event_policy(event)
         if not result["read_allowed"]:
             return
@@ -1544,7 +1601,7 @@ class Main(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize - 110)
     async def coalesce_message_fragments(self, event: AstrMessageEvent):
-        """从绫原消息归档之后、作息/爬楼之前，认领本批唯一回复机会。"""
+        """配套插件的原消息归档之后、作息/爬楼之前，认领本批唯一回复机会。"""
         touch(event, "fragments")
         ticket = event.get_extra("_at_guard_fragment_ticket")
         if event.get_extra("_at_guard_fragments") is not None:
@@ -1592,47 +1649,109 @@ class Main(Star):
         engine = getattr(self, "engine", None)
         return engine.proactive_group_judge() if engine is not None else "whitelist_empty"
 
+    def _note_emotion_block(self, event, reason) -> None:
+        """被 LivingEmotion 的作息/情绪状态判为「这会儿不该说话」时留一条记录。
+
+        这条路径原本只写 trace 不写 decisions，于是「最近判定」里什么都看不到。
+        只补日志，不改任何放行结果；同一条消息靠 note_peer_block 的去重兜底。
+        """
+        try:
+            group_id = str(getattr(event, "get_group_id", lambda: "")() or "")
+            if not group_id:
+                return
+            obj = getattr(event, "message_obj", None)
+            message_id = str(getattr(obj, "message_id", "") or "") if obj is not None else ""
+            self.note_peer_block(
+                peer="livingemotion",
+                reason="blocked_by_state:" + str(reason),
+                group_id=group_id,
+                session_id=str(getattr(event, "unified_msg_origin", "") or ""),
+                session_kind="group",
+                sender_id=str(getattr(event, "get_sender_id", lambda: "")() or ""),
+                message_id=message_id,
+                detail="作息/情绪状态判定不参与",
+            )
+        except Exception:
+            pass
+
     def _proactive_group_request(self, event: AstrMessageEvent):
         """普通群消息的主动判定入口；返回 None 表示不补请求。
 
         只做与门禁同口径的低成本预筛：名单、显式呼叫、自身消息与冷却。
         真正的放行/静默仍由 `guard_llm_request` 决定，不在这里下结论。
         """
-        judge = self._proactive_group_judge()
-        if judge == "off":
-            return None
-        if event.get_message_type() != MessageType.GROUP_MESSAGE:
-            return None
-        if ReplyDelivery.raw(event).get("post_type") == "notice":
-            return None
-        if event.get_extra("_at_guard_proactive_judge_requested"):
-            return None
-        if event.get_extra("_at_guard_fragment_blocked"):
-            return None
-        sender = str(getattr(event, "get_sender_id", lambda: "")() or "")
-        self_id = str(event.get_self_id() or "")
-        if not sender or not self_id or sender == self_id:
-            return None
-        if getattr(event, "is_at_or_wake_command", False):
-            return None
-        targets = self._mention_targets(event)
-        for row in event.get_extra("_at_guard_fragments", ()) or ():
-            targets.update(row["mention_targets"])
-        if self_id in targets:
-            return None
-        policy = self._event_policy(event)
-        if not policy["read_allowed"] or not policy["reply_allowed"]:
-            return None
-        if judge == "whitelist_empty" and self._policy().values["message_whitelist_groups"]:
-            return None
-        now = time.monotonic()
-        group_key = self._group_key(event)
-        cooldown = max(0.0, float(self.config.get("proactive_cooldown_seconds", 8)))
-        if now - self.last_proactive_reply.get(group_key, 0.0) < cooldown:
+        reason = self._proactive_group_request_reason(event)
+        if reason:
+            self._note_proactive_skip(event, reason)
             return None
         # 在途状态只在 guard_llm_request 中提供谨慎接话提示，不能在入口吞掉新问题。
         event.set_extra("_at_guard_proactive_judge_requested", True)
         return event.request_llm(prompt=self._fragment_text(event))
+
+    def _proactive_group_request_reason(self, event: AstrMessageEvent) -> str:
+        """能补判定时返回空串，否则返回不补的具体原因（用于诊断日志）。"""
+        judge = self._proactive_group_judge()
+        if judge == "off":
+            return "judge_off"
+        if event.get_message_type() != MessageType.GROUP_MESSAGE:
+            return "not_group_message"
+        if ReplyDelivery.raw(event).get("post_type") == "notice":
+            return "notice_event"
+        if event.get_extra("_at_guard_proactive_judge_requested"):
+            return "already_requested"
+        if event.get_extra("_at_guard_fragment_blocked"):
+            return "fragment_blocked"
+        sender = str(getattr(event, "get_sender_id", lambda: "")() or "")
+        self_id = str(event.get_self_id() or "")
+        if not sender or not self_id or sender == self_id:
+            return "self_or_missing_sender"
+        if getattr(event, "is_at_or_wake_command", False):
+            return "explicit_call"
+        targets = self._mention_targets(event)
+        for row in event.get_extra("_at_guard_fragments", ()) or ():
+            targets.update(row["mention_targets"])
+        if self_id in targets:
+            return "mentioned_bot"
+        policy = self._event_policy(event)
+        if not policy["read_allowed"] or not policy["reply_allowed"]:
+            return "policy_" + str(policy.get("reason") or "denied")
+        if judge == "whitelist_empty" and self._policy().values["message_whitelist_groups"]:
+            return "whitelist_configured"
+        now = time.monotonic()
+        group_key = self._group_key(event)
+        cooldown = max(0.0, float(self.config.get("proactive_cooldown_seconds", 8)))
+        left = cooldown - (now - self.last_proactive_reply.get(group_key, 0.0))
+        if left > 0:
+            return "cooldown_%.1fs" % left
+        return ""
+
+    def _note_proactive_skip(self, event: AstrMessageEvent, reason: str) -> None:
+        """记录「这条群消息为什么没补判定」。同群同原因 10 秒内只打一条。"""
+        try:
+            group_key = self._group_key(event)
+        except Exception:
+            group_key = "?"
+        cache = getattr(self, "_proactive_skip_seen", None)
+        if cache is None:
+            cache = self._proactive_skip_seen = {}
+        now = time.monotonic()
+        last = cache.get((group_key, reason))
+        if last is not None and now - last < 10:
+            return
+        cache[(group_key, reason)] = now
+        if len(cache) > 200:
+            for key in [k for k, v in cache.items() if now - v > 120]:
+                cache.pop(key, None)
+        try:
+            self.logger.warning(
+                "[LivingHello] 群消息未补判定 gid=%s reason=%s explicit=%s targets=%s",
+                group_key, reason,
+                bool(getattr(event, "is_at_or_wake_command", False)),
+                len(self._mention_targets(event)),
+            )
+        except Exception:
+            pass
+
 
     def _fragment_text(self, event):
         if congling_for(self.context, event):
@@ -1733,7 +1852,7 @@ class Main(Star):
                 )
 
     def get_fixed_native_persona_id(self, umo):
-        """供从绫复用同一已保存人格；None表示未由此页固定。"""
+        """供配套插件复用同一已保存人格；None表示未由此页固定。"""
         settings = getattr(self, "_native_settings", None)
         return settings.fixed_persona_id(umo) if settings is not None else None
 
@@ -1875,14 +1994,39 @@ class Main(Star):
             event.is_wake = True
             event.is_at_or_wake_command = True
 
+    def _note_gate_skip(self, event, reason) -> None:
+        """LLM 阶段提前返回时留下原因，避免面板里什么都看不到。"""
+        try:
+            group_key = self._group_key(event)
+        except Exception:
+            group_key = "?"
+        cache = getattr(self, "_gate_skip_seen", None)
+        if cache is None:
+            cache = self._gate_skip_seen = {}
+        now = time.monotonic()
+        if now - cache.get((group_key, reason), 0.0) < 10:
+            return
+        cache[(group_key, reason)] = now
+        if len(cache) > 200:
+            for key in [k for k, v in cache.items() if now - v > 120]:
+                cache.pop(key, None)
+        try:
+            self.logger.warning(
+                "[LivingHello] LLM 阶段跳过 gid=%s reason=%s", group_key, reason)
+        except Exception:
+            pass
+
     @filter.on_llm_request(priority=10_000)
     async def guard_llm_request(
         self,
         event: AstrMessageEvent,
         req: ProviderRequest,
     ) -> None:
+        self._note_gate_skip(event, "entered")
         policy = self._event_policy(event)
         if not policy["reply_allowed"] or self._policy_send_reason(event):
+            self._note_gate_skip(event, "policy_" + str(
+                policy["reason"] if not policy["reply_allowed"] else "changed"))
             self._block_message_policy(event, policy["reason"] if not policy["reply_allowed"] else "policy_changed")
             return
         if event.get_extra("_livinghello_material_revision") is None:
@@ -1894,18 +2038,22 @@ class Main(Star):
         touch(event, "decision")
         emit(event, "llm_request", "success")
         if not await self._delivery().prepare(event):
+            self._note_gate_skip(event, "delivery_prepare_failed")
             event.stop_event()
             return
         if self._delivery().recalled(event):
+            self._note_gate_skip(event, "recalled")
             self._delivery().block(event)
             return
         if event.get_extra("_at_guard_fragment_blocked"):
+            self._note_gate_skip(event, "fragment_blocked")
             event.stop_event()
             return
         self._attach_fragments(event, req)
         emotion_block = await self._livingemotion_block_reason(event)
         if emotion_block:
             self._trace().finish(event, "silent", emotion_block)
+            self._note_emotion_block(event, emotion_block)
             event.stop_event()
             return
         if policy["requires_explicit"]:
@@ -1914,6 +2062,8 @@ class Main(Star):
         if not self._applies_to_event(event):
             if event.get_message_type() == MessageType.FRIEND_MESSAGE:
                 self._record_bypass(event, "private_off")
+            else:
+                self._note_gate_skip(event, "not_applicable")
             return
 
         mode = self._gate_mode()
@@ -1933,7 +2083,7 @@ class Main(Star):
         if mentions_other and not mentions_self:
             if mode == "enforce":
                 self._trace().finish(event, "silent", "mentions_other")
-                self.logger.debug("Blocked a group LLM request mentioning only other users.")
+                self._note_gate_skip(event, "mentions_other")
                 event.stop_event()
                 return
             observation_rules.append("mentions_other")
@@ -1955,7 +2105,7 @@ class Main(Star):
         ):
             if mode == "enforce":
                 self._trace().finish(event, "silent", "duplicate")
-                self.logger.debug("Blocked a recently answered duplicate group message.")
+                self._note_gate_skip(event, "duplicate")
                 event.stop_event()
                 return
             observation_rules.append("duplicate")
@@ -1981,6 +2131,7 @@ class Main(Star):
         if not explicit and now - self.last_proactive_reply.get(group_key, 0.0) < cooldown:
             if mode == "enforce":
                 self._trace().finish(event, "silent", "cooldown")
+                self._note_gate_skip(event, "cooldown")
                 event.stop_event()
                 return
             observation_rules.append("cooldown")
@@ -1994,6 +2145,7 @@ class Main(Star):
         if self._handle_classifier_outage_cooling(
             event, mode, group_key, observation_rules
         ):
+            self._note_gate_skip(event, "outage_cooling")
             return
 
         event.set_extra("_at_guard_observation_rules", list(observation_rules))
@@ -3438,7 +3590,7 @@ class Main(Star):
         )
 
     async def _recall_gate_memory(self, event: AstrMessageEvent, req=None) -> list[str]:
-        # 情绪只从 LivingEmotion 读取，禁用/不可用时不回退到从绫。
+        # 情绪只从 LivingEmotion 读取，禁用/不可用时不回退到配套插件。
         emotion_lines = await state_lines(self.context, event, req, config=self.config)
         if not coupling_enabled(self.context, self.config, "livingmemory"):
             return emotion_lines

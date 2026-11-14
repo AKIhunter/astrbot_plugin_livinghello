@@ -45,7 +45,7 @@
     "type": "bool",
     "default": true,
     "description": "启用回复方式管理",
-    "hint": "可独立使用，也可与从绫配套。从绫提供感知和固定人设；动态情绪和记忆由功能耦合开关控制。"
+    "hint": "可独立使用，也可与配套插件联用。配套插件提供感知和固定人设；动态情绪和记忆由功能耦合开关控制。"
   },
   "expression_private_reuse": {
     "type": "bool",
@@ -100,7 +100,11 @@
   "expression_punct_space": {
     "type": "string",
     "default": "1",
-    "options": ["1", "2", "random"],
+    "options": [
+      "1",
+      "2",
+      "random"
+    ],
     "description": "标点清理的空格数",
     "hint": "1=固定一个空格；2=固定两个空格；random=每处随机 1 或 2 个。只影响替换标点时插入的间隔，原有换行不变。"
   },
@@ -171,6 +175,47 @@
     "description": "图片理解模型（可选覆盖）",
     "editor_mode": "select_provider",
     "hint": "只覆盖回复前的图片理解。留空跟随「视觉模型（共用）」；共用项也为空时跟随支持图片的会话模型。"
+  },
+  "understand_gif_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "动图按首帧理解",
+    "hint": "GIF 是动图，多模态模型只看一张静图。开启后统一取第一帧转 JPEG 再送模型；关闭则原样透传，由模型自己决定收不收。"
+  },
+  "understand_video_enabled": {
+    "type": "bool",
+    "default": false,
+    "description": "视频理解",
+    "hint": "对群里发的短视频抽帧后交给视觉模型描述。依赖 ffmpeg/ffprobe；每次会额外消耗视觉额度，建议只在需要时开。"
+  },
+  "understand_video_max_seconds": {
+    "type": "int",
+    "default": 15,
+    "description": "视频最长处理时长（秒）",
+    "hint": "超过这个时长的视频只抽前段，避免下载和解码拖垮队列。",
+    "slider": {
+      "min": 3,
+      "max": 120,
+      "step": 1
+    }
+  },
+  "understand_video_frames": {
+    "type": "int",
+    "default": 5,
+    "description": "视频抽帧张数",
+    "hint": "抽得越多越准，也越贵。5 张够看懂在干什么，12 张适合看细节。",
+    "slider": {
+      "min": 1,
+      "max": 12,
+      "step": 1
+    }
+  },
+  "understand_video_provider_id": {
+    "type": "string",
+    "default": "",
+    "description": "视频理解模型（可选覆盖）",
+    "editor_mode": "select_provider",
+    "hint": "留空跟随「视觉模型（共用）」。视频抽帧后同样走视觉模型，不需要单独配。"
   },
   "understand_voice_enabled": {
     "type": "bool",

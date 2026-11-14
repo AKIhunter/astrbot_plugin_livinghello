@@ -569,7 +569,7 @@ def _message_key(message: dict[str, Any]) -> tuple[str, str]:
 
 
 def _congling_perceived(block: Any) -> tuple[list[dict[str, Any]], bool]:
-    """只解析从绫稳定的感知块；格式未知时返回原块给背景资料展示。"""
+    """只解析该插件稳定的感知块；格式未知时返回原块给背景资料展示。"""
     if not isinstance(block, str) or not _CONGLING_PERCEIVED_MARKER.match(block):
         return [], False
     lines = block.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -936,7 +936,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
 
 
 def _congling_compat(plugin: Any) -> dict[str, Any]:
-    """只检查已加载插件元数据，不导入或修改从绫，也不凭版本号猜测事件计时支持。"""
+    """只检查已加载插件元数据，不导入或修改该插件，也不凭版本号猜测事件计时支持。"""
     result = {
         "detected": False,
         "active": False,
@@ -1151,7 +1151,7 @@ async def handle_config(plugin: Any):
             return error_response("名单校验未通过", data=validation)
         companion = plugin.message_policy_companion()
         if any(validation["counts"].values()) and not companion["supported"]:
-            return error_response("当前从绫不支持消息名单历史过滤，请先更新配套插件",
+            return error_response("当前配套插件不支持消息名单历史过滤，请先更新配套插件",
                                   data={"code": "companion", "errors": []})
         for key in policy_updates:
             updates[key] = validation["normalized_values"][key]
@@ -1228,7 +1228,7 @@ async def handle_message_policy_validate(plugin: Any):
     if any(result["counts"].values()) and not result["companion"]["supported"]:
         result["valid"] = False
         result["errors"].append({"field": MESSAGE_POLICY_FIELDS[0], "code": "companion",
-                                 "message": "请先更新从绫以支持历史过滤契约"})
+                                 "message": "请先更新配套插件以支持历史过滤契约"})
     return _response(result)
 
 

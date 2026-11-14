@@ -169,7 +169,7 @@ flowchart TB
               <tr><td><code>watermark_scope / private_watermark_window_seconds</code></td><td>哪些会话允许新消息顶替旧答 / 私聊顶替窗口多长。</td></tr>
               <tr><td><code>understand_expand_forward / understand_image_enabled</code></td><td>是否展开转发 / 是否启用图片理解。</td></tr>
               <tr><td><code>gate_reply_max_age_seconds</code></td><td>回复有效年龄上限。</td></tr>
-              <tr><td><code>expression_takeover_enabled</code></td><td>表达接管开关，也控制本地理解附加；开启且从绫在本会话生效时，进入兼容解析路线。</td></tr>
+              <tr><td><code>expression_takeover_enabled</code></td><td>表达接管开关，也控制本地理解附加；开启且配套插件在本会话生效时，进入兼容解析路线。</td></tr>
               <tr><td><code>NEEDS_ATTENTION / classifier_outage_self_heal_seconds</code></td><td>判定故障待处理状态 / 故障暂停太久后允许再试的时长。准确条件见“判定故障”说明。</td></tr>
               <tr><td><code>reply_fallback / reasoning_retry</code></td><td>调用失败后的事件重试 / 只有思考、没有正文时补答一次。</td></tr>
               <tr><td><code>NO_REPLY / superseded</code></td><td>模型明确表示本轮不回复 / 旧答案已被新消息顶替。</td></tr>
@@ -183,7 +183,7 @@ flowchart TB
       <section id="input">
         <div class="section-head"><span class="section-number">01</span><h2>入站与理解</h2></div>
         <p class="lead">先检查来源是否允许读取、是否允许回复，再收集连续消息并理解图片等内容。撤回通知本身不会交给回复模型。<sup><a href="#cite-1">[1]</a></sup><sup><a href="#cite-3">[3]</a></sup></p>
-        <div class="callout"><p><strong>这两块已经有本地实现。</strong>连续消息由 LivingHello 自己等待、去重、合并和处理撤回；引用、转发、卡片、图片等也有自己的理解流程。表达兼容开启且从绫在本会话生效时，文字复用从绫解析，归 LivingHello 处理的图片仍走本地看图。这里核实的是当前实现；历史上哪些代码来自从绫，不能仅凭当前文件下结论。<sup><a href="#cite-6">[6]</a></sup></p></div>
+        <div class="callout"><p><strong>这两块已经有本地实现。</strong>连续消息由 LivingHello 自己等待、去重、合并和处理撤回；引用、转发、卡片、图片等也有自己的理解流程。表达兼容开启且配套插件在本会话生效时，文字复用配套插件解析，归 LivingHello 处理的图片仍走本地看图。这里核实的是当前实现；历史上哪些代码来自配套插件，不能仅凭当前文件下结论。<sup><a href="#cite-6">[6]</a></sup></p></div>
         <figure>
           <figcaption>图 2 · 名单政策</figcaption>
           <div class="diagram-viewport"><pre class="mermaid">
@@ -222,15 +222,15 @@ flowchart LR
 flowchart TB
   INPUT["需要理解消息"] --> TAKE{"检查理解接管开关"}
   TAKE -->|"关闭"| ORIGINAL["使用框架原始输入"] --> ROUTE["选择回复路线"]
-  TAKE -->|"开启"| OWNER{"检查从绫是否在本会话生效"}
-  OWNER -->|"已生效"| CONG["文字复用从绫解析"]
+  TAKE -->|"开启"| OWNER{"检查配套插件是否在本会话生效"}
+  OWNER -->|"已生效"| CONG["文字复用配套插件解析"]
   OWNER -->|"未生效"| PARSE["本地解析文字 / 引用 / 转发 / 卡片"]
   PARSE --> MEDIA{"检查图片、视频、音频等附件"}
   MEDIA -->|"没有可处理媒体"| TEXT["使用解析后的文字"]
   MEDIA -->|"有可处理媒体"| SEE["本地图片 / 视频 / 音频理解"]
   CONG --> IMAGE{"检查图片是否归 LivingHello 处理"}
   IMAGE -->|"属于 LivingHello"| LOCAL["继续本地看图"]
-  IMAGE -->|"没有图片 / 由从绫处理"| ROUTE
+  IMAGE -->|"没有图片 / 由配套插件处理"| ROUTE
   LOCAL -->|"成功"| OBS["文字 + 看懂的内容摘要"]
   LOCAL -->|"关闭 / 文件不可用 / 超时等"| UNKNOWN["标记内容未读懂<br/>提示模型不要猜"]
   SEE -->|"成功"| OBS
@@ -240,7 +240,7 @@ flowchart TB
   UNKNOWN --> ROUTE
   class OBS current
           </pre></div>
-          <div class="diagram-note">“理解接管”使用表达接管开关。仅安装从绫不会自动走兼容路线，还要满足开关和本会话启用条件；合并时从绫文字解析为空会回到原文。“未读懂”提示不保证不回复：默认私聊仍可能进入回复模型；需要参与判定的路径会再判断是否理解充分。</div>
+          <div class="diagram-note">“理解接管”使用表达接管开关。仅安装配套插件不会自动走兼容路线，还要满足开关和本会话启用条件；合并时配套插件文字解析为空会回到原文。“未读懂”提示不保证不回复：默认私聊仍可能进入回复模型；需要参与判定的路径会再判断是否理解充分。</div>
         </figure>
         <dl class="branch-notes">
           <div><dt>处理顺序</dt><dd>先理解媒体，再判断要不要接话。默认私聊和明确呼叫虽然可跳过接话判断，仍会进入媒体理解。</dd></div>
@@ -582,7 +582,7 @@ flowchart TB
           <li id="cite-3"><span class="src-title">原生发送、撤回与重复保护。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/reply/guard_reply_delivery.py" target="_blank" rel="noopener">reply/guard_reply_delivery.py</a></li>
           <li id="cite-4"><span class="src-title">事件失败重试与后备模型。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/reply/guard_reply_fallback.py" target="_blank" rel="noopener">reply/guard_reply_fallback.py</a></li>
           <li id="cite-5"><span class="src-title">私聊摘要、旧图工具及调用前后授权复核。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/images/guard_image_history.py" target="_blank" rel="noopener">images/guard_image_history.py</a></li>
-          <li id="cite-6"><span class="src-title">本地理解、从绫文字兼容及图片分支。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/input/guard_understanding.py" target="_blank" rel="noopener">input/guard_understanding.py</a></li>
+          <li id="cite-6"><span class="src-title">本地理解、配套插件文字兼容及图片分支。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/input/guard_understanding.py" target="_blank" rel="noopener">input/guard_understanding.py</a></li>
           <li id="cite-7"><span class="src-title">故障等待与允许再试；允许再试不等于模型已经恢复。</span><a class="src-url" href="https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/main/main.py" target="_blank" rel="noopener">main.py</a></li>
         </ol>
       </div>
