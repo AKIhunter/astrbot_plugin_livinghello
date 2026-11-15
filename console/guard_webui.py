@@ -217,34 +217,62 @@ def _current(plugin: Any, key: str, default: Any = None) -> Any:
 # 既拖慢页面又白烧上游配额。模型列表变化很少，缓存 10 分钟足够。
 PROVIDERS_CACHE_TTL_SECONDS = 600.0
 
+# get_models() 对多数 provider 是真实 HTTP 请求。面板只需要 id / 显示名 /
+# 是否支持图片，模型清单只是「N 个可选模型」的装饰；为了这行装饰串行打 28 次
+# 网络请求，是首屏几秒的根源。True = 不枚举（默认），False = 恢复旧行为。
+PROVIDER_LIST_FAST = True
+
 # 路由侧把上游标成 image_to_text/multimodal，等于显式声明“能接收图片”。
 # 名字正则只是启发式，会漏掉 qwen3.8-max、gpt-6 这类命名；路由连接优先采信这份声明。
 VISION_ROUTER_API_TYPES = frozenset({"image_to_text", "multimodal"})
 
 
 def _provider_catalog_revision(plugin: Any) -> str | None:
-    """只读本地注册/连接信息；凭据只参与摘要，不进入缓存或前端回执。"""
+    """只看「有哪些连接」，不逐项问模型、也不用内存地址当指纹。
+
+    原实现为了判断缓存是否有效，要对每个 provider 调 get_model()、读整份
+    provider_config，还拿 id(provider) 参与摘要——判据本身比缓存结果还贵，
+    而且 provider 对象一重建（路由健康检查就会重建）缓存立刻作废。
+    这里只读已落盘的 id / 类型 / 模型名 / 上游名，成本是纯字典读取。
+    """
     try:
         try:
             from ..integrations.guard_router_connections import router_connections
         except ImportError:
             from integrations.guard_router_connections import router_connections
 
+        def _plain(mapping: Any) -> dict[str, Any]:
+            return mapping if isinstance(mapping, dict) else {}
+
         def signature(provider):
-            getter = getattr(provider, "get_model", None)
-            return (id(provider), getattr(provider, "provider_config", None),
-                    getter() if callable(getter) else None)
+            config = _plain(getattr(provider, "provider_config", None))
+            upstreams = getattr(provider, "upstreams", None)
+            names = []
+            if isinstance(upstreams, (list, tuple)):
+                for item in upstreams:
+                    if item is None:
+                        continue
+                    client_config = _plain(getattr(
+                        getattr(item, "client", None), "provider_config", None))
+                    names.append((
+                        str(getattr(item, "name", "") or ""),
+                        str(client_config.get("model") or ""),
+                        client_config.get("enable") is not False,
+                    ))
+            return (
+                str(config.get("id") or ""),
+                str(config.get("type") or ""),
+                str(config.get("model") or getattr(provider, "model", "") or ""),
+                config.get("enable") is not False,
+                tuple(names),
+            )
 
         registered = []
         for role in ("", "stt_", "tts_"):
             getter = getattr(plugin.context, f"get_all_{role}providers", None)
             for provider in getter() if callable(getter) else []:
-                upstreams = getattr(provider, "upstreams", None)
-                registered.append((role, signature(provider), [
-                    (getattr(item, "name", None), signature(getattr(item, "client", None)))
-                    for item in upstreams if item is not None
-                ] if isinstance(upstreams, (list, tuple)) else []))
-        raw = json.dumps((id(plugin.context), registered, router_connections(plugin.context)),
+                registered.append((role, signature(provider)))
+        raw = json.dumps((registered, router_connections(plugin.context)),
                          sort_keys=True, default=str, ensure_ascii=False)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
     except Exception:
@@ -390,7 +418,7 @@ async def _build_providers(plugin: Any) -> list[dict[str, Any]]:
                     if upstream_model and provider_type != "multi_api_router":
                         upstream_pairs.append((label, upstream_model))
 
-            if not names:
+            if not names and not PROVIDER_LIST_FAST:
                 get_models = getattr(provider, "get_models", None)
                 if callable(get_models):
                     try:
@@ -848,9 +876,11 @@ def _outage_status(
 
 
 # 控制台首屏每次都拉 state；2 核机器上并发请求会互相拖慢，
-# 1.5 秒内复用同一份结果，避免 15 秒轮询与人工刷新重复触发同一批计算。
+# 复用同一份结果，避免 15 秒轮询与人工刷新重复触发同一批计算。
+# 参数/统计写入会经 _invalidate_state() 立刻作废，所以这里的 TTL 只影响
+# 「没有任何写入时的重复读」，放宽到 6 秒不会让保存后看到旧值。
 _STATE_CACHE: dict[str, Any] = {"at": 0.0, "data": None, "owner": None}
-STATE_CACHE_TTL_SECONDS = 1.5
+STATE_CACHE_TTL_SECONDS = 6.0
 
 
 def _invalidate_state() -> None:
@@ -859,6 +889,43 @@ def _invalidate_state() -> None:
     _STATE_CACHE["at"] = 0.0
     _STATE_CACHE["owner"] = None
     # 参数/统计写入只清状态；模型目录由本地连接修订和TTL独立失效。
+
+
+# 一次性性能自检：改完缓存后先量出冷/热耗时，避免只凭感觉判断。
+# 跑完即结束，不常驻；确认效果后把 PERF_SELFTEST_ONCE 改成 False 即可。
+PERF_SELFTEST_ONCE = False
+
+
+async def _perf_selftest(plugin: Any) -> None:
+    if not PERF_SELFTEST_ONCE:
+        return
+    try:
+        await asyncio.sleep(60)  # 等宿主的 provider 注册完，避免量到空目录
+        started = time.perf_counter()
+        revision = _provider_catalog_revision(plugin)
+        rev_ms = (time.perf_counter() - started) * 1000.0
+        plugin._console_providers_cache = None
+        _STATE_CACHE["data"] = None
+        started = time.perf_counter()
+        cold = await _providers(plugin)
+        cold_ms = (time.perf_counter() - started) * 1000.0
+        started = time.perf_counter()
+        await _providers(plugin)
+        warm_ms = (time.perf_counter() - started) * 1000.0
+        _STATE_CACHE["data"] = None
+        started = time.perf_counter()
+        await _state(plugin)
+        state_cold_ms = (time.perf_counter() - started) * 1000.0
+        started = time.perf_counter()
+        await _state(plugin)
+        state_warm_ms = (time.perf_counter() - started) * 1000.0
+        logger.warning(
+            "[LivingHello][perf] 判据=%.1fms 目录冷=%.0fms(%d项) 目录热=%.1fms "
+            "state冷=%.0fms state热=%.1fms 快速模式=%s 判据可用=%s"
+            % (rev_ms, cold_ms, len(cold), warm_ms, state_cold_ms,
+               state_warm_ms, PROVIDER_LIST_FAST, revision is not None))
+    except Exception as exc:
+        logger.warning(f"[LivingHello][perf] 自检失败: {exc!r}")
 
 
 async def _state(plugin: Any) -> dict[str, Any]:
@@ -1503,6 +1570,11 @@ def register_webui(plugin: Any, context: Context) -> None:
     except RuntimeError:
         # initialize() 一定在事件循环内，走到这里属异常兜底，忽略即可。
         pass
+    if PERF_SELFTEST_ONCE:
+        try:
+            asyncio.get_running_loop().create_task(_perf_selftest(plugin))
+        except RuntimeError:
+            pass
 
 
 async def _refresh_provider_schema(plugin: Any) -> None:
