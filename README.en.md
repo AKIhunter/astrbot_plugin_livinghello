@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.6-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.7-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -353,7 +353,7 @@ Find a recent record in **Overview**, copy its `request_id`, and inspect receivi
 
 ## 📦 Changelog
 
-Current version **2.7.6** adds first-frame GIF understanding and video frame sampling, trims the decision log to the latest 100 entries, and records why a decision was skipped (including quiet-hours blocks). Image-generation HTTP errors now use the plugin logger.
+Current version **2.7.7** cuts the console first paint from tens of seconds to roughly 13 ms: the cache fingerprint only reads provider config, the model catalogue is no longer enumerated over the network on the panel path, and the state cache TTL is widened to 6 seconds.
 
 [Read the full changelog](CHANGELOG.md)
 

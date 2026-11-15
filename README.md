@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.6-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.7-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -351,7 +351,7 @@ flowchart TD
 
 ## 📦 更新日志
 
-当前版本 **2.7.6**：新增动图首帧与视频抽帧理解，判定记录精简到最近 100 条，并补齐作息拦截与各静默出口的留痕；生图接口的 HTTP 错误改用插件自身日志。
+当前版本 **2.7.7**：控制台首屏从十几秒降到十几毫秒——缓存判据改为只读 provider 配置，模型目录不再在面板路径联网枚举，状态缓存有效期放宽到 6 秒。
 
 [查看完整版本记录](CHANGELOG.md)
 
