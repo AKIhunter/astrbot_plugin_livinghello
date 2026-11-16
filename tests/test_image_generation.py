@@ -4,6 +4,7 @@ import base64
 import importlib.util
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -318,6 +319,15 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         # 迁移只在内存补默认值，旧文件保持原样；下一次保存写回完整键集合。
         self.assertNotIn("style_prompt", json.loads(self.service.path.read_text(encoding="utf-8")))
 
+    def test_legacy_config_without_follow_server_time_is_migrated_on_load(self):
+        legacy = {key: value for key, value in self.service.values.items()
+                  if key != "follow_server_time"}
+        legacy.update(enabled=True, provider_id="native-image")
+        self.service.path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+        loaded = ImageSettings(self.plugin)
+        self.assertFalse(loaded.error)
+        self.assertFalse(loaded.values["follow_server_time"])
+
     async def test_save_on_legacy_disk_config_is_not_rejected(self):
         legacy = {key: value for key, value in self.service.values.items() if key != "style_prompt"}
         self.service.path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
@@ -367,6 +377,24 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         combined = ImageSettings.styled_prompt("猫" * (MAX_PROMPT_CHARS - 2), "风" * STYLE_MAX_CHARS)
         self.assertTrue(combined.startswith("猫" * (MAX_PROMPT_CHARS - 2) + "\n"))
         self.assertEqual(len(combined), MAX_PROMPT_CHARS)
+
+    def test_follow_server_time_is_prepended_and_skipped_near_limit(self):
+        now = datetime(2026, 11, 16, 20, 30)
+        self.assertEqual(ImageSettings.timed_prompt("画猫", False, now), "画猫")
+        self.assertEqual(
+            ImageSettings.timed_prompt("画猫", True, now),
+            "当前服务器时间：2026年11月16日 20:30（星期一）。"
+            "请按这个时间理解现实中的昼夜、季节和节日。\n画猫")
+        # 描述接近上限时跳过注入，保证用户原描述完整。
+        oversized = "猫" * (MAX_PROMPT_CHARS - 10)
+        self.assertEqual(ImageSettings.timed_prompt(oversized, True, now), oversized)
+
+    async def test_follow_server_time_saves_and_rejects_non_bool(self):
+        await self.service.save(self.body(follow_server_time=True))
+        replacement = ImageSettings(self.plugin)
+        self.assertTrue(replacement.values["follow_server_time"])
+        with self.assertRaises(NativeReplyError):
+            await self.service.save(self.body(follow_server_time="yes"))
 
     def test_dashscope_image_response_is_preserved(self):
         self.assertEqual(ImageSettings.extract({"output": {"choices": [{"message": {
@@ -641,6 +669,18 @@ class ImageHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.received[0][1]["prompt"],"画猫\n统一水彩风格")
         self.assertEqual(self.received[1][1]["messages"][0]["content"][0]["text"],
                          "画猫\n统一水彩风格")
+
+    async def test_follow_server_time_reaches_both_generation_protocols(self):
+        values={**self.service.values,"follow_server_time":True}
+        connection=(self.base,"local-fixture-key","image-model")
+        await ImageSettings._request(self.service,values,connection,"画猫",None)
+        values={**values,"protocol":"chat_images"}
+        await ImageSettings._request(self.service,values,connection,"画猫",
+                                     (self.output.read_bytes(),"image/png"))
+        for prompt in (self.received[0][1]["prompt"],
+                       self.received[1][1]["messages"][0]["content"][0]["text"]):
+            self.assertTrue(prompt.startswith("当前服务器时间："))
+            self.assertTrue(prompt.endswith("\n画猫"))
 
     async def test_trace_counts_real_http_api_and_successful_image_delivery(self):
         from observability.guard_request_trace import RequestTrace, ID_KEY

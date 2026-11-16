@@ -47,12 +47,16 @@ FIELDS = {
     "daily_limit": ("每日生图次数上限", "int", "全插件共用，按服务器本地自然日重置。每次上游请求计一次，失败和结果未知也计数；0禁止生图，重载不清零。"),
     "size": ("生成尺寸", "size", "使用服务支持的尺寸，建议分辨率范围512x512~2048x2048；可选自定义宽高。每次只请求1张图片。"),
     "style_prompt": ("画面风格提示词（全局）", "text", "每次生图自动附加在描述之后，用来固定整套出图风格；留空则完全不附加。用户明确要求画风时以用户描述为准，本段作为补充。最多1000字；与描述合计超过4000字时只截断风格部分。"),
+    "follow_server_time": ("跟随服务器时间", "bool", "开启后每次生图自动把服务器当前时间（年月日、星期、时分）注入描述，让画面跟随现实昼夜、季节和节日；关闭则完全不附加。"),
     "timeout_seconds": ("生图超时（秒）", "int", "10~500秒，超时不会换上游补发，防止重复收费。原自主回复时效仍生效。"),
 }
 DEFAULTS = dict(enabled=False, provider_id="", model="", protocol="images",
                 daily_limit=20, size="1024x1024",
-                style_prompt="",
+                style_prompt="", follow_server_time=False,
                 timeout_seconds=90)
+# 旧版磁盘配置缺少这些键时按默认值迁移，读取与保存共用。
+OPTIONAL_KEYS = {"style_prompt", "follow_server_time"}
+WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 
 
 class ImageSettings:
@@ -114,14 +118,15 @@ class ImageSettings:
     def _load(cls, path):
         """读取磁盘配置并按旧版缺省字段迁移，返回与内存同口径的值。
 
-        旧文件没有 style_prompt：补默认值后再校验。加载与保存比较
-        共用这一套键，避免把「旧格式」误判成磁盘已被外部改动。
+        旧文件没有 style_prompt / follow_server_time：补默认值后再校验。
+        加载与保存比较共用这一套键，避免把「旧格式」误判成磁盘已被外部改动。
         """
         loaded = json.loads(path.read_text(encoding="utf-8"))
         if (not isinstance(loaded, dict) or set(loaded) - set(DEFAULTS)
-                or set(DEFAULTS) - {"style_prompt"} - set(loaded)):
+                or set(DEFAULTS) - OPTIONAL_KEYS - set(loaded)):
             raise ValueError("invalid settings")
-        loaded.setdefault("style_prompt", DEFAULTS["style_prompt"])
+        for key in OPTIONAL_KEYS:
+            loaded.setdefault(key, DEFAULTS[key])
         cls._validate(loaded)
         return loaded
 
@@ -201,7 +206,7 @@ class ImageSettings:
     def _validate(values):
         for key, value in values.items():
             valid = False
-            if key == "enabled":
+            if key in {"enabled", "follow_server_time"}:
                 valid = isinstance(value, bool)
             elif key in {"daily_limit", "timeout_seconds"}:
                 low, high = (0, 1000) if key == "daily_limit" else (10, 500)
@@ -796,6 +801,23 @@ class ImageSettings:
         return self._check_image(path.read_bytes())
 
     @staticmethod
+    def timed_prompt(prompt, enabled, now=None):
+        """跟随服务器时间：把当前本地时间写进描述。
+
+        只补年月日、星期与时分，让模型按现实时间理解昼夜、季节和节日；
+        描述已接近上限时跳过注入，保证用户描述完整。
+        """
+        if not enabled:
+            return prompt
+        now = now or datetime.now()
+        stamp = (f"当前服务器时间：{now.year}年{now.month}月{now.day}日 "
+                 f"{now.hour:02d}:{now.minute:02d}（{WEEKDAYS[now.weekday()]}）。"
+                 "请按这个时间理解现实中的昼夜、季节和节日。")
+        if len(stamp) + 1 + len(prompt) > MAX_PROMPT_CHARS:
+            return prompt
+        return stamp + "\n" + prompt
+
+    @staticmethod
     def styled_prompt(prompt, style):
         """把全局风格追加到本次描述末尾，两种生图协议都走这一处。
 
@@ -814,7 +836,9 @@ class ImageSettings:
         import aiohttp
         base, key, model = connection
         headers = {"Authorization": f"Bearer {key}"}
-        prompt = self.styled_prompt(prompt, values.get("style_prompt", ""))
+        prompt = self.styled_prompt(
+            self.timed_prompt(prompt, values.get("follow_server_time", False)),
+            values.get("style_prompt", ""))
         request = dict(model=model, prompt=prompt, n=1, size=values["size"])
         protocol = values["protocol"]
         if protocol == "chat_images":
