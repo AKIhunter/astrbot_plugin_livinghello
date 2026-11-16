@@ -142,13 +142,16 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
             self.guard.config.update(config)
             self.assertEqual(self.delivery.typing_seconds([Plain("字" * 25)]), 0)
 
-    async def test_typing_one_delay_per_actual_bubble_without_duplicate_plan(self):
+    async def test_typing_first_bubble_immediate_later_bubble_delayed(self):
         self.event.result.chain = [Plain("字" * 25)]
         await self.arm(reply_typing_chars_per_second=2.5)
         with patch.object(self.delivery, "typing_pause", new_callable=AsyncMock, return_value=True) as wait:
             await self.event.send(self.event.result)
             await self.event.send(self.event.result)
-        wait.assert_awaited_once_with(self.event, 10)
+            await self.event.send(self.event.result.derive([Plain("字" * 25)]))
+        # 首泡立即发；重复包不重复延迟；后续新气泡仍按字数等待。
+        self.assertEqual([item.args for item in wait.await_args_list],
+                         [(self.event, 0.0), (self.event, 10)])
 
     async def test_recall_scope_four_combinations(self):
         for group_on, private_on in ((False, False), (True, False), (False, True), (True, True)):
@@ -195,26 +198,28 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.event.sent), 1)
 
     async def test_recall_during_typing_ends_wait_immediately(self):
-        self.event.result.chain = [Plain("字" * 25)]
         await self.arm(reply_recall_group=True, reply_typing_chars_per_second=2.5)
-        task = asyncio.create_task(self.event.send(self.event.result))
+        await self.event.send(self.event.result.derive([Plain("开场")]))
+        task = asyncio.create_task(
+            self.event.send(self.event.result.derive([Plain("字" * 25)])))
         await asyncio.sleep(0)
         self.delivery.notice(recall(self.event))
         await asyncio.wait_for(task, .5)
-        self.assertFalse(self.event.sent)
+        self.assertEqual(len(self.event.sent), 1)
 
     async def test_earlier_fragment_recall_wakes_current_typing_wait(self):
-        self.event.result.chain = [Plain("字" * 25)]
         await self.arm(reply_recall_group=True, reply_typing_chars_per_second=2.5)
         earlier = Event(mid="old")
         self.window(earlier)
         await self.delivery.prepare(earlier)
         self.event.set_extra("_at_guard_fragment_sources", (earlier,))
-        task = asyncio.create_task(self.event.send(self.event.result))
+        await self.event.send(self.event.result.derive([Plain("开场")]))
+        task = asyncio.create_task(
+            self.event.send(self.event.result.derive([Plain("字" * 25)])))
         await asyncio.sleep(0)
         self.delivery.notice(recall(earlier, mid="old"))
         await asyncio.wait_for(task, .5)
-        self.assertFalse(self.event.sent)
+        self.assertEqual(len(self.event.sent), 1)
 
     async def test_failed_partial_send_cannot_retry_full_message(self):
         await self.arm()
@@ -226,11 +231,13 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_unload_cancels_typing_without_sending(self):
         await self.arm(reply_typing_chars_per_second=2.5)
-        task = asyncio.create_task(self.event.send(self.event.result))
+        await self.event.send(self.event.result.derive([Plain("开场")]))
+        task = asyncio.create_task(
+            self.event.send(self.event.result.derive([Plain("字" * 25)])))
         await asyncio.sleep(0)
         await self.delivery.close()
         self.assertTrue(task.cancelled())
-        self.assertFalse(self.event.sent)
+        self.assertEqual(len(self.event.sent), 1)
 
     async def test_context_change_still_cancels_between_bubbles(self):
         await self.arm()

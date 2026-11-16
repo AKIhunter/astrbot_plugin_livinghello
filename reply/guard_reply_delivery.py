@@ -280,7 +280,7 @@ class ReplyDelivery:
         event.set_extra("_at_guard_delivery_plan", {
             "token": token, "semantic_headers": {
                 id(c): c for c in result.chain or [] if isinstance(c, (Reply, At))},
-            "attempted": {}, "header_sent": False, "failed": False,
+            "attempted": {}, "header_sent": False, "body_sent": False, "failed": False,
         })
         event.set_extra("_at_guard_actual_sent", False)
         event.set_extra("_at_guard_sent_has_content", False)
@@ -370,7 +370,9 @@ class ReplyDelivery:
                         event.set_extra("_at_guard_delivery_blocked", reason)
                         plan["failed"] = True
                         return
-                    if not await self.typing_pause(event, self.typing_seconds(pending, event)):
+                    # 首泡立即发出，先让用户看到内容；后续气泡再按打字速度模拟节奏。
+                    typing = 0.0 if not plan.get("body_sent") else self.typing_seconds(pending, event)
+                    if not await self.typing_pause(event, typing):
                         plan["failed"] = True
                         return
                     reason = checker() if callable(checker) else ""
@@ -402,6 +404,7 @@ class ReplyDelivery:
                            for c in chain):
                         plan["header_sent"] = True
                     await self.note_sent(event, chain)
+                    plan["body_sent"] = True
                     return sent
             finally:
                 self.tasks.discard(task)
