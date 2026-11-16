@@ -13,8 +13,9 @@ class GenerateImageTool(FunctionTool[AstrAgentContext]):
     service: Any = None
     name: str = "livinghello_generate_image"
     description: str = (
-        "根据本次用户请求生成或编辑一张图片，图片会在你这条回复发出之后作为独立消息自动发送；"
-        "所以你只需用一句话承接需求，不要描述画面细节，也不要声称看不到图或发不了图。"
+        "根据本次用户请求生成或编辑一张图片，图片会自动跟上；"
+        "所以你只需用一句自然的话承接需求，例如「拍给你」，"
+        "不要提后台生成、生成过程或进度，也不要描述画面细节或声称看不到图、发不了图。"
         "用户说「画一张」「拍一张」、描述某个画面长什么样、或让你以某个形象出镜时都可以调用；"
         "图生图必须使用本次消息或引用中的图片。有每日共享额度，失败或结果未知不能自动重试。"
     )
@@ -38,4 +39,13 @@ class GenerateImageTool(FunctionTool[AstrAgentContext]):
                 return "缺少当前会话，不能生图或发送图片。"
         if not callable(getattr(node, "get_sender_id", None)) or self.service is None:
             return "缺少当前会话或生图能力。"
+        if node.get_extra("cron_job"):
+            # 定时主代理没有普通回复发送阶段，不能把图片挂着等 after-sent。
+            if kwargs.get("use_reference", False):
+                return "定时生图没有本次用户参考图片，请使用文生图。"
+            result = await self.service.plugin.execute_deferred_image(node, kwargs.get("prompt"))
+            if result.get("status") == "sent":
+                detail = str(result.get("revised") or "")
+                return "图片已发送到当前会话。" + (f"实际画面：{detail}。" if detail else "")
+            return "定时图片未确认发送，请勿再次调用生图工具。"
         return await self.service.generate(node, kwargs.get("prompt"), kwargs.get("use_reference", False))

@@ -35,6 +35,9 @@ TOOL_NAME = "livinghello_generate_image"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_PROMPT_CHARS = 4000
 STYLE_MAX_CHARS = 1000
+# 同一张已生成的图最多投递两次；重试不重新请求上游，也不重复计额度。
+DELIVERY_ATTEMPTS = 2
+DELIVERY_RETRY_SECONDS = 1.0
 IMAGE_EVENT = ContextVar("livinghello_image_event", default=None)
 FIELDS = {
     "enabled": ("启用AI生图", "bool", "主模型可按需要调用文生图或图生图工具，关闭后不提供工具。"),
@@ -330,7 +333,9 @@ class ImageSettings:
         req.func_tool = tools
         if getattr(self.plugin, "_livinghello_detached_enabled", False):
             instruction = ("生图需求必须先调用livinghello_generate_image取得本轮决定，"
-                           "然后才给承接或婉拒的文字；工具决定前不要承诺会画。")
+                           "然后才给承接或婉拒的文字；工具决定前不要承诺会画。"
+                           "决定生图后只用一句自然的话承接，例如「拍给你」；"
+                           "不要提后台生成、生成过程或进度。")
             if instruction not in (getattr(req, "system_prompt", "") or ""):
                 req.system_prompt = (getattr(req, "system_prompt", "") or "") + "\n" + instruction
         # 标记本次请求挂过生图工具，供最晚钩子复核它是否被后续插件覆盖。
@@ -382,6 +387,58 @@ class ImageSettings:
         except (sqlite3.Error, OSError):
             # 已预占的记录仍计数；完成标记故障不能触发重试或退回额度。
             self.plugin.logger.warning("[LivingHello] 生图完成状态未能更新，保留预占额度")
+
+    def register_deferred_image(self, artifact):
+        """登记可投递资源，绑定请求、会话和路径；独立于收费额度。"""
+        with self._connect() as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS deferred_images "
+                "(request_id TEXT PRIMARY KEY, session TEXT NOT NULL, path TEXT NOT NULL, "
+                "status TEXT NOT NULL)")
+            db.execute("INSERT OR IGNORE INTO deferred_images VALUES (?,?,?,'generated')",
+                       (artifact["request_id"], artifact["session"], artifact["path"]))
+
+    def claim_deferred_image(self, request_id, session, path):
+        """发送前写盘；未知结果不重发，明确拒收才重新领取原图。"""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            # 旧版生成资源没有此登记；调用方继续用旧接口处理，不能伪造新资源。
+            exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='deferred_images'"
+            ).fetchone()
+            row = (db.execute(
+                "SELECT session,path,status FROM deferred_images WHERE request_id=?",
+                (request_id,)).fetchone() if exists else None)
+            if not row or row[:2] != (session, path):
+                return "invalid"
+            if row[2] not in ("generated", "rejected"):
+                return row[2]
+            db.execute("UPDATE deferred_images SET status='sending' WHERE request_id=?",
+                       (request_id,))
+            return "claimed"
+
+    def settle_deferred_image(self, request_id, status):
+        """受理之后即使落库故障也保留 sending，阻止再次发送。"""
+        try:
+            with self._connect() as db:
+                db.execute("UPDATE deferred_images SET status=? WHERE request_id=? AND status!='sent'",
+                           (status, request_id))
+        except (sqlite3.Error, OSError):
+            self.plugin.logger.warning("[LivingHello] 图片投递回执未能保存，禁止自动重发")
+        self.mark(request_id, status)
+
+    def claim_deferred_run(self, run_key):
+        """一次性 cron 按任务 ID 去重，不因重启或模型改写 prompt 再收费。
+
+        独立于 calls 额度表；这里只登记执行归属，不多扣一次图片额度。
+        """
+        with self._connect() as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS deferred_runs "
+                "(run_key TEXT PRIMARY KEY, created_at REAL NOT NULL)")
+            changed = db.execute(
+                "INSERT OR IGNORE INTO deferred_runs VALUES (?,?)", (run_key, time.time()))
+            return changed.rowcount == 1
 
     @staticmethod
     def references(event):
@@ -456,8 +513,9 @@ class ImageSettings:
                 job.update(status="failed", reply="现在暂时画不了，请自然说明；不要重试此工具。")
             return job["reply"]
         job.update(status="prepared", reply=(
-            "生图已准备，尚未请求上游。请先用一句自然的话承接需求，不要说图片已完成；"
-            "你的文字投递成功后才后台生成并发图，请勿再调用本工具。"))
+            "生图已准备，尚未请求上游。请用一句自然的话承接需求，例如「拍给你」；"
+            "不要提后台、生成过程或进度，也不要说图片已经画好；"
+            "图片会在你这句话之后自动跟上，请勿再调用本工具。"))
         if mood:
             job["reply"] += "当前情绪：" + json.dumps(mood, ensure_ascii=False)
         return job["reply"]
@@ -482,6 +540,34 @@ class ImageSettings:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    async def _deliver_image(self, event, path):
+        """同一张已生成的图最多投递两次，不重新生成也不重复计额度。"""
+        from astrbot.api.message_components import Image
+        for attempt in range(1, DELIVERY_ATTEMPTS + 1):
+            if attempt > 1:
+                await asyncio.sleep(DELIVERY_RETRY_SECONDS)
+            try:
+                await event.send(event.chain_result([Image.fromFileSystem(path)]))
+                return True
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.plugin.logger.warning(
+                    "[LH-img] 图片投递失败（第%d/%d次）：%r", attempt, DELIVERY_ATTEMPTS, exc)
+        return False
+
+    @staticmethod
+    def _apology(job):
+        """图没出来时的拟人回应；负面情绪下换成更贴合语气的说法。"""
+        mood = job.get("emotion")
+        if mood and max(mood["emotions"][k] for k in
+                        ("anger", "sadness", "fear")) >= .6:
+            dominant = max(("anger", "sadness", "fear"), key=mood["emotions"].get)
+            feeling = {"anger": "有点烦", "sadness": "心情有点低落",
+                       "fear": "有点紧张"}[dominant]
+            return f"这会儿{feeling}，图也没顺利出来……先缓缓吧。"
+        return "这张图暂时没顺利出来……先放一放吧。"
+
     async def _run_image_job(self, event, job):
         try:
             self.plugin.logger.warning("[LH-img] 后台开跑：prompt=%d字", len(job["prompt"]))
@@ -496,30 +582,22 @@ class ImageSettings:
             if pending:
                 event.set_extra("_livinghello_pending_image", None)
                 request_id = pending["request_id"]
-                try:
-                    from astrbot.api.message_components import Image
-                    await event.send(event.chain_result([Image.fromFileSystem(pending["path"])]))
-                except Exception:
+                if await self._deliver_image(event, pending["path"]):
+                    self.mark(request_id, "sent")
+                    job["status"] = "sent"
+                else:
                     self.mark(request_id, "unknown")
                     job["status"] = "unknown"
-                    return  # 平台投递不明确：不追加回复、不自动重发。
-                self.mark(request_id, "sent")
-                job["status"] = "sent"
+                    if not self.blocked(event):
+                        from astrbot.api.message_components import Plain
+                        await event.send(event.chain_result([Plain(self._apology(job))]))
             else:
                 job["status"] = "unknown" if "结果未知" in response else "failed"
                 self.plugin.logger.warning(
                     "[LH-img] 后台无图：status=%r resp=%r", job["status"], str(response)[:120])
                 from astrbot.api.message_components import Plain
-                mood = job.get("emotion")
-                line = "这张图暂时没顺利出来……先放一放吧。"
-                if mood and max(mood["emotions"][k] for k in
-                                ("anger", "sadness", "fear")) >= .6:
-                    dominant = max(("anger", "sadness", "fear"), key=mood["emotions"].get)
-                    feeling = {"anger": "有点烦", "sadness": "心情有点低落",
-                               "fear": "有点紧张"}[dominant]
-                    line = f"这会儿{feeling}，图也没顺利出来……先缓缓吧。"
                 if not self.blocked(event):
-                    await event.send(event.chain_result([Plain(line)]))
+                    await event.send(event.chain_result([Plain(self._apology(job))]))
         except asyncio.CancelledError:
             job["status"] = "cancelled"
             raise

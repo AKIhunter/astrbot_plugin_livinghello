@@ -26,8 +26,7 @@ try:  # 作为插件包加载时走相对导入
     from .images.guard_media import image_target
     from .reply.guard_reply_delivery import ReplyDelivery
     from .reply.guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
-    from .reply.guard_reply_fallback import ReplyFallback, find_current_runner
-    from .input.guard_history_view import HistoryView
+    from .reply.guard_reply_fallback import ReplyFallback
     from .reply.guard_reasoning_retry import ReasoningRetry
     from .input.guard_fragments import FragmentWait
     from .reply.guard_expression import Expression, congling_for, takeover
@@ -58,8 +57,7 @@ except ImportError:  # 单文件调试兜底
     from images.guard_media import image_target
     from reply.guard_reply_delivery import ReplyDelivery
     from reply.guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
-    from reply.guard_reply_fallback import ReplyFallback, find_current_runner
-    from input.guard_history_view import HistoryView
+    from reply.guard_reply_fallback import ReplyFallback
     from reply.guard_reasoning_retry import ReasoningRetry
     from input.guard_fragments import FragmentWait
     from reply.guard_expression import Expression, congling_for, takeover
@@ -140,11 +138,6 @@ class Main(Star):
             self.reply_fallback = ReplyFallback(self)
         return self.reply_fallback
 
-    def _history_view(self):
-        if not hasattr(self, "history_view"):
-            self.history_view = HistoryView(self)
-        return self.history_view
-
     def _policy(self):
         if not hasattr(self, "message_policy"):
             self.message_policy = MessagePolicy(self.config)
@@ -190,6 +183,13 @@ class Main(Star):
             "private_watermark_window_seconds": (
                 engine.private_watermark_window() if engine is not None else 0.0),
         }
+        result["cooperation"] = {
+            "contract": "livinghello.cooperation.v1",
+            "owners": {"message_policy": "livinghello", "image_delivery": "livinghello",
+                       "emotion_state": "livingemotion", "promise_schedule": "livingemotion",
+                       "promise_completion": "livingemotion"},
+            "deferred_image_delivery": "livinghello.deferred-image-delivery.v1",
+        }
         return result
 
     def _freeze_emotion_snapshot(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
@@ -203,10 +203,6 @@ class Main(Star):
             return
         snapshot = event.get_extra("_at_guard_emotion_snapshot")
         fresh = [part for part in parts if is_state_line(getattr(part, "text", ""))]
-        for part in fresh:
-            mark = getattr(part, "mark_as_temp", None)
-            if callable(mark):
-                mark()
         if snapshot is None:
             if fresh:
                 event.set_extra("_at_guard_emotion_snapshot", fresh[0])
@@ -473,6 +469,126 @@ class Main(Star):
                 from images.guard_image_settings import ImageSettings
             self.image_generation = ImageSettings(self)
         return self.image_generation
+
+    def get_deferred_image_contract(self):
+        """供承诺执行器使用；连接、额度与开关仍由本插件拥有。"""
+        service = self._image_generation()
+        return {
+            "contract": "livinghello.deferred-image.v1",
+            "delivery_contract": "livinghello.deferred-image-delivery.v1",
+            "available": bool(
+                not service._closed and not service.error
+                and service.values["enabled"] and service.values["daily_limit"] > 0),
+        }
+
+    async def generate_deferred_image(self, event, prompt):
+        """只生成并交出待发图片，不触发普通回复的 after-sent 补图。
+
+        调用方必须持久化生成/发送阶段；失败或未知不能自动重新收费。
+        event 是宿主的定时事件，message_id 必须固定为承诺 ID。
+        """
+        if not self.get_deferred_image_contract()["available"]:
+            return {"status": "unavailable"}
+        service = self._image_generation()
+        await service.generate(event, prompt, use_reference=False)
+        pending = event.get_extra("_livinghello_pending_image")
+        event.set_extra("_livinghello_pending_image", None)
+        if not isinstance(pending, dict) or not pending.get("path"):
+            # generate 内部可能已经发起收费请求，不能从返回文案推断可重试。
+            return {"status": "unknown"}
+        artifact = {"status": "generated", **pending,
+                    "session": str(event.unified_msg_origin),
+                    "delivery_contract": "livinghello.deferred-image-delivery.v1"}
+        # 登记失败时不交出资源；收费状态未知，由调用方停止自动重试。
+        service.register_deferred_image(artifact)
+        return artifact
+
+    async def deliver_deferred_image(self, event, artifact, *, authorize=None):
+        """统一图片投递出口；LE 提供自己的实时授权，LH 拥有投递回执。"""
+        request_id = artifact.get("request_id") if isinstance(artifact, dict) else None
+
+        def receipt(status, reason="", retryable=False):
+            return {"contract": "livinghello.deferred-image-delivery.v1",
+                    "request_id": request_id, "status": status, "reason": reason,
+                    "retryable": retryable}
+
+        session = str(event.unified_msg_origin)
+        if (not isinstance(artifact, dict) or not isinstance(request_id, str)
+                or not 1 <= len(request_id) <= 128 or artifact.get("session") != session
+                or not isinstance(artifact.get("path"), str)):
+            return receipt("rejected", "invalid_artifact")
+        service = self._image_generation()
+        path = artifact["path"]
+        if not Path(path).is_file():
+            return receipt("unknown", "file_missing")
+        if service.blocked(event) or not service.values["enabled"]:
+            return receipt("rejected", "delivery_blocked", True)
+        if authorize is not None and not await authorize():
+            return receipt("rejected", "source_authorization_denied", True)
+        # 来源授权可能 await 到插件重载或开关变化，提交前再核对本方状态。
+        if service.blocked(event) or not service.values["enabled"]:
+            return receipt("rejected", "delivery_blocked", True)
+        try:
+            claim = service.claim_deferred_image(request_id, session, path)
+        except Exception:
+            return receipt("unknown", "claim_failed")
+        if claim == "sent":
+            return receipt("sent", "already_sent")
+        if claim == "invalid":
+            return receipt("rejected", "invalid_artifact")
+        if claim != "claimed":
+            return receipt("unknown", "already_attempted")
+        try:
+            accepted = await self.context.send_message(
+                session, event.chain_result([Image.fromFileSystem(path)]))
+        except asyncio.CancelledError:
+            # 提交可能已经发生；写入未知后传播取消。
+            service.settle_deferred_image(request_id, "unknown")
+            raise
+        except Exception:
+            service.settle_deferred_image(request_id, "unknown")
+            return receipt("unknown", "send_failed")
+        if accepted is True:
+            service.settle_deferred_image(request_id, "sent")
+            event._has_send_oper = True
+            return receipt("sent")
+        if accepted is False:
+            service.settle_deferred_image(request_id, "rejected")
+            return receipt("rejected", "send_not_accepted", True)
+        service.settle_deferred_image(request_id, "unknown")
+        return receipt("unknown", "send_not_confirmed")
+
+    async def execute_deferred_image(self, event, prompt):
+        """cron 主代理不经过普通回复的 after-sent，工具必须自行完成交付。"""
+        if event.get_extra("_livinghello_deferred_image_attempted"):
+            return {"status": "unknown", "reason": "already_attempted"}
+        # 同一 cron 运行只允许一次尝试，失败/改写 prompt 都不能再收费。
+        event.set_extra("_livinghello_deferred_image_attempted", True)
+        service = self._image_generation()
+        cron = event.get_extra("cron_job") or {}
+        if isinstance(cron, dict) and cron.get("run_once") and cron.get("id"):
+            run_key = json.dumps([str(event.unified_msg_origin), str(cron["id"])])
+            try:
+                claimed = service.claim_deferred_run(run_key)
+            except Exception:
+                return {"status": "unknown", "reason": "claim_failed"}
+            if not claimed:
+                return {"status": "unknown", "reason": "already_attempted"}
+        artifact = await self.generate_deferred_image(event, prompt)
+        if artifact.get("status") != "generated":
+            return artifact
+        try:
+            result = await self.deliver_deferred_image(event, artifact)
+        except Exception:
+            return {"status": "unknown", "reason": "send_failed"}
+        return {**result, "revised": str(artifact.get("revised") or "")}
+
+    def complete_deferred_image(self, request_id, status):
+        """接收执行器的发送结果，仅更新既有额度记录。"""
+        if status not in ("sent", "unknown", "cancelled"):
+            raise ValueError("invalid_deferred_image_status")
+        service = self._image_generation()
+        service.settle_deferred_image(request_id, status)
 
     def _outage(self) -> ClassifierOutageRecovery:
         if not hasattr(self, "classifier_outage"):
@@ -1242,9 +1358,6 @@ class Main(Star):
 
         # 复用线上最终装配钩子，避免新增重复监听或覆盖图片/思考清理。
         await self.fit_final_request_images(event, req)
-        # 保留运行器原历史；只在 Provider 发送副本上精简旧附加内容。
-        self._freeze_emotion_snapshot(event, req)
-        self._history_view().prepare(event, req)
         self.logger.warning("[LH-trace] 契约钩子完成，即将请求主模型")
 
     @filter.on_llm_request(priority=-maxsize - 10)
@@ -1339,7 +1452,6 @@ class Main(Star):
     async def trace_agent_begin(self, event, run_context):
         service = self._trace(event)
         self._reply_health().watch(event, expected=True)
-        self._history_view().bind(event, find_current_runner(run_context))
         self._reply_fallback().bind_current(event, run_context)
         # 宿主已选择本轮provider；只取名称，后备切换的最终归属仍以宿主日志为准。
         try:
@@ -1818,9 +1930,6 @@ class Main(Star):
         turns = getattr(self, "_reply_turns", None)
         if turns is not None:
             turns.close()
-        history_view = getattr(self, "history_view", None)
-        if history_view is not None:
-            await history_view.close()
         fallback = getattr(self, "reply_fallback", None)
         if fallback is not None:
             await fallback.close()

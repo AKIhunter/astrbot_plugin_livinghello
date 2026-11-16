@@ -59,6 +59,210 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         event.result=event.chain_result([Plain("文字已发")])
         await Main.deliver_pending_image(self.plugin, event)
 
+    async def test_deferred_contract_generates_without_sending_or_pending_leak(self):
+        self.plugin.get_deferred_image_contract = lambda: Main.get_deferred_image_contract(self.plugin)
+        event = Event(mid="promise:fixed-id")
+        result = await Main.generate_deferred_image(self.plugin, event, "橙色猫的自拍")
+        self.assertEqual(result["status"], "generated")
+        self.assertEqual(result["path"], str(self.output))
+        self.assertEqual(result["revised"], "一只橙色猫")
+        self.assertIsNone(event.get_extra("_livinghello_pending_image"))
+        event.send.assert_not_awaited()
+        Main.complete_deferred_image(self.plugin, result["request_id"], "sent")
+        with self.service._connect() as db:
+            self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0], "sent")
+
+    async def test_deferred_disabled_does_not_request_image(self):
+        self.plugin.get_deferred_image_contract = lambda: Main.get_deferred_image_contract(self.plugin)
+        self.service.values["enabled"] = False
+        result = await Main.generate_deferred_image(self.plugin, Event(), "猫")
+        self.assertEqual(result, {"status": "unavailable"})
+        self.service._request.assert_not_awaited()
+
+    async def test_deferred_unknown_never_claims_delivery(self):
+        self.plugin.get_deferred_image_contract = lambda: Main.get_deferred_image_contract(self.plugin)
+        self.service._request.side_effect = TimeoutError()
+        result = await Main.generate_deferred_image(self.plugin, Event(), "猫")
+        self.assertEqual(result, {"status": "unknown"})
+        self.service._request.assert_awaited_once()
+
+    async def test_deferred_fixed_id_keeps_paid_call_idempotent(self):
+        self.plugin.get_deferred_image_contract = lambda: Main.get_deferred_image_contract(self.plugin)
+        first = await Main.generate_deferred_image(self.plugin, Event(mid="promise:fixed"), "猫")
+        second = await Main.generate_deferred_image(self.plugin, Event(mid="promise:fixed"), "猫")
+        self.assertEqual(first["status"], "generated")
+        self.assertEqual(second["status"], "unknown")
+        self.service._request.assert_awaited_once()
+
+    def deferred_plugin(self):
+        self.plugin.get_deferred_image_contract = lambda: Main.get_deferred_image_contract(self.plugin)
+        self.plugin.generate_deferred_image = lambda event, prompt: Main.generate_deferred_image(
+            self.plugin, event, prompt)
+        self.plugin.complete_deferred_image = lambda rid, status: Main.complete_deferred_image(
+            self.plugin, rid, status)
+        self.plugin.execute_deferred_image = lambda event, prompt: Main.execute_deferred_image(
+            self.plugin, event, prompt)
+        self.plugin.deliver_deferred_image = lambda event, artifact, **kwargs: Main.deliver_deferred_image(
+            self.plugin, event, artifact, **kwargs)
+        self.context.send_message = AsyncMock(return_value=True)
+
+    async def generated_resource(self):
+        self.deferred_plugin()
+        event = Event(mid="promise:delivery-contract")
+        artifact = await self.plugin.generate_deferred_image(event, "猫")
+        return event, artifact
+
+    async def test_delivery_restart_replays_receipt_without_second_send(self):
+        event, artifact = await self.generated_resource()
+        result = await self.plugin.deliver_deferred_image(event, artifact)
+        self.assertEqual(result["status"], "sent")
+        # 重建服务实例，仍使用同一个磁盘账本。
+        restored = ImageSettings(self.plugin)
+        restored.values.update(self.service.values)
+        self.plugin._image_generation = lambda: restored
+        replay = await self.plugin.deliver_deferred_image(Event("new-event"), artifact)
+        self.assertEqual(replay["status"], "sent")
+        self.assertEqual(replay["reason"], "already_sent")
+        self.context.send_message.assert_awaited_once()
+
+    async def test_late_legacy_callback_cannot_reopen_sent_delivery(self):
+        event, artifact = await self.generated_resource()
+        await self.plugin.deliver_deferred_image(event, artifact)
+        self.plugin.complete_deferred_image(artifact["request_id"], "unknown")
+        self.assertEqual((await self.plugin.deliver_deferred_image(event, artifact))["status"], "sent")
+        self.context.send_message.assert_awaited_once()
+
+    async def test_delivery_false_retries_only_original_image(self):
+        event, artifact = await self.generated_resource()
+        self.context.send_message.return_value = False
+        result = await self.plugin.deliver_deferred_image(event, artifact)
+        self.assertEqual((result["status"], result["retryable"]), ("rejected", True))
+        self.context.send_message.return_value = True
+        self.assertEqual((await self.plugin.deliver_deferred_image(event, artifact))["status"], "sent")
+        self.assertEqual(self.context.send_message.await_count, 2)
+        self.service._request.assert_awaited_once()
+
+    async def test_delivery_exception_or_nonbool_never_retries(self):
+        for index, response in enumerate((OSError("isolated"), None)):
+            with self.subTest(response=type(response).__name__):
+                self.deferred_plugin()
+                event = Event(mid=f"promise:unknown-{index}")
+                artifact = await self.plugin.generate_deferred_image(event, "猫")
+                if isinstance(response, Exception):
+                    self.context.send_message.side_effect = response
+                else:
+                    self.context.send_message.return_value = response
+                self.assertEqual((await self.plugin.deliver_deferred_image(event, artifact))["status"],
+                                 "unknown")
+                self.assertEqual((await self.plugin.deliver_deferred_image(event, artifact))["status"],
+                                 "unknown")
+                self.context.send_message.assert_awaited_once()
+
+    async def test_delivery_concurrent_attempts_have_one_transport_call(self):
+        event, artifact = await self.generated_resource()
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def send(*_):
+            entered.set()
+            await release.wait()
+            return True
+        self.context.send_message.side_effect = send
+        first = asyncio.create_task(self.plugin.deliver_deferred_image(event, artifact))
+        await entered.wait()
+        try:
+            second = await self.plugin.deliver_deferred_image(Event("second"), artifact)
+            self.assertEqual(second["status"], "unknown")
+        finally:
+            release.set()
+        self.assertEqual((await first)["status"], "sent")
+        self.context.send_message.assert_awaited_once()
+
+    async def test_delivery_source_authorization_is_checked_before_transport(self):
+        event, artifact = await self.generated_resource()
+        authorize = AsyncMock(return_value=False)
+        result = await self.plugin.deliver_deferred_image(event, artifact, authorize=authorize)
+        self.assertEqual(result["reason"], "source_authorization_denied")
+        self.context.send_message.assert_not_awaited()
+        authorize.return_value = True
+        self.assertEqual((await self.plugin.deliver_deferred_image(
+            event, artifact, authorize=authorize))["status"], "sent")
+
+    async def test_delivery_rejects_changed_resource_identity(self):
+        event, artifact = await self.generated_resource()
+        for change in ({"session": "other"}, {"request_id": "invented"},
+                       {"path": str(self.output.parent / "other.png")}):
+            other = self.output.parent / "other.png"
+            other.write_bytes(self.output.read_bytes())
+            result = await self.plugin.deliver_deferred_image(event, {**artifact, **change})
+            self.assertEqual((result["status"], result["retryable"]), ("rejected", False))
+        self.context.send_message.assert_not_awaited()
+        self.assertEqual((await self.plugin.deliver_deferred_image(event, artifact))["status"], "sent")
+
+    async def test_delivery_disabled_after_generation_retains_original_image(self):
+        event, artifact = await self.generated_resource()
+        self.service.values["enabled"] = False
+        result = await self.plugin.deliver_deferred_image(event, artifact)
+        self.assertEqual(result["status"], "rejected")
+        self.context.send_message.assert_not_awaited()
+        self.service.values["enabled"] = True
+        self.assertEqual((await self.plugin.deliver_deferred_image(event, artifact))["status"], "sent")
+        self.service._request.assert_awaited_once()
+
+    async def test_delivery_rechecks_local_switch_after_source_authorization(self):
+        event, artifact = await self.generated_resource()
+        async def authorize():
+            self.service.values["enabled"] = False
+            return True
+        result = await self.plugin.deliver_deferred_image(event, artifact, authorize=authorize)
+        self.assertEqual(result["status"], "rejected")
+        self.context.send_message.assert_not_awaited()
+
+    async def test_delivery_interrupted_submission_is_persisted_as_unknown(self):
+        event, artifact = await self.generated_resource()
+        self.context.send_message.side_effect = asyncio.CancelledError()
+        with self.assertRaises(asyncio.CancelledError):
+            await self.plugin.deliver_deferred_image(event, artifact)
+        self.assertEqual((await self.plugin.deliver_deferred_image(event, artifact))["status"], "unknown")
+        self.context.send_message.assert_awaited_once()
+
+    async def test_cron_tool_delivers_without_after_sent_stage(self):
+        self.deferred_plugin()
+        from images.guard_image_tool import GenerateImageTool
+        tool = GenerateImageTool(service=self.service)
+        event = Event(mid="cron:one")
+        event.set_extra("cron_job", {"id": "one"})
+        result = await tool.call(SimpleNamespace(context=SimpleNamespace(event=event)), prompt="猫")
+        self.assertIn("图片已发送", result)
+        self.context.send_message.assert_awaited_once()
+        self.assertIsNone(event.get_extra("_livinghello_pending_image"))
+        with self.service._connect() as db:
+            self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0], "sent")
+
+    async def test_cron_send_failure_cannot_retry_with_changed_prompt(self):
+        self.deferred_plugin()
+        self.context.send_message.side_effect = OSError("isolated")
+        from images.guard_image_tool import GenerateImageTool
+        tool = GenerateImageTool(service=self.service)
+        event = Event(mid="cron:failure")
+        event.set_extra("cron_job", {"id": "failure"})
+        result = await tool.call(event, prompt="猫")
+        self.assertIn("未确认发送", result)
+        again = await tool.call(event, prompt="狗")
+        self.assertIn("未确认发送", again)
+        self.service._request.assert_awaited_once()
+        self.context.send_message.assert_awaited_once()
+
+    async def test_one_time_cron_restart_and_rewording_do_not_charge_twice(self):
+        self.deferred_plugin()
+        first = Event(mid="before-restart")
+        first.set_extra("cron_job", {"id": "durable-job", "run_once": True})
+        self.assertEqual((await self.plugin.execute_deferred_image(first, "猫"))["status"], "sent")
+        newer = Event(mid="after-restart")
+        newer.set_extra("cron_job", {"id": "durable-job", "run_once": True})
+        self.assertEqual((await self.plugin.execute_deferred_image(newer, "狗"))["status"], "unknown")
+        self.service._request.assert_awaited_once()
+        self.context.send_message.assert_awaited_once()
+        self.assertEqual(self.service.read()["usage"]["used"], 1)
+
     def body(self,**values):
         return dict(expected_revision=self.service.read()["revision"],values=values)
 
@@ -126,11 +330,13 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_external_disk_change_returns_conflict_not_unreadable(self):
         await self.service.save(self.body(style_prompt="水彩"))
+        # 页面草稿先取得版本；外部修改后再read()会热重载，已不再是旧草稿。
+        draft = self.body(style_prompt="油画")
         stored = json.loads(self.service.path.read_text(encoding="utf-8"))
         stored["daily_limit"] = 7
         self.service.path.write_text(json.dumps(stored, ensure_ascii=False), encoding="utf-8")
         with self.assertRaises(NativeReplyError) as raised:
-            await self.service.save(self.body(style_prompt="油画"))
+            await self.service.save(draft)
         self.assertEqual(raised.exception.status, 409)
         self.assertIn("已变化", str(raised.exception))
 
@@ -240,6 +446,40 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.send.await_count,1)
         self.assertIsNone(event.get_extra("_livinghello_pending_image"))
         self.assertEqual(self.service.used(),1)
+
+    async def test_image_job_retries_delivery_of_generated_image(self):
+        event=Event()
+        request_id=self.service.reserve(event,"画猫",False)
+        job=dict(status="running",prompt="画猫",use_reference=False,
+                 values=dict(self.service.values),reply="",emotion=None)
+        event.set_extra("_livinghello_pending_image",
+                        {"path":str(self.output),"request_id":request_id})
+        event.send.side_effect=[OSError("offline-once"),None]
+        self.service.generate=AsyncMock(return_value="图片已生成。")
+        with patch("images.guard_image_settings.asyncio.sleep",new=AsyncMock()):
+            await self.service._run_image_job(event,job)
+        self.assertEqual(event.send.await_count,2)
+        self.assertEqual(job["status"],"sent")
+        with self.service._connect() as db:
+            self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0],"sent")
+
+    async def test_image_job_apology_after_delivery_retries_exhausted(self):
+        event=Event()
+        request_id=self.service.reserve(event,"画猫",False)
+        job=dict(status="running",prompt="画猫",use_reference=False,
+                 values=dict(self.service.values),reply="",emotion=None)
+        event.set_extra("_livinghello_pending_image",
+                        {"path":str(self.output),"request_id":request_id})
+        event.send.side_effect=[OSError("offline-one"),OSError("offline-two"),None]
+        self.service.generate=AsyncMock(return_value="图片已生成。")
+        with patch("images.guard_image_settings.asyncio.sleep",new=AsyncMock()):
+            await self.service._run_image_job(event,job)
+        self.assertEqual(event.send.await_count,3)
+        self.assertEqual(job["status"],"unknown")
+        apology=event.send.await_args_list[-1].args[0]
+        self.assertIn("没顺利",apology.chain[0].text)
+        with self.service._connect() as db:
+            self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0],"unknown")
 
     def test_revised_prompt_accepts_both_protocols_and_caps_length(self):
         self.assertEqual(ImageSettings.revised(

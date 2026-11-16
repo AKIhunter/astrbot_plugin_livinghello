@@ -39,6 +39,15 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
         await self.guard.listen_livingemotion(self.event, self.req)
         self.assertEqual(self.req.extra_user_content_parts, [])
 
+    async def test_cooperation_contract_declares_owners_without_changing_flags(self):
+        value = self.guard.get_function_coupling()
+        self.assertEqual(value["contract"], "livinghello.function-coupling.v1")
+        self.assertFalse(value["integrations"]["livingemotion"]["effective"])
+        cooperation = value["cooperation"]
+        self.assertEqual(cooperation["contract"], "livinghello.cooperation.v1")
+        self.assertEqual(cooperation["owners"]["image_delivery"], "livinghello")
+        self.assertEqual(cooperation["owners"]["promise_completion"], "livingemotion")
+
     async def test_connected_disabled_and_reload_are_discovered_each_time(self):
         self.guard.config["coupling_livingemotion_enabled"] = True
         row = lambda: self.guard.get_function_coupling()["integrations"]["livingemotion"]

@@ -43,12 +43,10 @@ Hello 的 `_freeze_emotion_snapshot()` 保留同一事件首次获得的完整�
 
 2026-11-14：Hello 全量离线测试 818 项，816 通过、2 跳过；状态、搜索与重试专项 37 项全部通过。使用真实宿主消息绑定、保存、普通/流式发送、后备及参数补查方法体，Provider 与发送均隔离。Emotion 耦合专项 46 项通过。
 
-2026-11-16：在最新 main 上解决冲突后，状态、搜索与重试专项 37 项全部通过。Hello 同环境基线执行 774 项，合并版执行 795 项，两者均为 6 失败、7 错误、16 跳过，失败和错误名称完全一致；远端基线已会卡在控制台缓存并发测试，因此两边均排除 `test_console_save_latency` 模块的 13 项，不能视作全量通过。Emotion 全量基线为 1804 通过、43 失败，合并版为 1805 通过、42 失败，无新增失败；适配状态块测试，使其同时容纳远端新增的承诺附加块。
-
 ```bash
 ASTRBOT_NATIVE_SOURCE=/path/to/AstrBot/astrbot \
 ASTRBOT_HOST_SOURCE=/path/to/AstrBot \
-python scripts/run_offline_tests.py
+python run_offline_tests.py
 ```
 
 宿主缺失时对应契约测试会明确跳过，不能视作实际宿主验收。当前验证为本地离线验证，未部署或在线实测。
