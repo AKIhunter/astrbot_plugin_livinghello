@@ -7,7 +7,14 @@ except ImportError:
     from gate.guard_engine import GateFailure, GateProvider
 
 
-def supports_images(provider, model=""):
+VISION_ROUTER_API_TYPES = frozenset({"image_to_text", "multimodal"})
+
+
+def supports_images(provider, model="", *, api_type=None):
+    # 仅路由上游传入 api_type：显式能力优先，原生 Provider 保留原有判断。
+    # 路由构造的 client 没有 modalities，不能因此把 HY4 等新型号拒绝掉。
+    if api_type is not None:
+        return str(api_type).strip().lower() in VISION_ROUTER_API_TYPES
     config = getattr(provider, "provider_config", {}) or {}
     getter = getattr(provider, "get_model", None)
     name = (model or (getter() if callable(getter) else "") or "").lower()
@@ -46,7 +53,7 @@ class StrictVisionProvider:
             payload, None, request_max_retries=kwargs.get("request_max_retries", 1))
 
 
-def image_target(provider, label=""):
+def image_target(provider, label="", *, api_type=None):
     if provider is None:
         raise GateFailure("no_vision_provider")
     config = getattr(provider, "provider_config", {}) or {}
@@ -63,14 +70,14 @@ def image_target(provider, label=""):
             model = str(client.get_model() or "")
             if pinned and pinned != model:
                 continue
-            if supports_images(client, model):
+            if supports_images(client, model, api_type=getattr(upstream, "api_type", None)):
                 choices.append(model)
         if not choices:
             raise GateFailure("main_no_vision" if not label else "no_vision_provider")
         model = choices[0]
     else:
         model = pinned or str(provider.get_model() or "")
-        if not supports_images(provider, model):
+        if not supports_images(provider, model, api_type=api_type):
             raise GateFailure("main_no_vision" if not label else "no_vision_provider")
         # 不改变共享provider；此局部适配器仅用于图片参与分类。
         if (getattr(provider, "provider_config", {}).get("type") == "openai_chat_completion"

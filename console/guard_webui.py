@@ -26,7 +26,7 @@ from astrbot.api.star import Context
 from astrbot.api.web import error_response, json_response, request
 try:
     from ..gate.guard_message_policy import FIELDS as MESSAGE_POLICY_FIELDS, validate_policy_config
-    from ..images.guard_media import image_target
+    from ..images.guard_media import image_target, VISION_ROUTER_API_TYPES
     from .guard_expression_help import HELP as EXPRESSION_HELP
     from ..gate.guard_engine import GATE_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT, GateEngine, Decision
     from ..input.guard_probe_input import parse_probe, ProbeInputError
@@ -44,7 +44,7 @@ try:
     )
 except ImportError:
     from gate.guard_message_policy import FIELDS as MESSAGE_POLICY_FIELDS, validate_policy_config
-    from images.guard_media import image_target
+    from images.guard_media import image_target, VISION_ROUTER_API_TYPES
     from console.guard_expression_help import HELP as EXPRESSION_HELP
     from gate.guard_engine import GATE_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT, GateEngine, Decision
     from input.guard_probe_input import parse_probe, ProbeInputError
@@ -221,11 +221,6 @@ PROVIDERS_CACHE_TTL_SECONDS = 600.0
 # 是否支持图片，模型清单只是「N 个可选模型」的装饰；为了这行装饰串行打 28 次
 # 网络请求，是首屏几秒的根源。True = 不枚举（默认），False = 恢复旧行为。
 PROVIDER_LIST_FAST = True
-
-# 路由侧把上游标成 image_to_text/multimodal，等于显式声明“能接收图片”。
-# 名字正则只是启发式，会漏掉 qwen3.8-max、gpt-6 这类命名；路由连接优先采信这份声明。
-VISION_ROUTER_API_TYPES = frozenset({"image_to_text", "multimodal"})
-
 
 def _provider_catalog_revision(plugin: Any) -> str | None:
     """只看「有哪些连接」，不逐项问模型、也不用内存地址当指纹。

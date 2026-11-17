@@ -12,6 +12,7 @@ import asyncio
 import json
 import re
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from collections.abc import Mapping
 
@@ -313,6 +314,10 @@ class Understanding:
                     continue
                 seen_objects.add(id(component))
                 name, data = kind(component), payload(component)
+                xml_forward = self.xml_forward(data) if name == "xml" else None
+                if xml_forward is not None:
+                    # QQ 嵌套聊天记录常以 XML 返回，复用 Forward 的预算与来源检查。
+                    name, data = "forward", {"id": xml_forward[0]}
                 text = ""
                 if name in {"plain", "text"}:
                     text = str(read(data, "text"))
@@ -323,13 +328,19 @@ class Understanding:
                         text = "[合并转发，展开已关闭]"
                     elif depth >= max_depth:
                         text = "[合并转发达到层数上限]"
+                    elif observation.nodes >= max_nodes:
+                        text = "[合并转发达到条数上限]"
                     else:
                         nodes = read(data, "nodes", "content", default=None)
                         if name == "node":
                             nodes = [component]
                         if nodes is None:
                             fid = str(read(data, "id"))
-                            if not fid or ("forward", fid) in seen_ids:
+                            if not fid and xml_forward is not None:
+                                # m_fileName 是文件标识，不能冒充可回拉的 m_resid。
+                                text = "[XML合并转发缺少资源ID，内部未展开]"
+                                observation.errors.append("forward:MissingResourceId")
+                            elif not fid or ("forward", fid) in seen_ids:
                                 text = "[合并转发无内容或重复ID]"
                             else:
                                 seen_ids.add(("forward", fid))
@@ -338,7 +349,16 @@ class Understanding:
                                     nodes = read(fetched, "messages", "content", default=[])
                                 except Exception:
                                     text = "[当前平台无法展开合并转发]"
+                                    observation.errors.append("forward:Unavailable")
+                            if (text and xml_forward is not None and xml_forward[1]
+                                    and not self.plugin._policy().black_active
+                                    and self.config.get("understand_card_parse", True)):
+                                # 预览作者身份无法核验，启用黑名单时不把它混入正文。
+                                text += "\n[仅卡片预览，不代表已读取内部消息] " + xml_forward[1]
                         if not text:
+                            if not isinstance(nodes, (list, tuple)) or not nodes:
+                                text = "[合并转发内容为空或返回格式无效，未展开]"
+                                observation.errors.append("forward:EmptyContent")
                             children = []
                             for node in nodes if isinstance(nodes, (list, tuple)) else []:
                                 if observation.nodes >= max_nodes:
@@ -355,7 +375,8 @@ class Understanding:
                                 content = read(row, "content", "message", default=[])
                                 children.append(author[:100] + ": " + await walk(
                                     content, depth + 1, quotes, image_source))
-                            text = "[合并转发·下列内容属于原作者]\n" + "\n".join(children)
+                            if not text:
+                                text = "[合并转发·下列内容属于原作者]\n" + "\n".join(children)
                 elif name == "reply":
                     if quotes >= quote_depth:
                         text = "[引用链展开已关闭或达到层数上限]"
@@ -444,6 +465,33 @@ class Understanding:
                                   + observation.prompt[-half:])
         observation.timings["input_parse"] = round((time.monotonic() - started) * 1000)
         return observation
+
+    @staticmethod
+    def xml_forward(data):
+        """只识别 QQ 合并转发 XML；预览不是正文，文件名不是资源 ID。"""
+        raw = read(data, "data", default=data)
+        if (not isinstance(raw, str) or len(raw) > 60000
+                or re.search(r"<!\s*(?:DOCTYPE|ENTITY)\b", raw, re.IGNORECASE)):
+            return None
+        try:
+            root = ET.fromstring(raw.lstrip("\ufeff \t\r\n"))
+        except ET.ParseError:
+            return None
+        attrs = {key.lower(): str(value).strip() for key, value in root.attrib.items()}
+        if (root.tag.lower() != "msg" or
+                not (attrs.get("action", "").lower() == "viewmultimsg"
+                     or attrs.get("serviceid") == "35")):
+            return None
+        resource_id = attrs.get("m_resid") or attrs.get("resid") or ""
+        parts = []
+        for item in root.iter():
+            if item.tag.lower() in {"title", "summary"}:
+                text = " ".join("".join(item.itertext()).split())[:500]
+                if text:
+                    parts.append(text)
+                if len(parts) >= 20:
+                    break
+        return resource_id[:4096], "；".join(parts)[:1000]
 
     @staticmethod
     def card(data):
@@ -690,7 +738,8 @@ class Understanding:
                         pass
                 call = dict(kwargs)
                 call["model"] = model
-                target = image_target(client, model)
+                # 直连时仍保留路由的能力声明，不能二次按型号名把已选上游拒绝掉。
+                target = image_target(client, model, api_type=getattr(upstream, "api_type", None))
                 return await target.provider.text_chat(**call)
             # 不可用的锁定上游不回到串行降级链，也不删图冒充读图成功。
             raise ValueError("no_vision_provider")

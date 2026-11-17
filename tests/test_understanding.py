@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from astrbot.api.message_components import Plain, Image, Reply, Record
 from input.guard_understanding import Understanding, audio_capable
@@ -27,6 +27,13 @@ def segment(text):
 
 def node(text, author="原作者"):
     return {"type": "node", "data": {"name": author, "content": [segment(text)]}}
+
+
+def xml_forward(resource_id="", preview="原作者: [图片]", filename="file-uuid"):
+    return component("Xml", data=(
+        f'<msg serviceID="35" action="viewMultiMsg" m_resid="{resource_id}" '
+        f'm_fileName="{filename}"><item><title>{preview}</title>'
+        '<summary>查看2条转发消息</summary></item></msg>'))
 
 
 class UnderstandingTest(unittest.IsolatedAsyncioTestCase):
@@ -78,6 +85,129 @@ class UnderstandingTest(unittest.IsolatedAsyncioTestCase):
             understand_forward_max_depth=8)
         self.assertLess(len(observation.text), 200)
         self.event.bot.call_action.assert_awaited_once_with("get_forward_msg", message_id="id")
+
+    async def test_xml_nested_forward_fetches_body_and_images(self):
+        nested = xml_forward("inner-id", preview="仅预览")
+        self.event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=[
+            {"messages": [node("外层"), {"name": "outer", "content": [nested]}]},
+            {"data": {"messages": [{"sender": {"user_id": 456, "nickname": "内层作者"},
+                "content": [segment("真实正文"), {"type": "image", "data": {"url": "inner.png"}}]}]}},
+        ]))
+        observation = await self.parse([component("Forward", id="outer-id")],
+                                       understand_forward_max_depth=2)
+        self.assertEqual(observation.nodes, 3)
+        self.assertIn("内层作者: 真实正文", observation.text)
+        self.assertEqual(observation.images, ["inner.png"])
+        self.assertNotIn("仅预览", observation.text)
+        self.assertNotIn("<msg", observation.text)
+        self.assertEqual([call.kwargs["message_id"] for call in
+                          self.event.bot.call_action.await_args_list], ["outer-id", "inner-id"])
+
+    async def test_xml_without_resource_id_labels_preview_and_never_uses_filename(self):
+        self.event.bot = SimpleNamespace(call_action=AsyncMock())
+        observation = await self.parse([xml_forward(preview="测试用户: [图片]", filename="local-uuid")])
+        self.event.bot.call_action.assert_not_awaited()
+        self.assertIn("缺少资源ID", observation.text)
+        self.assertIn("仅卡片预览", observation.text)
+        self.assertIn("测试用户", observation.text)
+        self.assertNotIn("local-uuid", observation.text)
+        self.assertNotIn("<msg", observation.text)
+
+    async def test_xml_depth_and_switch_prevent_fetch_and_preview(self):
+        for config in ({"understand_forward_max_depth": 0},
+                       {"understand_expand_forward": False}):
+            event = Event()
+            event.message_obj.message = [xml_forward("hidden", "隐藏预览")]
+            event.bot = SimpleNamespace(call_action=AsyncMock())
+            self.guard.config.update(config)
+            observation = await self.reader.parse(event)
+            event.bot.call_action.assert_not_awaited()
+            self.assertNotIn("隐藏预览", observation.text)
+
+    async def test_xml_nested_depth_includes_outer_forward(self):
+        self.event.bot = SimpleNamespace(call_action=AsyncMock(return_value={
+            "messages": [{"name": "outer", "content": [xml_forward("inner", "隐藏预览")]}]}))
+        observation = await self.parse([component("Forward", id="outer")],
+                                       understand_forward_max_depth=1)
+        self.event.bot.call_action.assert_awaited_once_with("get_forward_msg", message_id="outer")
+        self.assertIn("层数上限", observation.text)
+        self.assertNotIn("隐藏预览", observation.text)
+
+    async def test_xml_forward_shares_duplicate_id_with_native_forward(self):
+        self.event.bot = SimpleNamespace(call_action=AsyncMock(return_value={"messages": [node("正文")]}))
+        observation = await self.parse([xml_forward("same"), component("Forward", id="same")])
+        self.event.bot.call_action.assert_awaited_once_with("get_forward_msg", message_id="same")
+        self.assertEqual(observation.text.count("正文"), 1)
+
+    async def test_xml_nested_nodes_share_global_limit_without_extra_fetch(self):
+        self.event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=[
+            {"messages": [{"name": "outer", "content": [xml_forward("inner"), xml_forward("unused")]}]},
+            {"messages": [node("first"), node("second")]},
+        ]))
+        observation = await self.parse([component("Forward", id="outer")],
+                                       understand_forward_max_depth=3, understand_forward_max_nodes=2)
+        self.assertEqual(observation.nodes, 2)
+        self.assertNotIn("second", observation.text)
+        self.assertIn("条数上限", observation.text)
+        self.assertEqual(self.event.bot.call_action.await_count, 2)
+
+    async def test_xml_fetch_failure_keeps_later_text_and_labels_unread(self):
+        self.event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=RuntimeError("unavailable")))
+        observation = await self.parse([xml_forward("missing", "可见预览"), Plain("后续正文")])
+        self.assertIn("无法展开", observation.text)
+        self.assertIn("仅卡片预览", observation.text)
+        self.assertIn("后续正文", observation.text)
+        self.assertIn("forward:Unavailable", observation.errors)
+
+    async def test_xml_empty_result_does_not_claim_successful_expansion(self):
+        self.event.bot = SimpleNamespace(call_action=AsyncMock(return_value={"messages": []}))
+        observation = await self.parse([xml_forward("empty")])
+        self.assertIn("内容为空", observation.text)
+        self.assertNotIn("下列内容属于原作者", observation.text)
+
+    async def test_xml_forward_obeys_original_author_blacklist(self):
+        from test_message_policy_flow import QQEvent
+        self.guard.config.update(message_blacklist_qq=["789"])
+        event = QQEvent(components=[xml_forward("inner")])
+        event.bot = SimpleNamespace(call_action=AsyncMock(return_value={"messages": [
+            {"sender": {"user_id": 789, "nickname": "blocked"}, "content": [
+                segment("BLACK_BODY"), {"type": "image", "data": {"url": "black.png"}}]},
+            {"sender": {"user_id": 555, "nickname": "allowed"}, "content": [segment("允许正文")]},
+        ]}))
+        observation = await self.reader.parse(event)
+        self.assertNotIn("BLACK_BODY", observation.text)
+        self.assertNotIn("black.png", observation.images)
+        self.assertIn("允许正文", observation.text)
+        self.assertIn("来源受名单限制", observation.text)
+
+    async def test_xml_unverified_preview_is_hidden_when_blacklist_is_active(self):
+        from test_message_policy_flow import QQEvent
+        self.guard.config.update(message_blacklist_qq=["789"])
+        event = QQEvent(components=[xml_forward(preview="BLACK_PREVIEW")])
+        event.bot = SimpleNamespace(call_action=AsyncMock())
+        observation = await self.reader.parse(event)
+        event.bot.call_action.assert_not_awaited()
+        self.assertIn("缺少资源ID", observation.text)
+        self.assertNotIn("BLACK_PREVIEW", observation.text)
+
+    async def test_xml_forward_uses_existing_global_fetch_budget(self):
+        self.event.bot = SimpleNamespace(call_action=AsyncMock(return_value={"messages": [node("正文")]}))
+        observation = await self.parse([xml_forward(f"id-{i}") for i in range(9)])
+        self.assertEqual(self.event.bot.call_action.await_count, 8)
+        self.assertIn("无法展开", observation.text)
+
+    async def test_xml_ordinary_malformed_and_dtd_do_not_trigger_fetch(self):
+        self.event.bot = SimpleNamespace(call_action=AsyncMock())
+        observation = await self.parse([
+            component("Xml", data='<msg serviceID="5"><title>普通卡片</title></msg>'),
+            component("Xml", data='<msg serviceID="35"'),
+            component("Xml", data='<!DOCTYPE msg [<!ENTITY x "hidden">]>'
+                      '<msg serviceID="35" m_resid="bad"><title>&x;</title></msg>'),
+            Plain("最后的有效文字"),
+        ])
+        self.event.bot.call_action.assert_not_awaited()
+        self.assertIn("普通卡片", observation.text)
+        self.assertIn("最后的有效文字", observation.text)
 
     async def test_malformed_payloads_are_bounded_and_keep_good_text(self):
         bad = component("Nodes", nodes=10)
@@ -200,6 +330,45 @@ class UnderstandingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(provider.text_chat.await_args.kwargs["image_urls"], ["image.png"])
         provider.set_model.assert_not_called()
         self.assertIn("可见文字", observation.text)
+
+    async def test_hy4_declared_multimodal_reaches_locked_client_and_attaches_observation(self):
+        client = SimpleNamespace(
+            get_model=lambda: "hy4-preview-f", provider_config={},
+            text_chat=AsyncMock(return_value=SimpleNamespace(completion_text="可见真实画面")),
+        )
+        provider = SimpleNamespace(
+            provider_config={"id": "multi_api_router:upstream_15"},
+            upstreams=[SimpleNamespace(client=client, api_type="multimodal")],
+            text_chat=AsyncMock(),
+        )
+        self.guard.context = SimpleNamespace(get_provider_by_id=Mock(return_value=provider))
+        self.guard.config.update(understand_image_enabled=True,
+                                vision_shared_provider_id="multi_api_router:upstream_15")
+        self.event.message_obj.message = [Image(url="image.png")]
+        req = SimpleNamespace(extra_user_content_parts=[], image_urls=[])
+        with patch("images.guard_image_budget.fit_sync", return_value=(["image.png"], [])):
+            await self.reader.attach(self.event, req)
+        client.text_chat.assert_awaited_once()
+        provider.text_chat.assert_not_awaited()
+        self.assertEqual(client.text_chat.await_args.kwargs["model"], "hy4-preview-f")
+        self.assertEqual(client.text_chat.await_args.kwargs["image_urls"], ["image.png"])
+        self.assertIn("可见真实画面", req.extra_user_content_parts[0].text)
+
+    async def test_declared_vision_still_uses_strict_adapter_without_image_removal_retry(self):
+        client = SimpleNamespace(
+            provider_config={"id": "client", "type": "openai_chat_completion"},
+            get_model=lambda: "hy4-preview-f",
+            _prepare_chat_payload=AsyncMock(return_value=({"messages": ["with image"]}, [])),
+            _query=AsyncMock(side_effect=RuntimeError("not a VLM")),
+        )
+        provider = SimpleNamespace(upstreams=[SimpleNamespace(client=client, api_type="multimodal")])
+        with self.assertRaises(RuntimeError):
+            await self.reader._call_locked_upstream(
+                provider, model="hy4-preview-f", prompt="看图",
+                image_urls=["image.png"], system_prompt="规则", request_max_retries=1)
+        client._query.assert_awaited_once()
+        self.assertEqual(client._prepare_chat_payload.await_args.args[1], ["image.png"])
+        self.assertEqual(client._query.await_args.kwargs["request_max_retries"], 1)
 
     async def test_attach_has_untrusted_tags_and_timings_without_repeated_enrichment(self):
         self.event.message_obj.message = [Plain("用户输入")]

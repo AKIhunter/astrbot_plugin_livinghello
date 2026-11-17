@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from console import guard_webui
+from images.guard_media import image_target
 
 
 class FakeProvider:
@@ -49,6 +50,42 @@ def catalog(providers):
 
 
 class RouterVisionDeclarationTest(unittest.TestCase):
+    @staticmethod
+    def route(model, api_type):
+        client = FakeProvider("client", model)
+        provider = FakeProvider("multi_api_router:upstream_15", model, 15)
+        provider.upstreams = [SimpleNamespace(client=client, api_type=api_type)]
+        return provider
+
+    def test_hy4_multimodal_is_selected_at_runtime_and_in_catalog(self):
+        for model in ("hy4flash-free", "hy4-preview-f"):
+            with self.subTest(model=model):
+                provider = self.route(model, "multimodal")
+                target = image_target(provider, "multi_api_router:upstream_15")
+                self.assertEqual(target.model, model)
+                self.assertIs(target.provider, provider)
+                self.assertTrue(catalog([provider])[provider.provider_config["id"]]["supports_images"])
+
+    def test_image_to_text_overrides_text_name_heuristic_only_for_router(self):
+        provider = self.route("qwen3.8-max", "image_to_text")
+        self.assertEqual(image_target(provider).model, "qwen3.8-max")
+        with self.assertRaises(Exception):
+            image_target(FakeProvider("native", "qwen3.8-max"))
+
+    def test_declared_chat_is_not_selected_even_with_visual_model_name(self):
+        provider = self.route("qwen3-vl-plus", "chat")
+        with self.assertRaises(Exception):
+            image_target(provider, "multi_api_router:upstream_15")
+        self.assertFalse(catalog([provider])[provider.provider_config["id"]]["supports_images"])
+
+    def test_mixed_router_uses_declared_visual_slot_and_keeps_pin(self):
+        provider = self.route("hy4-preview-f", "multimodal")
+        provider.upstreams.insert(0, SimpleNamespace(
+            client=FakeProvider("text", "qwen3-vl-plus"), api_type="chat"))
+        self.assertEqual(image_target(provider).model, "hy4-preview-f")
+        with self.assertRaises(Exception):
+            image_target(provider, "multi_api_router::qwen3-vl-plus")
+
     def test_router_image_to_text_is_vision_even_if_name_not_matched(self):
         # qwen3.8-max 不命中任何视觉正则，靠路由声明才应被收录。
         items = catalog([FakeProvider("multi_api_router:upstream_4", "qwen3.8-max", 4)])
