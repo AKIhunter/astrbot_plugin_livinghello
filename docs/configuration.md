@@ -40,6 +40,11 @@
 | `understand_card_parse` | `true` | 解析卡片和小程序 |
 | `understand_image_enabled` | `true` | 图片理解 |
 | `understand_image_provider_id` | `""` | 图片理解模型（可选覆盖） |
+| `understand_gif_enabled` | `true` | 动图按首帧理解 |
+| `understand_video_enabled` | `false` | 视频理解 |
+| `understand_video_max_seconds` | `15` | 视频最长处理时长（秒） |
+| `understand_video_frames` | `5` | 视频抽帧张数 |
+| `understand_video_provider_id` | `""` | 视频理解模型（可选覆盖） |
 | `understand_voice_enabled` | `false` | 语音转文字理解 |
 | `understand_voice_provider_id` | `""` | 语音理解模型 |
 | `gate_mode` | `"enforce"` | 参与模式 |
@@ -142,9 +147,17 @@ LivingMemory / LivingEmotion 接入开关均默认关闭，安装插件不等于
 
 ### 模型选择
 
-判定小模型留空跟随会话当前模型；指定项失效可能回退会话模型，应查看日志。视觉候选按已知型号和宿主能力声明筛选，不代表所有 API 均经联网实测。判定可使用已注册路由 provider；上游标签的解析由插件及路由提供者约定，主模型回退列表用逐项下拉添加，按列表顺序回退，不允许重复。
+判定小模型留空跟随会话当前模型；指定项失效可能回退会话模型，应查看日志。原生视觉候选按已知型号和宿主能力声明筛选；路由上游优先采信 `api_type=image_to_text/multimodal`，锁定上游直连时保留同一声明，`chat` 等类型不进入视觉候选。能力声明不代表上游 API 已经联网实测。判定可使用已注册路由 provider；上游标签的解析由插件及路由提供者约定，主模型回退列表用逐项下拉添加，按列表顺序回退，不允许重复。
 
-`vision_provider_id` 用于参与判定，`understand_image_provider_id` 用于独立内容理解。原生配置中已移除图片理解桥，旧宿主字段保留但不再由本页编辑。当前事件启用配套插件感知时优先沿用其解析，避免重复独立理解。
+`vision_shared_provider_id` 是视觉共用项；`vision_provider_id` 覆盖参与判定，`understand_image_provider_id` 覆盖独立内容理解，两项留空时跟随共用项。原生配置中已移除图片理解桥，旧宿主字段保留但不再由本页编辑。当前事件启用配套插件感知时优先沿用其解析，避免重复独立理解。
+
+### 合并转发与 XML 卡片
+
+在「内容理解」配置 `understand_expand_forward`、`understand_forward_max_depth` 和
+`understand_forward_max_nodes`。XML 聊天记录与普通转发共用限制，外层计入深度；
+深度为1时，外层内部的下一层转发不会展开。关闭展开开关或达到限制时也不会回拉。
+XML 必须有 `m_resid/resid` 才能获取内部正文；缺失 ID 的预览只能作为卡片预览，
+不能凭 `m_fileName` 还原正文。详见[修复与边界说明](forward-xml-and-vision.md)。
 
 ## AstrBot 原生字段
 

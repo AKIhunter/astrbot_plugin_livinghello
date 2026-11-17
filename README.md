@@ -299,6 +299,17 @@ flowchart TD
 </details>
 
 <details>
+<summary>📨 为什么嵌套聊天记录仍显示未展开？</summary>
+
+先在 **内容理解** 检查「展开合并转发」和最大层数，外层也计入层数。XML 卡片需要
+`m_resid/resid` 才能回拉正文；只有文件名或预览时无法还原内部消息。
+路由视觉模型按 `api_type=image_to_text/multimodal` 声明选择，仍需上游实际支持图片输入。
+
+[合并转发与视觉修复说明](docs/forward-xml-and-vision.md)
+
+</details>
+
+<details>
 <summary>🧠 开了记忆接入，为什么还是不记得？</summary>
 
 核对 LivingMemory 是否激活、作用域是否允许、是否真的有相关历史，以及召回是否成功。只有当轮情绪或关系不能证明已经召回往事。
@@ -353,6 +364,8 @@ flowchart TD
 
 当前版本 **2.7.7**：控制台首屏从十几秒降到十几毫秒——缓存判据改为只读 provider 配置，模型目录不再在面板路径联网枚举，状态缓存有效期放宽到 6 秒。
 
+2026-11-17 修复：统一路由视觉能力判断，识别 XML 嵌套聊天记录；缺少资源 ID 时明确未展开。[修复原因与验证记录](docs/forward-xml-and-vision.md)
+
 [查看完整版本记录](CHANGELOG.md)
 
 <a name="documentation"></a>
@@ -364,6 +377,7 @@ README 提供中英双语入门；下面的详细文档主要为中文，代码�
 | 想继续了解 | 文档 |
 | --- | --- |
 | 操作与排查 | [使用指南](docs/usage.md) |
+| 嵌套聊天记录与视觉模型识别 | [修复与边界说明](docs/forward-xml-and-vision.md) |
 | 字段、范围与默认值 | [配置参考](docs/configuration.md) |
 | 判定和发送逻辑 | [流程说明](docs/architecture.md) |
 | 四种插件组合 | [配套组合](docs/integrations-and-flow.md) |

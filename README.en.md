@@ -303,6 +303,18 @@ Not necessarily. Image understanding, generation and text rendering are separate
 </details>
 
 <details>
+<summary>Why does a nested forwarded chat still remain unexpanded?</summary>
+
+Check forward expansion and the depth limit under **Content understanding**; the outer forward counts
+toward the limit. An XML chat card needs `m_resid/resid` to retrieve its messages. A file name or preview
+alone cannot restore the body. Router vision selection follows `api_type=image_to_text/multimodal`;
+the upstream must still actually support image input.
+
+[Forward and vision fix details (Chinese)](docs/forward-xml-and-vision.md)
+
+</details>
+
+<details>
 <summary>Why does it forget things after enabling memory?</summary>
 
 Check whether LivingMemory is active, the scope permits access, relevant history exists and retrieval succeeded. Current emotion or relationships alone do not prove that past memories were retrieved.
@@ -355,6 +367,10 @@ Find a recent record in **Overview**, copy its `request_id`, and inspect receivi
 
 Current version **2.7.7** cuts the console first paint from tens of seconds to roughly 13 ms: the cache fingerprint only reads provider config, the model catalogue is no longer enumerated over the network on the panel path, and the state cache TTL is widened to 6 seconds.
 
+The 2026-11-17 fix aligns router vision selection with declared capabilities and recognizes nested XML
+chat cards. Missing resource IDs are explicitly reported as unexpanded.
+[Root causes and validation (Chinese)](docs/forward-xml-and-vision.md)
+
 [Read the full changelog](CHANGELOG.md)
 
 <a name="documentation"></a>
@@ -366,6 +382,7 @@ This README provides a bilingual introduction. The detailed guides below are mai
 | Learn more about | Guide |
 | --- | --- |
 | Setup & troubleshooting | [Usage](docs/usage.md) |
+| Nested forwarded chats & vision selection | [Fix details and limits](docs/forward-xml-and-vision.md) |
 | Fields, ranges & defaults | [Configuration](docs/configuration.md) |
 | Decision & delivery logic | [Architecture](docs/architecture.md) |
 | Four integration setups | [Integrations](docs/integrations-and-flow.md) |
