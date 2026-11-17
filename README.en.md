@@ -371,6 +371,10 @@ The 2026-11-17 fix aligns router vision selection with declared capabilities and
 chat cards. Missing resource IDs are explicitly reported as unexpanded.
 [Root causes and validation (Chinese)](docs/forward-xml-and-vision.md)
 
+Slow replies now use 12 short phrases without punctuation, rotating per conversation.
+Legacy defaults are upgraded automatically; custom phrases remain in use.
+[Triggers and configuration (Chinese)](docs/early-ack.md)
+
 [Read the full changelog](CHANGELOG.md)
 
 <a name="documentation"></a>
@@ -383,6 +387,7 @@ This README provides a bilingual introduction. The detailed guides below are mai
 | --- | --- |
 | Setup & troubleshooting | [Usage](docs/usage.md) |
 | Nested forwarded chats & vision selection | [Fix details and limits](docs/forward-xml-and-vision.md) |
+| Slow-reply acknowledgements | [Triggers, rotation & configuration](docs/early-ack.md) |
 | Fields, ranges & defaults | [Configuration](docs/configuration.md) |
 | Decision & delivery logic | [Architecture](docs/architecture.md) |
 | Four integration setups | [Integrations](docs/integrations-and-flow.md) |

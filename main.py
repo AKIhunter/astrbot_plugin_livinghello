@@ -89,6 +89,23 @@ PLUGIN_NAME = "astrbot_plugin_LivingHello"
 BOT_LINE_PREFIX = "[我]: "
 CONGLING_RECOVERY_CONTRACT = "congling.classifier-recovery.v1"
 FACE_COMPONENT_NAMES = frozenset({"face", "mface"})
+# 保留旧文案的标点只用于识别存量默认配置，不作为发送内容。
+# 自定义文案仍按原配置使用。
+LEGACY_EARLY_ACK_TEXTS = ("稍等，我想一下。", "我看一下，马上说。", "等一下，我确认下。")
+EARLY_ACK_TEXTS = (
+    "我看看",
+    "嗯我想想",
+    "等我一下",
+    "让我捋捋",
+    "我琢磨一下",
+    "嗯给我一点时间",
+    "让我再想想",
+    "我先理一下",
+    "稍等一下哈",
+    "稍等我想一下",
+    "我看一下马上说",
+    "等一下我确认下",
+)
 
 
 class Main(Star):
@@ -104,6 +121,7 @@ class Main(Star):
         self.proactive_inflight_until: dict[str, float] = {}
         # 每个群上次发垫场句的时间（monotonic），用于冷却，避免刷屏。
         self.early_ack_at: dict[str, float] = {}
+        self.early_ack_positions: dict[str, int] = {}
         try:
             self.data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME))
             self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -1515,16 +1533,20 @@ class Main(Star):
             return 0.0
         return max(0.0, min(60.0, raw))
 
-    def _early_ack_text(self) -> str:
+    def _early_ack_text(self, group_key: str = "") -> str:
         raw = self.config.get("reply_early_ack_texts")
         if isinstance(raw, (list, tuple)):
             items = [str(item).strip() for item in raw if str(item).strip()]
         else:
             items = [part.strip() for part in str(raw or "").split("|") if part.strip()]
-        if not items:
-            items = ["稍等，我想一下。", "我看一下，马上说。"]
-        # 按分钟轮换，不随机：同一分钟内结果稳定，便于复现和观察。
-        return items[int(time.time() // 60) % len(items)]
+        if not items or tuple(items) == LEGACY_EARLY_ACK_TEXTS:
+            items = EARLY_ACK_TEXTS
+        if not hasattr(self, "early_ack_positions"):
+            self.early_ack_positions = {}
+        # 按会话逐次轮换；不同群互不影响，同一分钟触发也能换一句。
+        index = self.early_ack_positions.get(group_key, 0) % len(items)
+        self.early_ack_positions[group_key] = (index + 1) % len(items)
+        return items[index]
 
     def _early_ack_cooldown_seconds(self) -> float:
         """同一个群两次垫场的最小间隔；0 表示不限制（不建议）。"""
@@ -1603,10 +1625,10 @@ class Main(Star):
             self.early_ack_at[self._group_key(event)] = time.monotonic()
         except Exception:
             pass
-        text = self._early_ack_text()
         route = str(getattr(event, "unified_msg_origin", "") or "")
         if not route:
             return
+        text = self._early_ack_text(self._group_key(event))
         try:
             chain = MessageChain()
             chain.chain = [Plain(text)]

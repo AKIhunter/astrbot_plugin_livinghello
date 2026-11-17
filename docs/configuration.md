@@ -107,7 +107,7 @@
 | `gate_upstream_fanout_enabled` | `true` | 判定按上游轮转 |
 | `gate_upstream_try_timeout_seconds` | `3.0` | 单上游尝试超时（秒） |
 | `reply_early_ack_seconds` | `20` | 慢请求先回一句（秒，0关闭） |
-| `reply_early_ack_texts` | `["稍等，我想一下。","我看一下，马上说。","等一下，我确认下。"]` | 垫场句（多条按分钟轮换） |
+| `reply_early_ack_texts` | `["我看看","嗯我想想","等我一下","让我捋捋","我琢磨一下","嗯给我一点时间","让我再想想","我先理一下","稍等一下哈","稍等我想一下","我看一下马上说","等一下我确认下"]` | 垫场句（同一会话逐次轮换） |
 | `classifier_needs_attention_retry_seconds` | `300` | 故障重探间隔（秒） |
 | `classifier_outage_self_heal_seconds` | `1800` | 故障自愈放行（秒） |
 | `understand_hard_timeout_seconds` | `20` | 图片理解总预算（秒） |

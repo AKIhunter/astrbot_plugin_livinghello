@@ -366,6 +366,8 @@ flowchart TD
 
 2026-11-17 修复：统一路由视觉能力判断，识别 XML 嵌套聊天记录；缺少资源 ID 时明确未展开。[修复原因与验证记录](docs/forward-xml-and-vision.md)
 
+慢回复垫场新增 12 句无标点文案，按会话逐次轮换；旧默认配置自动兼容，自定义文案保留。[触发场景与配置](docs/early-ack.md)
+
 [查看完整版本记录](CHANGELOG.md)
 
 <a name="documentation"></a>
@@ -378,6 +380,7 @@ README 提供中英双语入门；下面的详细文档主要为中文，代码�
 | --- | --- |
 | 操作与排查 | [使用指南](docs/usage.md) |
 | 嵌套聊天记录与视觉模型识别 | [修复与边界说明](docs/forward-xml-and-vision.md) |
+| 慢回复垫场与短句轮换 | [触发、配置与边界](docs/early-ack.md) |
 | 字段、范围与默认值 | [配置参考](docs/configuration.md) |
 | 判定和发送逻辑 | [流程说明](docs/architecture.md) |
 | 四种插件组合 | [配套组合](docs/integrations-and-flow.md) |
