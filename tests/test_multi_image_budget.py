@@ -29,11 +29,13 @@ class MultiImageTest(unittest.IsolatedAsyncioTestCase):
     async def test_twelve_images_each_seen_once_with_two_inflight(self):
         current = peak = 0
         seen = []
+        sizes = []
         async def call(provider, **kwargs):
             nonlocal current, peak
             current += 1
             peak = max(current, peak)
             seen.extend(kwargs["image_urls"])
+            sizes.append(len(kwargs["image_urls"]))
             self.assertEqual(kwargs["max_tokens"], 512)
             self.assertEqual(kwargs["request_max_retries"], 1)
             await asyncio.sleep(.001)
@@ -44,9 +46,30 @@ class MultiImageTest(unittest.IsolatedAsyncioTestCase):
         observation = Observation(images=urls)
         state, calls = await self.reader._enrich_images(self.event, observation, object(), {})
         self.assertEqual((state, calls, peak), ("success", 6, 2))
+        self.assertEqual(sizes, [2, 2, 2, 2, 2, 2])
         self.assertCountEqual(seen, urls)
         self.assertIn("图片11—12", observation.vision_summary)
         self.assertFalse(observation.vision_unresolved)
+
+    async def test_partial_last_batch_preserves_order_and_image_numbers(self):
+        self.reader._call_locked_upstream = AsyncMock(
+            return_value=SimpleNamespace(completion_text="合成观察"))
+        urls = [f"https://example.invalid/{i}.png" for i in range(7)]
+        observation = Observation(images=urls)
+        state, calls = await self.reader._enrich_images(self.event, observation, object(), {})
+        self.assertEqual((state, calls), ("success", 4))
+        arguments = self.reader._call_locked_upstream.await_args_list
+        # 批次并发、准备时间不同，发起顺序不固定；逐批原图顺序及摘要编号必须稳定。
+        batches = sorted((call.kwargs["image_urls"] for call in arguments),
+                         key=lambda batch: urls.index(batch[0]))
+        self.assertEqual(batches,
+                         [urls[:2], urls[2:4], urls[4:6], urls[6:]])
+        self.assertIn("图片1—2", observation.vision_summary)
+        self.assertIn("图片5—6", observation.vision_summary)
+        self.assertIn("图片7，批次观察", observation.vision_summary)
+        labels = ["图片1—2", "图片3—4", "图片5—6", "图片7，批次观察"]
+        positions = [observation.vision_summary.index(label) for label in labels]
+        self.assertEqual(positions, sorted(positions))
 
     async def test_limit_and_provider_failure_are_explicit_without_retry(self):
         async def call(provider, **kwargs):
