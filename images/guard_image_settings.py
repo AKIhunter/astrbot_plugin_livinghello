@@ -22,14 +22,20 @@ from types import SimpleNamespace
 
 try:
     from ..reply.guard_native_reply import NativeReplyError, revision
+    from .guard_image_contract import IMAGE_CONTRACT, IMAGE_PREPARED
     from ..integrations.guard_router_connections import router_connections, CHAT_TYPES
     from ..observability.guard_request_trace import emit, TRACE_KEY, touch
     from ..reply.guard_reply_health import report_model_fault
+    from ..integrations.guard_livingemotion import image_permission, image_followup
+    from .guard_image_failure import describe_failure, http_failure, REASONS
 except ImportError:
     from reply.guard_native_reply import NativeReplyError, revision
+    from images.guard_image_contract import IMAGE_CONTRACT, IMAGE_PREPARED
     from integrations.guard_router_connections import router_connections, CHAT_TYPES
     from observability.guard_request_trace import emit, TRACE_KEY, touch
     from reply.guard_reply_health import report_model_fault
+    from integrations.guard_livingemotion import image_permission, image_followup
+    from images.guard_image_failure import describe_failure, http_failure, REASONS
 
 TOOL_NAME = "livinghello_generate_image"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -337,10 +343,7 @@ class ImageSettings:
             tools.add_tool(tool)
         req.func_tool = tools
         if getattr(self.plugin, "_livinghello_detached_enabled", False):
-            instruction = ("生图需求必须先调用livinghello_generate_image取得本轮决定，"
-                           "然后才给承接或婉拒的文字；工具决定前不要承诺会画。"
-                           "决定生图后只用一句自然的话承接，例如「拍给你」；"
-                           "不要提后台生成、生成过程或进度。")
+            instruction = IMAGE_CONTRACT
             if instruction not in (getattr(req, "system_prompt", "") or ""):
                 req.system_prompt = (getattr(req, "system_prompt", "") or "") + "\n" + instruction
         # 标记本次请求挂过生图工具，供最晚钩子复核它是否被后续插件覆盖。
@@ -476,6 +479,12 @@ class ImageSettings:
         job = dict(status="deciding", prompt=prompt.strip(), use_reference=use_reference,
                    values=copy.deepcopy(self.values), reply="")
         event.set_extra("_livinghello_image_job", job)
+        permission = await image_permission(self.context, event, getattr(self.plugin, "config", None))
+        if permission is not None and permission.get("allowed") is not True:
+            job.update(status="refused", reply=(
+                "当前关系不接受这次个人生图请求，或关系许可暂时无法核验。"
+                "请自然婉拒，仍正常交流；不要承诺、重试，或用 future_task 绕过。"))
+            return job["reply"]
         try:
             from ..integrations.guard_livingemotion import current_emotion
         except ImportError:
@@ -484,10 +493,10 @@ class ImageSettings:
         job["emotion"] = mood
         negative = bool(mood) and max(mood["emotions"][k] for k in
                                      ("anger", "sadness", "fear")) >= .6
-        # 用户确认的负面阈值；每个事件只抽一次，拒绝不占生图额度。
-        draw = random.random() if negative else None
+        # 耦合时 LE 已按阶段判定，情绪只改措辞；独立模式保留原情绪规则。
+        draw = random.random() if negative and permission is None else None
         job["draw"] = draw
-        if negative and draw < .5:
+        if draw is not None and draw < .5:
             job.update(status="refused", reply=(
                 "当前情绪明显负面，这轮决定不生图。请结合当前情绪自然地婉拒，"
                 "仍正常文字回应；不要积极承诺、不要自动重试此工具。当前情绪："
@@ -510,17 +519,16 @@ class ImageSettings:
                 f"{type(exc).__name__}: {exc}"[:120])
             # 额度用尽属于每日上限，不是接口故障；必须让模型说人话，
             # 否则它会把「画不了」解释成「接口没缓过来」，把人带偏去查 provider。
-            if isinstance(exc, NativeReplyError) and getattr(exc, "status_code", None) == 429:
+            if isinstance(exc, NativeReplyError) and getattr(exc, "status", None) == 429:
                 job.update(status="quota", reply=(
                     "今日生图额度已经用完（每日上限，不是接口故障）。"
                     "请自然告诉用户今天画满了、明天再画，不要说接口坏了、正在修复或稍后重试。"))
             else:
                 job.update(status="failed", reply="现在暂时画不了，请自然说明；不要重试此工具。")
+            kind = "quota_exhausted" if job["status"] == "quota" else "provider_error"
+            self._image_failure(event, job, kind)
             return job["reply"]
-        job.update(status="prepared", reply=(
-            "生图已准备，尚未请求上游。请用一句自然的话承接需求，例如「拍给你」；"
-            "不要提后台、生成过程或进度，也不要说图片已经画好；"
-            "图片会在你这句话之后自动跟上，请勿再调用本工具。"))
+        job.update(status="prepared", reply=IMAGE_PREPARED)
         if mood:
             job["reply"] += "当前情绪：" + json.dumps(mood, ensure_ascii=False)
         return job["reply"]
@@ -546,23 +554,31 @@ class ImageSettings:
         task.add_done_callback(self._tasks.discard)
 
     async def _deliver_image(self, event, path):
-        """同一张已生成的图最多投递两次，不重新生成也不重复计额度。"""
+        """只在明确拒收时重发原图；异常结果未知，禁止盲目重复投递。"""
         from astrbot.api.message_components import Image
         for attempt in range(1, DELIVERY_ATTEMPTS + 1):
             if attempt > 1:
                 await asyncio.sleep(DELIVERY_RETRY_SECONDS)
+            if self.blocked(event):
+                return False
             try:
-                await event.send(event.chain_result([Image.fromFileSystem(path)]))
-                return True
+                sent = await event.send(event.chain_result([Image.fromFileSystem(path)]))
+                plan = event.get_extra("_at_guard_delivery_plan") or {}
+                # 宿主 event.send 正常返回 None；显式 False 或发送计划失败不能当成功。
+                if self.blocked(event) or plan.get("failed"):
+                    return False
+                if sent is not False:
+                    return True
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self.plugin.logger.warning(
-                    "[LH-img] 图片投递失败（第%d/%d次）：%r", attempt, DELIVERY_ATTEMPTS, exc)
+                    "[LH-img] 图片发送结果未知，停止重发 type=%s", type(exc).__name__)
+                return False
         return False
 
     @staticmethod
-    def _apology(job):
+    def _apology(job, reason="这次没能确认图片结果，需要先核对。"):
         """图没出来时的拟人回应；负面情绪下换成更贴合语气的说法。"""
         mood = job.get("emotion")
         if mood and max(mood["emotions"][k] for k in
@@ -570,8 +586,57 @@ class ImageSettings:
             dominant = max(("anger", "sadness", "fear"), key=mood["emotions"].get)
             feeling = {"anger": "有点烦", "sadness": "心情有点低落",
                        "fear": "有点紧张"}[dominant]
-            return f"这会儿{feeling}，图也没顺利出来……先缓缓吧。"
-        return "这张图暂时没顺利出来……先放一放吧。"
+            return f"这会儿{feeling}。{reason}"
+        return reason
+
+    def _image_failure(self, event, job, kind, request_id=None):
+        source = str(event.message_obj.message_id)
+        failure = dict(
+            kind=kind, reason=REASONS[kind], prompt=job["prompt"],
+            use_reference=job["use_reference"], notified=False,
+            request_id=request_id or hashlib.sha256(
+                (str(event.unified_msg_origin) + source + job["prompt"]).encode()).hexdigest())
+        event.set_extra("_livinghello_image_failure", failure)
+        return failure
+
+    async def _notify_image_failure(self, event, job, failure):
+        """先说明受控原因，发送成功后才交接；登记失败不声称稍后会完成。"""
+        if self.blocked(event) or event.get_extra("_livinghello_failure_notice_attempted"):
+            return
+        event.set_extra("_livinghello_failure_notice_attempted", True)
+        from astrbot.api.message_components import Plain
+        reason = failure["reason"]
+        if failure["kind"] == "content_rejected":
+            if int(failure.get("adjustment_round") or 0) > 0:
+                reason = ("按你刚才改的想法又试了一下，还是没能弄好，有些内容我暂时做不了。"
+                          "我先停在这里。你想再调整一下，还是这次就算了？")
+            else:
+                reason += "你想换个人物、场景或风格再试试，还是这次就算了？"
+        try:
+            sent = await event.send(event.chain_result([Plain(self._apology(job, reason))]))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.plugin.logger.warning("[LH-img] 失败说明未确认发送 type=%s", type(exc).__name__)
+            return
+        plan = event.get_extra("_at_guard_delivery_plan") or {}
+        if sent is False or plan.get("failed") or self.blocked(event):
+            return
+        failure["notified"] = True
+        # 与失败说明同一条发送：LE 能持久区分“已说明失败”和“已问怎样调整”。
+        failure["adjustment_asked"] = failure["kind"] == "content_rejected"
+        receipt = await image_followup(self.context, event, getattr(self.plugin, "config", None))
+        job["followup"] = receipt
+        emit(event, "image_followup", "success" if receipt else "unavailable",
+             reason=(receipt or {}).get("task_status", "handoff_unavailable"))
+        if not receipt or receipt.get("status") != "accepted" or self.blocked(event):
+            return
+        if failure["kind"] == "content_rejected":
+            # 第一条已经问清两种选择，不再追加一条“记下/等待”的重复说明。
+            return
+        line = ("这件事记下了，五分钟后再试一次。" if receipt["task_status"] == "scheduled"
+                else "这件事先放一放，等弄清楚有没有做好再说。")
+        await event.send(event.chain_result([Plain(line)]))
 
     async def _run_image_job(self, event, job):
         try:
@@ -593,21 +658,24 @@ class ImageSettings:
                 else:
                     self.mark(request_id, "unknown")
                     job["status"] = "unknown"
-                    if not self.blocked(event):
-                        from astrbot.api.message_components import Plain
-                        await event.send(event.chain_result([Plain(self._apology(job))]))
+                    failure = self._image_failure(event, job, "delivery_unknown", request_id)
+                    await self._notify_image_failure(event, job, failure)
             else:
-                job["status"] = "unknown" if "结果未知" in response else "failed"
+                failure = event.get_extra("_livinghello_image_failure")
+                if not isinstance(failure, dict):
+                    failure = self._image_failure(event, job, "result_unknown")
+                # 状态取结构化原因，避免说明文案变化把“结果不明”误判成确定失败。
+                job["status"] = "unknown" if failure["kind"] in {
+                    "result_unknown", "delivery_unknown"} else "failed"
                 self.plugin.logger.warning(
-                    "[LH-img] 后台无图：status=%r resp=%r", job["status"], str(response)[:120])
-                from astrbot.api.message_components import Plain
-                if not self.blocked(event):
-                    await event.send(event.chain_result([Plain(self._apology(job))]))
+                    "[LH-img] 后台无图：status=%s reason=%s", job["status"], failure["kind"])
+                await self._notify_image_failure(event, job, failure)
         except asyncio.CancelledError:
             job["status"] = "cancelled"
             raise
-        except Exception:
+        except Exception as exc:
             job["status"] = "unknown"
+            self.plugin.logger.warning("[LH-img] 后台失败 type=%s", type(exc).__name__)
         finally:
             clear = getattr(self.plugin, "_clear_reply_turn", None)
             if clear:
@@ -639,6 +707,11 @@ class ImageSettings:
                 event, self.plugin._group_key(event)) or "reply_cancelled"
             outcome("cancelled", reason)
             return "当前回复已取消，未请求生图。"
+        permission = await image_permission(self.context, event, getattr(self.plugin, "config", None))
+        if permission is not None and permission.get("allowed") is not True:
+            outcome("rejected", permission.get("reason", "relationship_unavailable"))
+            return "当前关系不接受个人生图请求或许可无法核验，请自然婉拒；不要承诺或换工具重试。"
+        event.set_extra("_livinghello_image_failure", None)
         values = copy.deepcopy(self.values)
         request_id = None
         task = asyncio.current_task()
@@ -682,6 +755,8 @@ class ImageSettings:
             event.set_extra("_livinghello_pending_image", {
                 "path": str(image),
                 "request_id": request_id,
+                "prompt": prompt.strip(),
+                "use_reference": use_reference,
                 "created": time.time(),
                 "revised": revised,
             })
@@ -701,8 +776,7 @@ class ImageSettings:
             raise
         except Exception as exc:
             terminal_status = "timeout" if isinstance(exc, asyncio.TimeoutError) else "failed"
-            terminal_reason = "quota_exhausted" if isinstance(exc, NativeReplyError) and getattr(
-                exc, "status_code", None) == 429 else "image_exception"
+            terminal_reason = "image_exception"
             if isinstance(exc, NativeReplyError) and "今日生图次数" in str(exc):
                 terminal_reason = "quota_exhausted"
                 emit(event, "image_quota", "skipped", reason=terminal_reason)
@@ -716,10 +790,16 @@ class ImageSettings:
                 if row.get("features", {}).get("image_api", {}).get("status") == "running":
                     emit(event, "image_api", terminal_status, reason=terminal_reason)
             if request_id:
-                self.mark(request_id, "unknown")
+                self.mark(request_id, "failed" if getattr(exc, "kind", None) in {
+                    "content_rejected", "rate_limited", "provider_error"} else "unknown")
             # 错误只展示受控提示，不将URL、密钥或服务响应正文送给模型。
-            message = str(exc) if isinstance(exc, NativeReplyError) else "接口异常或超时"
-            return f"生图未完成：{message}。已请求的次数仍计额度；结果未知时不要自动重试。"
+            kind, reason = describe_failure(exc, requested=bool(request_id))
+            if terminal_reason == "quota_exhausted":
+                kind, reason = "quota_exhausted", REASONS["quota_exhausted"]
+            self._image_failure(event, dict(prompt=prompt.strip(), use_reference=use_reference),
+                                kind, request_id)
+            charged = "本次已请求，仍计额度。" if request_id else "本次未请求生图，不计额度。"
+            return f"生图未完成：{reason}{charged}不要在本轮自动重试。"
         finally:
             if service:
                 service.end(event, span, terminal_status, reason=terminal_reason)
@@ -872,18 +952,17 @@ class ImageSettings:
                 emit(event, "image_api", "running", calls=1, model=model)
             async with session.post(base + endpoint, headers=headers, allow_redirects=False, **body) as response:
                 if response.status not in {200, 201}:
-                    # 上游 400 的真实原因只在响应体里（例如「该模型不支持 Chat Completions」），
-                    # 原来直接丢弃，只剩一句「HTTP 400」，等于把排查线索扔了。
-                    # 只写日志，不改进用户看到的文案。
+                    # 正文只用于识别受控类别；日志也不打印上游正文，防止泄露密钥/地址。
                     detail = ""
                     try:
-                        detail = (await response.text())[:400]
+                        detail = (await response.text())[:8192]
                     except Exception:
-                        detail = "<响应体不可读>"
+                        pass
+                    failure = http_failure(response.status, detail)
                     self.plugin.logger.warning(
-                        "[LivingHello] 生图接口 HTTP %s endpoint=%s model=%s resp=%s",
-                        response.status, endpoint, model, " ".join(detail.split()))
-                    raise NativeReplyError(f"生图接口HTTP {response.status}")
+                        "[LivingHello] 生图接口 HTTP %s reason=%s",
+                        response.status, failure.kind)
+                    raise failure
                 if response.content_length and response.content_length > MAX_IMAGE_BYTES * 2:
                     raise NativeReplyError("生图响应过大")
                 chunks, length = [], 0

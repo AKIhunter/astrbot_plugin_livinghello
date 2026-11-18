@@ -11,6 +11,7 @@
 | 查默认值、原生字段、保存目标和生效范围 | [配置参考](configuration.md) |
 | 配置慢回复垫场、了解触发场景与短句轮换 | [垫场句说明](early-ack.md) |
 | 配置文生图、图生图和每日共享次数 | [生图操作](usage.md#配置独立ai生图)及[生图参数](configuration.md#独立ai生图) |
+| 图片内容拒绝后的调整、取消与双插件升级 | [失败交接说明](image-failure-followup.md) |
 | 只按流水条数、关闭时间过滤 | [上下文设置](usage.md#只限制流水条数) |
 | 单独理解接话判断、评分、否决、阈值和图片补证 | [判断逻辑说明](decision-logic.md) |
 | 排查 XML 嵌套聊天记录和路由视觉能力识别 | [合并转发与视觉修复记录](forward-xml-and-vision.md) |
@@ -35,6 +36,7 @@
 | [判断逻辑](decision-logic.md) | explanation | 判定与输入理解修改者 | main、guard_engine、guard_understanding | 2026-11-05 | 每次判断协议、模式或图片理解变更 | 评分字段、否决原因、阈值或所有权改变 |
 | [合并转发与视觉修复](forward-xml-and-vision.md) | explanation / 修复记录 | 输入理解与视觉模型修改者 | guard_understanding、guard_media、guard_webui、相关回归测试 | 2026-11-17 | 转发遍历或视觉能力判断改变时 | 配置页与运行时不一致、未展开标记或预算改变 |
 | [垫场句](early-ack.md) | reference / explanation | 回复链路修改者 | main._early_ack_text、main._early_ack_worker、_conf_schema | 2026-11-17 | 句库、触发条件或轮换方式改变时 | 配置与默认句库不一致、重复垫场或发送时机改变 |
+| [图片失败交接](image-failure-followup.md) | reference / explanation | 图片与配套接口修改者 | guard_image_settings、guard_image_failure、guard_livingemotion、双插件测试 | 2026-11-18 | 失败类别、通知或恢复契约变更时 | 重复追问、未知结果重试或配套版本不匹配 |
 | [维护](development.md) | how-to / operational | 测试与发布维护者 | tests、runner、日志实现、CI、归档属性 | 2026-11-04 | 每次发布；故障后复核 | 命令不可执行、指标/恢复规则改变 |
 | [更新日志](../CHANGELOG.md) | reference | 发布维护者 | 对应版本提交与源码 | 2026-11-04 | 每次版本发布 | metadata 新版本没有记录 |
 | [历史说明](history/README.md) | reference / archived | 历史档案维护者 | migration-manifest.json | 2026-11-04 | 档案路径或解释变更时 | 被引用为当前源码哈希 |

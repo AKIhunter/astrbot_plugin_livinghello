@@ -134,3 +134,56 @@ async def state_lines(context, event, req, config=None):
         if is_state_line(text):
             return [text[:6000]]
     return []
+
+
+async def image_permission(context, event, config=None):
+    """耦合关闭保留独立模式；已启用时无法核验不能当作允许生图。"""
+    if (config or {}).get("coupling_livingemotion_enabled", False) is not True:
+        return None
+    if event.get_extra("livingemotion:context") is None and event.get_extra("cron_job"):
+        try:
+            meta = context.get_registered_star(PLUGIN)
+            api = getattr(getattr(meta, "star_cls", None), "api", None)
+            if getattr(meta, "activated", False) and callable(getattr(api, "get_action_policy", None)):
+                await asyncio.wait_for(api.get_action_policy(None, event=event), API_TIMEOUT)
+        except Exception:
+            pass
+    api, scope = await _current(context, event, "get_action_policy", config)
+    denied = {"allowed": False, "reason": "relationship_unavailable"}
+    if api is None:
+        return denied
+    try:
+        value = await asyncio.wait_for(api.get_action_policy(scope, event=event), API_TIMEOUT)
+        if (not _same_request(context, event, api, scope)
+                or not coupling_enabled(context, config, "livingemotion")
+                or not isinstance(value, dict) or value.get("status") != "ok"
+                or value.get("contract") != "livingemotion.image-policy.v1"
+                or not isinstance(value.get("data"), dict)
+                or type(value["data"].get("allowed")) is not bool):
+            return denied
+        return value["data"]
+    except Exception:
+        return denied
+
+
+async def image_followup(context, event, config=None, *, promise_id=None, prompt=None):
+    """版本化的登记/恢复回执；不访问 LE 配置、存储或私有服务。"""
+    operation = "resume_image_followup" if promise_id is not None else "handoff_image_failure"
+    api, scope = await _current(context, event, operation, config)
+    if api is None:
+        return None
+    try:
+        kwargs = {"event": event}
+        if promise_id is not None:
+            kwargs.update(promise_id=promise_id, prompt=prompt)
+        value = await asyncio.wait_for(getattr(api, operation)(scope, **kwargs), 5.0)
+        if (not _same_request(context, event, api, scope)
+                or not coupling_enabled(context, config, "livingemotion")
+                or not isinstance(value, dict) or value.get("status") != "ok"
+                or value.get("contract") != "livingemotion.image-followup.v1"
+                or not isinstance(value.get("data"), dict)):
+            return None
+        return value["data"]
+    except Exception:
+        # 可能已落库但回执超时；重交原请求只会拿到同一条待办。
+        return None

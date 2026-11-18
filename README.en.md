@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.7-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.8-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -203,6 +203,11 @@ When enabled and available, the image tool can be provided in both group and pri
 
 Connections reuse the host or router’s configured endpoint and credentials. BiliBot is not required. [Detailed setup](docs/usage.md#配置独立ai生图).
 
+Content-rejected photos, selfies and drawings ask what to change or whether to cancel.
+With LivingEmotion integration enabled and **LE 0.4.1**, the original image waits for
+a concrete revision. Repeated rejection offers the choice again; “OK” or “try again” does
+not resume it. Unknown results require verification. [Behavior and upgrade (Chinese)](docs/image-failure-followup.md).
+
 <a name="flow"></a>
 
 ## 🔄 How it works
@@ -365,7 +370,10 @@ Find a recent record in **Overview**, copy its `request_id`, and inspect receivi
 
 ## 📦 Changelog
 
-Current version **2.7.7** cuts the console first paint from tens of seconds to roughly 13 ms: the cache fingerprint only reads provider config, the model catalogue is no longer enumerated over the network on the panel path, and the state cache TTL is widened to 6 seconds.
+Current version **2.7.8** adds controlled image-failure categories and the LE handoff.
+Content rejection asks for a revision or cancellation without duplicate notices.
+Send exceptions stop automatic resending; only explicit rejection allows one retry of
+the same image. [Behavior and upgrade (Chinese)](docs/image-failure-followup.md).
 
 The 2026-11-17 fix aligns router vision selection with declared capabilities and recognizes nested XML
 chat cards. Missing resource IDs are explicitly reported as unexpanded.
@@ -386,6 +394,7 @@ This README provides a bilingual introduction. The detailed guides below are mai
 | Learn more about | Guide |
 | --- | --- |
 | Setup & troubleshooting | [Usage](docs/usage.md) |
+| Image failures, revision & cancellation | [Categories and companion versions](docs/image-failure-followup.md) |
 | Nested forwarded chats & vision selection | [Fix details and limits](docs/forward-xml-and-vision.md) |
 | Slow-reply acknowledgements | [Triggers, rotation & configuration](docs/early-ack.md) |
 | Fields, ranges & defaults | [Configuration](docs/configuration.md) |

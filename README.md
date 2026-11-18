@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.7-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.8-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -199,6 +199,11 @@ https://github.com/AKIhunter/astrbot_plugin_livinghello
 
 连接复用宿主或路由已配置的地址和密钥，不依赖 BiliBot。[详细设置](docs/usage.md#配置独立ai生图)。
 
+拍照、自拍或画图被内容规则拒绝时，会用日常说法问怎样调整或是否取消；改过仍失败，
+再由你选择。开启 LivingEmotion 接入并使用 **LE 0.4.1**，可以保留原图片等待调整，
+避免重复追问和重复生图。纯“好的 / 再试一次”不恢复，未知结果先核对。
+[失败分类、配置与升级](docs/image-failure-followup.md)。
+
 <a name="flow"></a>
 
 ## 🔄 工作流程
@@ -362,7 +367,9 @@ flowchart TD
 
 ## 📦 更新日志
 
-当前版本 **2.7.7**：控制台首屏从十几秒降到十几毫秒——缓存判据改为只读 provider 配置，模型目录不再在面板路径联网枚举，状态缓存有效期放宽到 6 秒。
+当前版本 **2.7.8**：补齐图片失败分类与 LE 交接，拍照、自拍、画图被内容规则拒绝后
+主动问调整或取消；已确认发送问句就不追加重复说明。发送异常不盲目重发，
+原图只有明确拒收时才可再送一次。[行为与升级](docs/image-failure-followup.md)。
 
 2026-11-17 修复：统一路由视觉能力判断，识别 XML 嵌套聊天记录；缺少资源 ID 时明确未展开。[修复原因与验证记录](docs/forward-xml-and-vision.md)
 
@@ -379,6 +386,7 @@ README 提供中英双语入门；下面的详细文档主要为中文，代码�
 | 想继续了解 | 文档 |
 | --- | --- |
 | 操作与排查 | [使用指南](docs/usage.md) |
+| 图片失败、调整与取消 | [分类、配套版本与验收](docs/image-failure-followup.md) |
 | 嵌套聊天记录与视觉模型识别 | [修复与边界说明](docs/forward-xml-and-vision.md) |
 | 慢回复垫场与短句轮换 | [触发、配置与边界](docs/early-ack.md) |
 | 字段、范围与默认值 | [配置参考](docs/configuration.md) |

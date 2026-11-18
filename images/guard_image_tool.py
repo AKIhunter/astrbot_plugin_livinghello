@@ -5,6 +5,10 @@ from typing import Any
 from pydantic.dataclasses import dataclass
 from astrbot.core.agent.tool import FunctionTool
 from astrbot.core.astr_agent_context import AstrAgentContext
+try:
+    from .guard_image_contract import IMAGE_DESCRIPTION
+except ImportError:  # 兼容插件现有单文件/顶层包测试入口。
+    from images.guard_image_contract import IMAGE_DESCRIPTION
 
 
 @dataclass
@@ -12,18 +16,15 @@ class GenerateImageTool(FunctionTool[AstrAgentContext]):
     __pydantic_config__ = {"arbitrary_types_allowed": True}
     service: Any = None
     name: str = "livinghello_generate_image"
-    description: str = (
-        "根据本次用户请求生成或编辑一张图片，图片会自动跟上；"
-        "所以你只需用一句自然的话承接需求，例如「拍给你」，"
-        "不要提后台生成、生成过程或进度，也不要描述画面细节或声称看不到图、发不了图。"
-        "用户说「画一张」「拍一张」、描述某个画面长什么样、或让你以某个形象出镜时都可以调用；"
-        "图生图必须使用本次消息或引用中的图片。有每日共享额度，失败或结果未知不能自动重试。"
-    )
+    description: str = IMAGE_DESCRIPTION
     parameters: dict = field(default_factory=lambda: {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "所需画面或编辑要求，1~4000字"},
             "use_reference": {"type": "boolean", "description": "true使用本次输入图片做图生图；false文生图"},
+            "followup_id": {"type": "string", "description": (
+                "用户已明确调整此前被内容规则拒绝的画面时，填当前会话待办ID，恢复原待办。"
+                "仅限文生图；结果未知、发送未知和接口设置问题不能用它强行重试。")},
         },
         "required": ["prompt"],
         "additionalProperties": False,
@@ -39,6 +40,19 @@ class GenerateImageTool(FunctionTool[AstrAgentContext]):
                 return "缺少当前会话，不能生图或发送图片。"
         if not callable(getattr(node, "get_sender_id", None)) or self.service is None:
             return "缺少当前会话或生图能力。"
+        if kwargs.get("followup_id") is not None:
+            if kwargs.get("use_reference", False) or node.get_extra("cron_job"):
+                return "该待办需要用户新一轮调整文生图需求，不能用参考图或定时任务强行恢复。"
+            try:
+                from ..integrations.guard_livingemotion import image_followup
+            except ImportError:
+                from integrations.guard_livingemotion import image_followup
+            receipt = await image_followup(
+                self.service.context, node, getattr(self.service.plugin, "config", None),
+                promise_id=kwargs["followup_id"], prompt=kwargs.get("prompt"))
+            if receipt and receipt.get("status") == "resumed":
+                return "已用用户调整后的画面恢复原待办，稍后由原任务交付，不要重复生图或新建承诺。"
+            return "原待办没有恢复，需要明确调整画面，或先核对未知结果；不要再调用生图绕过。"
         if node.get_extra("cron_job"):
             # 定时主代理没有普通回复发送阶段，不能把图片挂着等 after-sent。
             if kwargs.get("use_reference", False):

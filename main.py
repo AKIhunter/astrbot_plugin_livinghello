@@ -508,10 +508,14 @@ class Main(Star):
         if not self.get_deferred_image_contract()["available"]:
             return {"status": "unavailable"}
         service = self._image_generation()
-        await service.generate(event, prompt, use_reference=False)
+        # 定时动作直接执行，不能再次进入普通回复的准备/after-sent 流程。
+        await service.generate(event, prompt, use_reference=False, _execute=True)
         pending = event.get_extra("_livinghello_pending_image")
         event.set_extra("_livinghello_pending_image", None)
         if not isinstance(pending, dict) or not pending.get("path"):
+            failure = event.get_extra("_livinghello_image_failure")
+            if isinstance(failure, dict) and failure.get("kind") not in {"result_unknown", "delivery_unknown"}:
+                return {"status": "failed", "failure": failure}
             # generate 内部可能已经发起收费请求，不能从返回文案推断可重试。
             return {"status": "unknown"}
         artifact = {"status": "generated", **pending,
@@ -3200,10 +3204,27 @@ class Main(Star):
                 if any(not isinstance(c, (Reply, At)) and
                        id(c) not in plan.get("attempted", {}) for c in chain):
                     return
+            failure = event.get_extra("_livinghello_image_failure")
+            job = event.get_extra("_livinghello_image_job")
+            if failure and job["status"] in ("failed", "quota"):
+                await self._image_generation()._notify_image_failure(event, job, failure)
+                return
             self._image_generation().start_image_job(event)
             return
         pending = event.get_extra("_livinghello_pending_image")
         if not pending:
+            failure = event.get_extra("_livinghello_image_failure")
+            if not failure:
+                return
+            # 同步生图失败也走同一交接；定时任务由原执行器负责，不能再新建一份。
+            plan = event.get_extra("_at_guard_delivery_plan") or {}
+            remaining = [c for c in (getattr(event.get_result(), "chain", None) or [])
+                         if not isinstance(c, (Reply, At)) and id(c) not in plan.get("attempted", {})] \
+                if plan else []
+            if (failure and not plan.get("failed") and not remaining
+                    and not event.get_extra("cron_job")
+                    and not event.get_extra("livingemotion:promise_id")):
+                await self._image_generation()._notify_image_failure(event, {}, failure)
             return
         # 分段发送时等最后一个气泡，别让图卡在两段文字中间。
         plan = event.get_extra("_at_guard_delivery_plan")
@@ -3227,12 +3248,20 @@ class Main(Star):
             emit(event, "image_delivery", "cancelled", reason="reply_cancelled_after_text")
             return
         try:
-            await event.send(event.chain_result([Image.fromFileSystem(path)]))
+            accepted = await event.send(event.chain_result([Image.fromFileSystem(path)]))
         except Exception as exc:
             service.mark(request_id, "unknown")
             emit(event, "image_delivery", "failed", reason="send_exception",
                  error_type=type(exc).__name__)
-            self.logger.warning("[LivingHello] 生图发送失败: %r", exc)
+            self.logger.warning("[LivingHello] 生图发送结果未知 type=%s", type(exc).__name__)
+            accepted = False
+        if accepted is False or (event.get_extra("_at_guard_delivery_plan") or {}).get("failed"):
+            service.mark(request_id, "unknown")
+            emit(event, "image_delivery", "unknown", reason="send_not_confirmed")
+            if pending.get("prompt"):
+                failure = service._image_failure(
+                    event, pending, "delivery_unknown", request_id)
+                await service._notify_image_failure(event, {}, failure)
             return
         service.mark(request_id, "sent")
         emit(event, "image_delivery", "success", source="after_reply")

@@ -471,11 +471,14 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         event.send.side_effect=OSError("offline-send-failure")
         await self.deliver(event)
         await self.deliver(event)
-        self.assertEqual(event.send.await_count,1)
+        # 异常后只尝试一次原图，另发一条待核对说明；再次钩子不重复说明。
+        self.assertEqual(event.send.await_count,2)
+        self.assertIsInstance(event.send.await_args_list[0].args[0].chain[0], Image)
+        self.assertIsInstance(event.send.await_args_list[1].args[0].chain[0], Plain)
         self.assertIsNone(event.get_extra("_livinghello_pending_image"))
         self.assertEqual(self.service.used(),1)
 
-    async def test_image_job_retries_delivery_of_generated_image(self):
+    async def test_image_job_send_exception_stops_resend_and_notifies_unknown(self):
         event=Event()
         request_id=self.service.reserve(event,"画猫",False)
         job=dict(status="running",prompt="画猫",use_reference=False,
@@ -487,9 +490,11 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         with patch("images.guard_image_settings.asyncio.sleep",new=AsyncMock()):
             await self.service._run_image_job(event,job)
         self.assertEqual(event.send.await_count,2)
-        self.assertEqual(job["status"],"sent")
+        self.assertIsInstance(event.send.await_args_list[0].args[0].chain[0], Image)
+        self.assertIsInstance(event.send.await_args_list[1].args[0].chain[0], Plain)
+        self.assertEqual(job["status"],"unknown")
         with self.service._connect() as db:
-            self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0],"sent")
+            self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0],"unknown")
 
     async def test_image_job_apology_after_delivery_retries_exhausted(self):
         event=Event()
@@ -498,14 +503,15 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
                  values=dict(self.service.values),reply="",emotion=None)
         event.set_extra("_livinghello_pending_image",
                         {"path":str(self.output),"request_id":request_id})
-        event.send.side_effect=[OSError("offline-one"),OSError("offline-two"),None]
+        # 明确 False 才允许再送同一张图；两次都拒收后发送待核对说明。
+        event.send.side_effect=[False,False,None]
         self.service.generate=AsyncMock(return_value="图片已生成。")
         with patch("images.guard_image_settings.asyncio.sleep",new=AsyncMock()):
             await self.service._run_image_job(event,job)
         self.assertEqual(event.send.await_count,3)
         self.assertEqual(job["status"],"unknown")
         apology=event.send.await_args_list[-1].args[0]
-        self.assertIn("没顺利",apology.chain[0].text)
+        self.assertIn("还不确定你有没有收到",apology.chain[0].text)
         with self.service._connect() as db:
             self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0],"unknown")
 
