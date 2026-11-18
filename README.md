@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.8-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.9-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -367,7 +367,10 @@ flowchart TD
 
 ## 📦 更新日志
 
-当前版本 **2.7.8**：补齐图片失败分类与 LE 交接，拍照、自拍、画图被内容规则拒绝后
+当前版本 **2.7.9**：限制图片实际解码像素和并发，OCR先截取再拼接，长正文及畸形JSON有界清理；
+技术片段保留代码缩进和标点。[修复边界与验收](docs/boundary-safety.md)。
+
+2.7.8 补齐图片失败分类与 LE 交接，拍照、自拍、画图被内容规则拒绝后
 主动问调整或取消；已确认发送问句就不追加重复说明。发送异常不盲目重发，
 原图只有明确拒收时才可再送一次。[行为与升级](docs/image-failure-followup.md)。
 
@@ -386,6 +389,7 @@ README 提供中英双语入门；下面的详细文档主要为中文，代码�
 | 想继续了解 | 文档 |
 | --- | --- |
 | 操作与排查 | [使用指南](docs/usage.md) |
+| 大图片、超长正文与代码保护 | [边界修复说明](docs/boundary-safety.md) |
 | 图片失败、调整与取消 | [分类、配套版本与验收](docs/image-failure-followup.md) |
 | 嵌套聊天记录与视觉模型识别 | [修复与边界说明](docs/forward-xml-and-vision.md) |
 | 慢回复垫场与短句轮换 | [触发、配置与边界](docs/early-ack.md) |

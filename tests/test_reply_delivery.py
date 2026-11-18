@@ -91,7 +91,7 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.get_extra(OWNER_KEY), "at_guard")
 
     async def test_native_packets_preserve_text_and_consume_residue_once(self):
-        await self.arm()
+        await self.arm(expression_punct_cleanup=False)
         self.event.result.chain = [Plain(TEXT[:24]), Plain(TEXT[24:])]
         original = list(self.event.result.chain)
         for c in original:
@@ -108,7 +108,7 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_native_media_and_metadata_preserved(self):
         self.event.result.chain = [Reply(id="x"), At(qq="2"), Plain(TEXT), Image.fromURL("https://example.invalid/a")]
-        await self.arm()
+        await self.arm(expression_punct_cleanup=False)
         await self.event.send(self.event.result)
         self.assertEqual(len(self.event.sent), 1)
         self.assertEqual(self.event.sent[0].chain, self.event.result.chain)
@@ -290,7 +290,7 @@ class DeliveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.event.sent)
 
     async def test_stream_buffered_then_expressed_once(self):
-        await self.arm()
+        await self.arm(expression_punct_cleanup=False)
         self.event.set_extra("_at_guard_expression_done", False)
         async def stream():
             yield Chain([Plain(TEXT[:24])])

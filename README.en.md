@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.8-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.9-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -370,7 +370,11 @@ Find a recent record in **Overview**, copy its `request_id`, and inspect receivi
 
 ## 📦 Changelog
 
-Current version **2.7.8** adds controlled image-failure categories and the LE handoff.
+Current version **2.7.9** limits decoded image pixels and concurrency, clips OCR before
+joining text, and bounds cleanup of long or malformed input while preserving technical
+content. [Safety limits and validation (Chinese)](docs/boundary-safety.md).
+
+Version 2.7.8 adds controlled image-failure categories and the LE handoff.
 Content rejection asks for a revision or cancellation without duplicate notices.
 Send exceptions stop automatic resending; only explicit rejection allows one retry of
 the same image. [Behavior and upgrade (Chinese)](docs/image-failure-followup.md).
@@ -395,6 +399,7 @@ This README provides a bilingual introduction. The detailed guides below are mai
 | --- | --- |
 | Setup & troubleshooting | [Usage](docs/usage.md) |
 | Image failures, revision & cancellation | [Categories and companion versions](docs/image-failure-followup.md) |
+| Large images, long text & code preservation | [Boundary fixes (Chinese)](docs/boundary-safety.md) |
 | Nested forwarded chats & vision selection | [Fix details and limits](docs/forward-xml-and-vision.md) |
 | Slow-reply acknowledgements | [Triggers, rotation & configuration](docs/early-ack.md) |
 | Fields, ranges & defaults | [Configuration](docs/configuration.md) |

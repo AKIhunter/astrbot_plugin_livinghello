@@ -1,6 +1,7 @@
 """主回复方式：确定性引用/@与Emoji清理；断句和媒体处理遵循宿主。"""
 from __future__ import annotations
 
+import json
 import random
 import re
 
@@ -8,7 +9,9 @@ from astrbot.api.message_components import At, Plain, Reply
 
 FORBID_MAX_ITEMS = 30
 FORBID_MAX_CHARS = 20
-_FENCE = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~)")
+MAX_CLEANUP_CHARS = 16384
+JSON_PARSE_CHAR_BUDGET = 32768
+JSON_PARSE_MAX_ATTEMPTS = 16
 _MULTI_SPACE = re.compile(r"[ \t]{2,}")
 _DUP_PUNCT = re.compile(r"([，,。．.！!？?；;：:])\1+")
 _TRAILING_SPACE = re.compile(r"[ \t]+$", re.MULTILINE)
@@ -19,9 +22,24 @@ _EDGE_PUNCT = re.compile(r"^[，,、；;：:]+|[，,、；;：:]+[ \t]*$", re.MU
 
 
 # ── 标点规范化 ──────────────────────────────────────────────────────────
-# 行末句号换成间隔；句中句号保留；逗号、顿号、分号换成间隔。
-# 感叹号、问号、省略号承载语气，一律不动。代码块与 ASCII 小数点不碰。
-_CN_TO_SPACE = re.compile(r"[，、；;]")
+# 普通聊天标点换间隔；代码、网址、文件路径和数字格式是内容，保持原样。
+_PROTECTED = re.compile(
+    r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`"
+    r"|https?://[^\s\u3000-\u303f\u4e00-\u9fff\uff00-\uffef<>\"`]+"
+    r"|(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"
+    r"|(?:[A-Za-z]:[\\/]|\.{1,2}/|~/|/)[^\s<>\"'`，。！？；：、（）【】]+"
+    r"|\b[A-Za-z0-9_]+(?:[./:@+_-][A-Za-z0-9_]+)+\b"
+    r"|\b\d+(?:[.,:/+-]\d+)+(?:%)?)"
+)
+# 未加代码围栏的常见命令整行保留，参数引号/括号不能套用聊天标点规则。
+_COMMAND_LINE = re.compile(
+    r"(?m)^[ \t]*(?:[$#][ \t]+)?(?:sudo[ \t]+)?"
+    r"(?:curl|wget|python(?:\d+(?:\.\d+)?)?|pip3?|ssh|scp|rsync|git|"
+    r"npm|npx|node|bash|sh|docker|kubectl|systemctl|journalctl)"
+    r"(?=[ \t]|$)[^\r\n]*"
+)
+_JSON_START = re.compile(r"[\[{]")
+_CHAT_PUNCT = re.compile(r"""[，,、；;：:。．.！!？?…~～“”‘’「」『』（）()【】\[\]《》〈〉"'—–]+""")
 _CN_PERIOD = re.compile(r"[。．]")
 # 行末（含行尾空白）的连续句号整段换成间隔；句中的句号不受影响。
 _TRAILING_PERIOD = re.compile(r"[。．]+[ \t]*$", re.MULTILINE)
@@ -48,38 +66,82 @@ def punct_gap_width(mode):
     return 1
 
 
-def normalize_punctuation(text, keep_inner_period=True, space="1"):
+def protected_parts(text):
+    """有预算地识别技术片段；过长或试解析过多时保守保留整份原文。"""
+    if len(text) > MAX_CLEANUP_CHARS:
+        yield True, text
+        return
+    spans = [(m.start(), m.end()) for pattern in (_PROTECTED, _COMMAND_LINE)
+             for m in pattern.finditer(text)]
+    existing = sorted(spans)
+    protected_index = 0
+    decoder = json.JSONDecoder()
+    json_end = 0
+    parse_chars = attempts = 0
+    for match in _JSON_START.finditer(text):
+        start = match.start()
+        if start < json_end:
+            continue
+        while protected_index < len(existing) and existing[protected_index][1] <= start:
+            protected_index += 1
+        if (protected_index < len(existing)
+                and existing[protected_index][0] <= start < existing[protected_index][1]):
+            continue
+        # raw_decode在畸形嵌套结构上会反复扫描尾部；按最坏尾部长度计费。
+        parse_chars += len(text) - start
+        attempts += 1
+        if parse_chars > JSON_PARSE_CHAR_BUDGET or attempts > JSON_PARSE_MAX_ATTEMPTS:
+            yield True, text
+            return
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(value, (dict, list)):
+            spans.append((start, end))
+            json_end = end
+    cursor = 0
+    for start, end in sorted(spans):
+        if end <= cursor:
+            continue
+        if start > cursor:
+            yield False, text[cursor:start]
+        yield True, text[max(cursor, start):end]
+        cursor = end
+    if cursor < len(text):
+        yield False, text[cursor:]
+
+
+def normalize_punctuation(text, keep_inner_period=False, space="1"):
     """把标点换成间隔。幂等：重复调用结果不变。
 
-    keep_inner_period=True  句中句号保留（2026-11-14 用户指定）
+    keep_inner_period 为旧调用兼容参数；当前聊天规则统一清理标点。
     space  '1' 一个空格 / '2' 两个空格 / 'random' 每处随机 1~2
     """
-    if not text:
+    if not text or len(text) > MAX_CLEANUP_CHARS:
         return text
-    parts = _FENCE.split(text)
-    for index, part in enumerate(parts):
-        if not part or part.startswith(("```", "~~~")):
+    # 表格的管道、分隔行属于结构，不能套用聊天清理。
+    if len(re.findall(r"(?m)^[ \t]*\|.+\|[ \t]*$", text)) >= 2:
+        return text
+    parts = []
+    for protected, part in protected_parts(text):
+        if protected:
+            parts.append(part)
             continue
         value = part
-        # 先处理行末句号，再处理句中；顺序反了会误伤刚换出来的占位。
-        value = _TRAILING_PERIOD.sub(_GAP, value)
-        if not keep_inner_period:
-            value = _CN_PERIOD.sub(_GAP, value)
-        value = _ASCII_COMMA_CJK.sub(_GAP, value)
-        value = _CN_TO_SPACE.sub(_GAP, value)
+        value = _CHAT_PUNCT.sub(_GAP, value)
         value = _GAP_RUN.sub(_GAP, value)
         value = _GAP_PAD.sub(_GAP, value)
         if space == "1":
             value = _MULTI_SPACE.sub(" ", value)
         else:
             value = _MULTI_SPACE_WIDE.sub("  ", value)
-        value = _GAP_EDGE.sub("", value)
-        value = _LINE_TRAIL.sub("", value)
-        value = _MANY_BLANK.sub("\n\n", value)
-        value = _INLINE_EDGE.sub("", value)
+        # 只整理聊天片段内部的行边缘，不能对拼回后的代码再去缩进/空行。
         value = re.sub(_GAP, lambda _m: " " * punct_gap_width(space), value)
-        parts[index] = value
-    return "".join(parts)
+        value = re.sub(r"(?<=\n)[ \t]+|[ \t]+(?=\n)", "", value)
+        value = _MANY_BLANK.sub("\n\n", value)
+        parts.append(value)
+    return "".join(parts).strip(" \t\r\n")
 
 
 def punct_cleanup_enabled(config):
@@ -117,27 +179,26 @@ def forbid_phrases(config):
 
 
 def strip_forbidden(text, phrases):
-    """删除命中的口头禅；代码块保持原样，删除后收拢悬空标点与多余空白。"""
-    if not text or not phrases:
+    """只清理聊天片段；禁忌词删除后的所有后处理也不得跨入技术片段。"""
+    if not text or not phrases or len(text) > MAX_CLEANUP_CHARS:
         return text
-    parts = _FENCE.split(text)
-    changed = False
-    for index, part in enumerate(parts):
-        if not part or part.startswith(("```", "~~~")):
+    parts = []
+    for protected, part in protected_parts(text):
+        if protected:
+            parts.append(part)
             continue
+        changed = False
         for phrase in phrases:
             if phrase in part:
                 part = re.sub(re.escape(phrase) + _TAIL_PUNCT, "", part)
                 changed = True
-        parts[index] = part
-    if not changed:
-        return text
-    cleaned = "".join(parts)
-    cleaned = _MULTI_SPACE.sub(" ", cleaned)
-    cleaned = _DUP_PUNCT.sub(r"\1", cleaned)
-    cleaned = _EDGE_PUNCT.sub("", cleaned)
-    cleaned = _TRAILING_SPACE.sub("", cleaned)
-    return cleaned
+        if changed:
+            part = _MULTI_SPACE.sub(" ", part)
+            part = _DUP_PUNCT.sub(r"\1", part)
+            part = _EDGE_PUNCT.sub("", part)
+            part = _TRAILING_SPACE.sub("", part)
+        parts.append(part)
+    return "".join(parts)
 
 
 def takeover(config):
@@ -202,9 +263,38 @@ class Expression:
         ]
         result.chain = [c for c in result.chain if not isinstance(c, Plain) or c.text.strip()]
 
+    def punctuation_chain(self, chain):
+        """发送副本统一清理，独立于私聊自动引用/Emoji复用开关。"""
+        if not takeover(self.config) or not punct_cleanup_enabled(self.config):
+            return list(chain)
+        result = []
+        for component in chain:
+            if isinstance(component, Plain):
+                text = normalize_punctuation(component.text, space=punct_space_mode(self.config))
+                # 未改变正文时保留组件身份；发送去重按原组件跟踪。
+                if text != component.text:
+                    component = Plain(text)
+            result.append(component)
+        return result
+
+    def tool_arguments(self, tool, arguments):
+        """工具直接投递不经过回复装饰，只处理 plain 正文，不碰附件名和地址。"""
+        if (getattr(tool, "name", "") != "send_message_to_user"
+                or not isinstance(arguments, dict) or not takeover(self.config)
+                or not punct_cleanup_enabled(self.config)):
+            return
+        messages = arguments.get("messages")
+        if not isinstance(messages, list):
+            return
+        arguments["messages"] = [
+            {**item, "text": normalize_punctuation(item["text"], space=punct_space_mode(self.config))}
+            if isinstance(item, dict) and item.get("type") == "plain"
+            and isinstance(item.get("text"), str) else item for item in messages
+        ]
+
     def before_send(self, event, chain, plan):
         """仅调整当前主回复自动头；原有引用及指向其他人的@保留。"""
-        chain = self.private_headers(event, chain)
+        chain = self.private_headers(event, self.punctuation_chain(chain))
         if not self.reuse(event):
             return chain
         mid = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")

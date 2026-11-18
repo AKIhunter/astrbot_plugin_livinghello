@@ -5,10 +5,11 @@ import copy
 import io
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from input.guard_understanding import Observation, Understanding
 from images.guard_image_budget import fit_images
+from images import guard_image_evidence
 
 
 class Event:
@@ -25,6 +26,11 @@ class MultiImageTest(unittest.IsolatedAsyncioTestCase):
         self.plugin = SimpleNamespace(config={}, _policy_send_reason=lambda _: "")
         self.reader = Understanding(self.plugin)
         self.event = Event()
+        # 本组测批次/额度，不访问外部图片；下载与OCR资源边界由专门矩阵验收。
+        self.preparation = patch.object(guard_image_evidence, "prepare_image",
+            AsyncMock(side_effect=lambda reader, event, url, source, **kw: (url, "", "")))
+        self.preparation.start()
+        self.addCleanup(self.preparation.stop)
 
     async def test_twelve_images_each_seen_once_with_two_inflight(self):
         current = peak = 0
@@ -66,8 +72,8 @@ class MultiImageTest(unittest.IsolatedAsyncioTestCase):
                          [urls[:2], urls[2:4], urls[4:6], urls[6:]])
         self.assertIn("图片1—2", observation.vision_summary)
         self.assertIn("图片5—6", observation.vision_summary)
-        self.assertIn("图片7，批次观察", observation.vision_summary)
-        labels = ["图片1—2", "图片3—4", "图片5—6", "图片7，批次观察"]
+        self.assertIn("图片7，画面观察", observation.vision_summary)
+        labels = ["图片1—2", "图片3—4", "图片5—6", "图片7，画面观察"]
         positions = [observation.vision_summary.index(label) for label in labels]
         self.assertEqual(positions, sorted(positions))
 
@@ -132,7 +138,7 @@ class MultiImageTest(unittest.IsolatedAsyncioTestCase):
         try:
             from PIL import Image
         except ImportError:
-            self.skipTest("Pillow 未安装，运行时沿用原大小预算")
+            self.skipTest("图片解码验收需要 Pillow")
         stream = io.BytesIO()
         Image.new("RGB", (4096, 3072), "blue").save(stream, format="JPEG")
         original = "base64://" + base64.b64encode(stream.getvalue()).decode()
@@ -146,6 +152,10 @@ class MultiImageTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(image.format, "JPEG")
 
     async def test_unreadable_inline_images_still_obey_total_budget(self):
+        try:
+            import PIL
+        except ImportError:
+            self.skipTest("非图像编码兼容路径验收需要 Pillow")
         # 可解码但非图像的编码不能绕过总量闸，须告知模型有图被省略。
         urls = ["base64://" + base64.b64encode(char * 400000).decode()
                 for char in (b"x", b"y")]

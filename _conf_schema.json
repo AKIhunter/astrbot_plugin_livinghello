@@ -95,7 +95,7 @@
     "type": "bool",
     "default": true,
     "description": "标点清理",
-    "hint": "开：行末句号换空格、逗号顿号分号换空格、句中句号保留。关：标点原样发出。"
+    "hint": "在 guard 控制台的回复设置调整。开：聊天标点换间隔，代码、网址、邮箱、路径和数字格式保留；超过16384字或JSON识别预算时保留原文。关：标点原样发出。"
   },
   "expression_punct_space": {
     "type": "string",

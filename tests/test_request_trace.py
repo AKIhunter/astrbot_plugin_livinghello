@@ -121,8 +121,11 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
         rid = self.service.begin(event)
         emit(event, "input_parse", "uncollected", reason="congling_owns_input")
 
-        await self.guard._understanding().attach(
-            event, SimpleNamespace(extra_user_content_parts=[]))
+        # 本用例只测trace来源与URL隐藏，图片准备使用无网络替身。
+        with patch("images.guard_image_evidence.prepare_image",
+                   AsyncMock(return_value=(url, "", ""))):
+            await self.guard._understanding().attach(
+                event, SimpleNamespace(extra_user_content_parts=[]))
 
         row = await self.service.get(rid)
         self.assertEqual(row["features"]["input_parse"], {

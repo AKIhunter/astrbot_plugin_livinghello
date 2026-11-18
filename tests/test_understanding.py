@@ -491,8 +491,11 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         req = SimpleNamespace(extra_user_content_parts=[], image_urls=[])
 
         reader = guard._understanding()
-        await reader.attach(event, req)
-        await reader.attach(event, req)
+        # 本用例只测所有权与视觉调用去重，图片准备使用无网络替身。
+        with patch("images.guard_image_evidence.prepare_image",
+                   AsyncMock(return_value=(url, "", ""))):
+            await reader.attach(event, req)
+            await reader.attach(event, req)
 
         provider.text_chat.assert_awaited_once()
         self.assertEqual(

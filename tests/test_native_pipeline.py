@@ -110,9 +110,11 @@ class NativePipelineTests(unittest.IsolatedAsyncioTestCase):
 
     async def run_pipeline(self, text="第一句。第二句！", segments=None, platform="test",
                            native_quote=True, native_mention=True, quote=True, mention=True,
-                           media=False, tts=False, t2i=False, cancel="", streaming=False):
+                           media=False, tts=False, t2i=False, cancel="", streaming=False,
+                           punctuation=False):
         guard = plugin(gate_config(expression_takeover_enabled=True, reply_quote_enabled=quote,
-                                   reply_mention_enabled=mention, reply_typing_chars_per_second=2.5))
+                                   reply_mention_enabled=mention, reply_typing_chars_per_second=2.5,
+                                   expression_punct_cleanup=punctuation))
         event = Event()
         event.get_platform_name = lambda: platform
         event.plugins_name = []

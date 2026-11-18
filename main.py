@@ -1457,6 +1457,7 @@ class Main(Star):
 
     @filter.on_using_llm_tool()
     async def trace_tool_start(self, event, tool, tool_args):
+        self._delivery().expression.tool_arguments(tool, tool_args)
         service = self._trace(event)
         touch(event, "tool_start")
         span = service.start(event, "tools", tool=str(getattr(tool, "name", "")))

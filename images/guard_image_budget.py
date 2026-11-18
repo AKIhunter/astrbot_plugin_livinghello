@@ -9,8 +9,8 @@
 - 单张闸：单张 base64 超过 MAX_SINGLE_B64 直接丢，异常大图不冒险。
 - 总量闸：压缩后仍超 MAX_TOTAL_B64 就继续丢，保证再多的图也撑不爆请求。
 - http/file/本地路径原样保留：宿主自己取，不占 prompt 字节。
-- base64 / data URI 用 Pillow 的 draft() 在解码阶段降采样，再压成 JPEG
-  （draft 不生成全尺寸位图，实测内存零增长；不加 draft 单张要 +46MB）
+- 内联图片解码前限制实际像素，JPEG 可先 draft 降采样；PNG/GIF 不支持
+  draft，必须按原尺寸检查。进程内最多两份图片同时解码，忙时明确省略。
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import asyncio
 import base64
 import io
 import re
+import threading
 
 MAX_SIDE = 1024                     # 长边像素；1024 对参与判断和日常看图足够
 QUALITY = 82                        # JPEG 质量
@@ -27,6 +28,25 @@ MAX_SINGLE_B64 = 12 * 1024 * 1024   # 单张超过这个直接丢
 DIRECT_PREFIX = ("http://", "https://", "file://")
 
 _DATA_URI = re.compile(r"^data:image/(\w+);base64,", re.I)
+MAX_SOURCE_SIDE = 32768
+MAX_SOURCE_PIXELS = 64 * 1024 * 1024
+MAX_DECODE_PIXELS = 4 * 1024 * 1024  # 每份解码至多4Mi像素；不是文件字节上限。
+_DECODE_SLOTS = threading.BoundedSemaphore(2)
+
+
+class ImageBudgetExceeded(ValueError):
+    """像素或并发超限，不能回退为原图交给上游再次解码。"""
+
+
+def check_decode_budget(image) -> None:
+    """仅读头部和设置JPEG draft，不分配全尺寸像素。所有解码入口共用。"""
+    width, height = image.size
+    if (width <= 0 or height <= 0 or max(width, height) > MAX_SOURCE_SIDE
+            or width * height > MAX_SOURCE_PIXELS):
+        raise ImageBudgetExceeded("image_source_dimensions_exceeded")
+    image.draft("RGB", (MAX_SIDE, MAX_SIDE))
+    if image.width * image.height > MAX_DECODE_PIXELS:
+        raise ImageBudgetExceeded("image_decode_pixels_exceeded")
 
 
 def _decode(url: str) -> bytes | None:
@@ -39,24 +59,29 @@ def _decode(url: str) -> bytes | None:
 
 
 def _shrink(data: bytes) -> tuple[bytes, str]:
-    """降采样并转 JPEG。失败时返回 (原数据, "")，由调用方按原字节计预算。"""
+    """转JPEG；资源超限返回空数据，非图像字节仍按原有字符预算处理。"""
     try:
-        from PIL import Image
+        from PIL import Image, UnidentifiedImageError
     except ImportError:
-        return data, ""
+        return b"", ""  # 无法验证像素时不把内联原图转交上游。
+    # 非阻塞准入：线程取消不会停止Pillow，槽位必须由实际解码线程释放。
+    if not _DECODE_SLOTS.acquire(blocking=False):
+        return b"", ""
     try:
-        image = Image.open(io.BytesIO(data))
-        # 关键：draft 让 JPEG 在解码阶段就按 1/2、1/4、1/8 降采样，
-        # 不生成全尺寸位图，内存只按目标尺寸走。
-        image.draft("RGB", (MAX_SIDE * 2, MAX_SIDE * 2))
-        if image.mode not in ("RGB", "L"):
-            image = image.convert("RGB")
-        image.thumbnail((MAX_SIDE, MAX_SIDE))
-        out = io.BytesIO()
-        image.save(out, format="JPEG", quality=QUALITY, optimize=True)
-        return out.getvalue(), "image/jpeg"
+        with Image.open(io.BytesIO(data)) as image:
+            check_decode_budget(image)
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            image.thumbnail((MAX_SIDE, MAX_SIDE))
+            out = io.BytesIO()
+            image.save(out, format="JPEG", quality=QUALITY, optimize=True)
+            return out.getvalue(), "image/jpeg"
+    except UnidentifiedImageError:
+        return data, ""  # 保留既有非图像编码的总量闸行为。
     except Exception:
-        return data, ""
+        return b"", ""  # 已识别图片失败/超限后禁止原图回退。
+    finally:
+        _DECODE_SLOTS.release()
 
 
 GIF_MAX_BYTES = 10 * 1024 * 1024
@@ -75,22 +100,8 @@ def _looks_like_gif(url: str) -> bool:
 
 
 def _gif_first_frame(data: bytes) -> tuple[bytes, str]:
-    """GIF 取第一帧转 JPEG；失败返回 (b"", "")。"""
-    try:
-        from PIL import Image
-    except ImportError:
-        return b"", ""
-    try:
-        image = Image.open(io.BytesIO(data))
-        image.seek(0)
-        if image.mode not in ("RGB", "L"):
-            image = image.convert("RGB")
-        image.thumbnail((MAX_SIDE, MAX_SIDE))
-        out = io.BytesIO()
-        image.save(out, format="JPEG", quality=QUALITY, optimize=True)
-        return out.getvalue(), "image/jpeg"
-    except Exception:
-        return b"", ""
+    """GIF默认打开首帧，复用像素校验及进程内解码槽位。"""
+    return _shrink(data)
 
 
 def _fetch_gif(url: str, timeout: float = 8.0) -> bytes:
@@ -100,8 +111,8 @@ def _fetch_gif(url: str, timeout: float = 8.0) -> bytes:
         return response.read(GIF_MAX_BYTES + 1)
 
 
-def _gif_to_still_uri(url: str) -> str:
-    """下载 GIF 并转成静态首帧的 data URI；任何异常都返回空串。"""
+def _gif_to_still_uri(url: str) -> str | None:
+    """GIF转首帧；None表示不能安全解码，调用方必须省略而非回退URL。"""
     if not _GIF_STILL or not _looks_like_gif(url):
         return ""
     try:
@@ -112,7 +123,7 @@ def _gif_to_still_uri(url: str) -> str:
         return ""
     data, mime = _gif_first_frame(raw)
     if not data or not mime:
-        return ""
+        return None
     return "data:%s;base64,%s" % (mime, base64.b64encode(data).decode())
 
 
@@ -147,6 +158,9 @@ def fit_sync(urls: list[str]) -> tuple[list[str], int]:
         seen.add(url)
         if url.startswith(DIRECT_PREFIX) or url.startswith("/"):
             still = _gif_to_still_uri(url)
+            if still is None:
+                dropped += 1
+                continue
             if still and total + len(still) <= MAX_TOTAL_B64:
                 total += len(still)
                 kept.append(still)
@@ -165,7 +179,10 @@ def fit_sync(urls: list[str]) -> tuple[list[str], int]:
             kept.append(url)
             continue
         data, mime = _shrink(data)
-        if not data or not mime:
+        if not data:
+            dropped += 1
+            continue
+        if not mime:
             if total + len(url) > MAX_TOTAL_B64:
                 dropped += 1
                 continue

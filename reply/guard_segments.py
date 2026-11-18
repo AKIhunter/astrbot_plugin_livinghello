@@ -11,6 +11,7 @@ try:
                                        normalize_punctuation, punct_cleanup_enabled,
                                        punct_space_mode)
     from .guard_native_reply import managed_options, second_period_regex
+    from .guard_prompt_injection import SEGMENT_CONTRACT, PARAGRAPH_CONTRACT
     from ..observability.guard_request_trace import emit
     from .guard_thinking_filter import strip_thinking
 except ImportError:
@@ -18,6 +19,7 @@ except ImportError:
                                           normalize_punctuation, punct_cleanup_enabled,
                                           punct_space_mode)
     from reply.guard_native_reply import managed_options, second_period_regex
+    from reply.guard_prompt_injection import SEGMENT_CONTRACT, PARAGRAPH_CONTRACT
     from observability.guard_request_trace import emit
     from reply.guard_thinking_filter import strip_thinking
 
@@ -43,10 +45,9 @@ class ReplySegments:
         if managed_options(raw) is None or event.get_extra("_at_guard_segment_prompt"):
             return
         if raw.get("only_llm_result") is True:
-            text = ("请先组织完整答案，再按完整意思自行分段，每段之间用空行分隔。"
-                    "同一段内不要仅因出现句号就换行；不要输出分段编号或分隔标签。")
+            text = SEGMENT_CONTRACT
         else:
-            text = "普通聊天回复请使用一个连贯段落，不要用换行隔断；代码、表格等必要格式仍保留。"
+            text = PARAGRAPH_CONTRACT
         req.extra_user_content_parts.append(TextPart(text=text).mark_as_temp())
         event.set_extra("_at_guard_segment_prompt", True)
 
@@ -56,7 +57,7 @@ class ReplySegments:
     @staticmethod
     def structured(text):
         return ("```" in text or "~~~" in text
-                or len(re.findall(r"(?m)^\s*\|.+\|\s*$", text)) >= 2)
+                or len(re.findall(r"(?m)^[ \t]*\|.+\|[ \t]*$", text)) >= 2)
 
     @staticmethod
     def paragraphs(text, options):
@@ -106,20 +107,23 @@ class ReplySegments:
             text = strip_forbidden(
                 text, forbid_phrases(getattr(self.plugin, "config", None) or {})
             )
-            # 标点规范化必须在这里：它是所有非流式正文的唯一汇合点，
-            # 早于分段，所以每条气泡各自干净，也不会在合并时又拼出逗号。
+            # 先按原标点分段，再清理每段，避免清掉用户配置的断句符。
             _pcfg = getattr(self.plugin, "config", None)
-            if punct_cleanup_enabled(_pcfg):
-                text = normalize_punctuation(text, space=punct_space_mode(_pcfg))
+            def clean(value):
+                return (normalize_punctuation(value, space=punct_space_mode(_pcfg))
+                        if punct_cleanup_enabled(_pcfg) else value)
             pending = ""
             if not text.strip():
                 return
             if not split:
                 if raw.get("only_llm_result") is not True and not self.structured(text):
                     text = re.sub(r"\s*\r?\n\s*", " ", text)
-                chain.append(Plain(text))
+                chain.append(Plain(clean(text)))
             else:
-                chain.extend(Plain(value) for value in self.paragraphs(text, options))
+                for value in self.paragraphs(text, options):
+                    cleaned = clean(value)
+                    if cleaned.strip():
+                        chain.append(Plain(cleaned))
             pending = ""
         for component in result.chain or []:
             if isinstance(component, Plain):
