@@ -629,14 +629,7 @@ class ImageSettings:
         job["followup"] = receipt
         emit(event, "image_followup", "success" if receipt else "unavailable",
              reason=(receipt or {}).get("task_status", "handoff_unavailable"))
-        if not receipt or receipt.get("status") != "accepted" or self.blocked(event):
-            return
-        if failure["kind"] == "content_rejected":
-            # 第一条已经问清两种选择，不再追加一条“记下/等待”的重复说明。
-            return
-        line = ("这件事记下了，五分钟后再试一次。" if receipt["task_status"] == "scheduled"
-                else "这件事先放一放，等弄清楚有没有做好再说。")
-        await event.send(event.chain_result([Plain(line)]))
+        # 交接只保存后续状态；本轮已说明失败，不再追加一条等待提示。
 
     async def _run_image_job(self, event, job):
         try:

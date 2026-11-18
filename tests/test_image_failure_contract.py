@@ -69,6 +69,57 @@ class ImageFailureFlowTests(unittest.IsolatedAsyncioTestCase):
         handoff.assert_awaited_once()
         event.send.assert_awaited_once()
 
+    async def test_background_502_with_accepted_handoff_sends_one_notice(self):
+        event = fixtures.Event()
+        self.service._request.side_effect = http_failure(502, "offline-upstream-error")
+        job = dict(prompt="猫", use_reference=False, emotion=None, status="running")
+        receipt = {"status": "accepted", "task_status": "waiting"}
+        with patch("images.guard_image_settings.image_followup",
+                   AsyncMock(return_value=receipt)) as handoff:
+            await self.service._run_image_job(event, job)
+            await self.service._notify_image_failure(
+                event, job, event.get_extra("_livinghello_image_failure"))
+        self.service._request.assert_awaited_once()
+        event.send.assert_awaited_once()
+        handoff.assert_awaited_once()
+        self.assertEqual(job["status"], "unknown")
+        self.assertEqual(job["followup"], receipt)
+
+    async def test_all_failure_kinds_keep_one_notice_after_handoff(self):
+        for kind in REASONS:
+            for receipt in (None, {"status": "accepted", "task_status": "waiting"},
+                            {"status": "accepted", "task_status": "scheduled"}):
+                with self.subTest(kind=kind, receipt=receipt):
+                    event = fixtures.Event()
+                    job = dict(prompt="猫", use_reference=False, emotion=None)
+                    failure = self.service._image_failure(event, job, kind)
+                    with patch("images.guard_image_settings.image_followup",
+                               AsyncMock(return_value=receipt)) as handoff:
+                        await self.service._notify_image_failure(event, job, failure)
+                        await self.service._notify_image_failure(event, job, failure)
+                    event.send.assert_awaited_once()
+                    handoff.assert_awaited_once()
+                    self.assertTrue(failure["notified"])
+                    self.assertEqual(failure["adjustment_asked"], kind == "content_rejected")
+        self.service._request.assert_not_awaited()
+
+    async def test_unaccepted_failure_notice_never_hands_off_or_resends(self):
+        for result in (False, OSError("offline-send")):
+            with self.subTest(result=type(result).__name__):
+                event = fixtures.Event()
+                if isinstance(result, Exception):
+                    event.send.side_effect = result
+                else:
+                    event.send.return_value = result
+                job = dict(prompt="猫", use_reference=False, emotion=None)
+                failure = self.service._image_failure(event, job, "result_unknown")
+                with patch("images.guard_image_settings.image_followup", AsyncMock()) as handoff:
+                    await self.service._notify_image_failure(event, job, failure)
+                    await self.service._notify_image_failure(event, job, failure)
+                event.send.assert_awaited_once()
+                handoff.assert_not_awaited()
+                self.assertFalse(failure["notified"])
+
     async def test_cron_failure_does_not_create_second_handoff(self):
         event = fixtures.Event()
         event.result = event.chain_result([])
