@@ -32,6 +32,7 @@ try:
     from ..input.guard_probe_input import parse_probe, ProbeInputError
     from ..input.guard_understanding import audio_capable
     from ..reply.guard_native_reply import NativeReply, NativeReplyError
+    from ..reply.guard_prompt_injection import catalog as prompt_catalog, validate as validate_prompts, TEXT_KEYS as PROMPT_TEXT_KEYS, BOOL_KEYS as PROMPT_BOOL_KEYS
     from ..integrations.guard_native_settings import NativeSettings
     from ..images.guard_image_settings import ImageSettings
     from .guard_flow import build_flow
@@ -50,6 +51,7 @@ except ImportError:
     from input.guard_probe_input import parse_probe, ProbeInputError
     from input.guard_understanding import audio_capable
     from reply.guard_native_reply import NativeReply, NativeReplyError
+    from reply.guard_prompt_injection import catalog as prompt_catalog, validate as validate_prompts, TEXT_KEYS as PROMPT_TEXT_KEYS, BOOL_KEYS as PROMPT_BOOL_KEYS
     from integrations.guard_native_settings import NativeSettings
     from images.guard_image_settings import ImageSettings
     from console.guard_flow import build_flow
@@ -147,7 +149,7 @@ for _key, _field in _expression_schema.items():
         BOOL_FIELDS.add(_key)
     elif _type == "string":
         STRING_FIELDS.add(_key)
-EDITABLE = set(NUMERIC_FIELDS) | BOOL_FIELDS | STRING_FIELDS | LIST_FIELDS
+EDITABLE = set(NUMERIC_FIELDS) | BOOL_FIELDS | STRING_FIELDS | LIST_FIELDS | PROMPT_TEXT_KEYS | PROMPT_BOOL_KEYS
 POLICY_FIELDS = {
     "gate_mode", "classifier_provider_id", "classifier_timeout_seconds",
     "participation_confidence_threshold", "gate_min_length",
@@ -259,6 +261,12 @@ def _provider_catalog_revision(plugin: Any) -> str | None:
                 str(config.get("type") or ""),
                 str(config.get("model") or getattr(provider, "model", "") or ""),
                 config.get("enable") is not False,
+                # These fields change the displayed name or image capability;
+                # object replacement alone still does not invalidate the cache.
+                tuple((key, config.get(key)) for key in (
+                    "display_name", "label", "name", "api_base",
+                    "custom_extra_body", "modalities", "supports_images",
+                    "upstream_slot", "parent_provider_id")),
                 tuple(names),
             )
 
@@ -946,6 +954,9 @@ async def _state(plugin: Any) -> dict[str, Any]:
     mark("配置与模型列表")
 
     config = {key: _current(plugin, key, schema.get(key, {}).get("default")) for key in EDITABLE}
+    prompt_injection = prompt_catalog(plugin)
+    for item in (*prompt_injection["shared"], *prompt_injection["core"], *prompt_injection["ordinary"]):
+        config[item["stem"] + "_text"] = item["value"]
     today = engine.snapshot()
     budget = engine.budget_usage()
     image_cache = plugin._image_observation_cache().snapshot()
@@ -958,7 +969,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     mark("最近判定")
 
     data = {
-        "version": "2.7.10",
+        "version": "2.7.11",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
         "config": config,
@@ -984,6 +995,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
         "listeners": plugin._trace().listeners(),
         "message_policy": {**plugin.get_message_policy_snapshot(),
                            "companion": plugin.message_policy_companion()},
+        "prompt_injection": prompt_injection,
     }
     mark("其余状态")
 
@@ -1034,6 +1046,15 @@ def _load_schema_subset() -> dict[str, Any]:
 
 
 def _coerce(key: str, value: Any) -> Any:
+    # 新字段严格保留类型和原文；完整候选随后校验，不能截断或把字符串当开关。
+    if key in PROMPT_TEXT_KEYS:
+        if not isinstance(value, str):
+            raise ValueError("提示词必须是文本")
+        return value
+    if key in PROMPT_BOOL_KEYS:
+        if type(value) is not bool:
+            raise ValueError("提示词开关必须是布尔值")
+        return value
     if key == "outage_notify_admin_qq":
         try:
             from ..reply.guard_reply_health import qq_ids
@@ -1208,6 +1229,10 @@ async def handle_config(plugin: Any):
             return error_response("名单已被另一页面修改，请刷新后核对草稿再保存", status_code=409,
                                   data={"revision": current_policy["revision"], "code": "revision"})
         candidate = {**plugin.config, **updates}
+        try:
+            validate_prompts(candidate)
+        except ValueError as exc:
+            return _failure(str(exc))
         validation = validate_policy_config(candidate)
         if not validation["valid"]:
             return error_response("名单校验未通过", data=validation)

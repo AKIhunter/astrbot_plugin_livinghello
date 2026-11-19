@@ -11,11 +11,21 @@ permissions:
 jobs:
   offline:
     runs-on: ubuntu-latest
+    env:
+      ASTRBOT_NATIVE_SOURCE: ${{ github.workspace }}/.native-host/astrbot
     steps:
       - uses: actions/checkout@v4
+      - name: 固定宿主源码，仅编译隔离工具与调度契约
+        uses: actions/checkout@v4
+        with:
+          repository: AstrBotDevs/AstrBot
+          ref: 61335414433db721b3f7ecc93f90deafe0a59d78
+          path: .native-host
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
+      - name: 安装固定隔离测试依赖
+        run: python -m pip install pydantic==2.14.3 jsonschema==4.26.0 PyJWT==2.10.1 starlette==1.10.0 httpx==0.28.1
       - name: 文档与资产检查
         run: python -B scripts/check_docs.py
       - name: 独立插件离线回归

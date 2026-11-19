@@ -59,3 +59,5 @@
 | migration-manifest.json | [history/migration-manifest.json](history/migration-manifest.json) |
 
 - [主模型失败兜底](reply_fallback.md)：开关、重试预算、提醒及取消边界。
+
+- [2.7.11 提示词与边界说明](stability-2.7.11.md)

@@ -1,6 +1,6 @@
 # 流程与集成说明
 
-面向希望理解执行链路的使用者和配套开发者。当前实现依据 [main.py](../main.py)、[gate/guard_engine.py](../gate/guard_engine.py) 及各 `guard_*` 模块，已核对源码：2026-11-18（2.7.10）。完整白话分支见 [HTML 图解](flow/index.html)，四种接入组合见 [集成说明](integrations-and-flow.md)，合成反例见 [验证报告](validation-20261112.md)。钩子、缓存、超时或配套约定改变时更新；以下图不能代替部署状态验证。
+面向希望理解执行链路的使用者和配套开发者。当前实现依据 [main.py](../main.py)、[gate/guard_engine.py](../gate/guard_engine.py) 及各 `guard_*` 模块，已核对源码：2026-11-19（2.7.11）。完整白话分支见 [HTML 图解](flow/index.html)，四种接入组合见 [集成说明](integrations-and-flow.md)，合成反例见 [验证报告](validation-20261112.md)。钩子、缓存、超时或配套约定改变时更新；以下图不能代替部署状态验证。
 
 2.7.9 图片入口先刷新平台链接，并行获取OCR与有界下载，下载内容通过像素准入后才交视觉模型。
 OCR只提供文字证据，下载失败不猜画面。解码槽位随实际线程释放，达到两份并发时立即省略。

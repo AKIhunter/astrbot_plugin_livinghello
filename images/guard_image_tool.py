@@ -6,9 +6,9 @@ from pydantic.dataclasses import dataclass
 from astrbot.core.agent.tool import FunctionTool
 from astrbot.core.astr_agent_context import AstrAgentContext
 try:
-    from .guard_image_contract import IMAGE_DESCRIPTION
+    from ..reply.guard_prompt_injection import IMAGE_DESCRIPTION
 except ImportError:  # 兼容插件现有单文件/顶层包测试入口。
-    from images.guard_image_contract import IMAGE_DESCRIPTION
+    from reply.guard_prompt_injection import IMAGE_DESCRIPTION
 
 
 @dataclass

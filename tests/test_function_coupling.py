@@ -37,7 +37,8 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.guard._livingemotion_block_reason(self.event), "")
         api.get_capabilities.assert_not_awaited()
         await self.guard.listen_livingemotion(self.event, self.req)
-        self.assertEqual(self.req.extra_user_content_parts, [])
+        # LH 关闭衔接时不读取 LE API，也不删除 LE 独立钩子已注入的状态。
+        self.assertEqual([p.text for p in self.req.extra_user_content_parts], [STATE])
 
     async def test_cooperation_contract_declares_owners_without_changing_flags(self):
         value = self.guard.get_function_coupling()
@@ -167,6 +168,9 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
                          ["knowledge_search", "memorize_long_term_memory"])
         self.assertEqual([p.text for p in self.req.extra_user_content_parts], [STATE])
 
+    @unittest.skipUnless((Path(__file__).resolve().parents[2]
+                          / "astrbot_plugin_livingemotion/livinghello_coupling.py").is_file(),
+                         "显式协作验收需要 LivingEmotion 源码")
     async def test_private_freshness_window_is_published_by_contract(self):
         row = self.guard.get_function_coupling()["reply_freshness"]
         self.assertEqual(row["contract"], "livinghello.reply-freshness.v1")
@@ -188,6 +192,10 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
         self.registry["astrbot_plugin_at_guard"].activated = False
         self.assertIsNone(module.policy(self.guard.context))
 
+    @unittest.skipUnless(all((Path(__file__).resolve().parents[2] / item).is_file()
+                         for item in ("LivingMemory/core/livinghello_coupling.py",
+                                      "astrbot_plugin_congling/core/livinghello_coupling.py")),
+                         "历史协作验收需要旧 LivingMemory 和从绫源码")
     async def test_companion_policies_follow_alias_and_deactivation(self):
         for name in ("astrbot_plugin_LivingHello", "astrbot_plugin_livinghello"):
             with self.subTest(name=name):
@@ -218,6 +226,8 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
         self.registry[name].activated = False
         self.assertTrue(module.policy(self.guard.context) is None)
 
+    @unittest.skipUnless((Path(__file__).resolve().parents[2]
+                          / "astrbot_plugin_congling/main.py").is_file(), "从绫源码未安装")
     async def test_congling_memory_hook_yields_when_managed(self):
         root = Path(__file__).resolve().parents[2] / "astrbot_plugin_congling"
         tree = ast.parse((root / "main.py").read_text(encoding="utf-8-sig"))
@@ -231,6 +241,8 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
         await namespace["memory_hook"](cg, self.event, self.req)
         cg.memory.inject.assert_not_awaited()
 
+    @unittest.skipUnless((Path(__file__).resolve().parents[2]
+                          / "astrbot_plugin_congling/humanize/persona.py").is_file(), "从绫源码未安装")
     async def test_congling_dynamic_state_yields_but_scene_and_persona_remain(self):
         from test_congling_expression_handoff import methods
         actual = methods("humanize/persona.py", ("inject",))
@@ -252,6 +264,8 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("congling:persona", req.system_prompt)
         self.assertEqual(req.parts[0][0], "场景：群聊")
 
+    @unittest.skipUnless((Path(__file__).resolve().parents[2]
+                          / "astrbot_plugin_congling/capability/registry.py").is_file(), "从绫源码未安装")
     async def test_congling_recall_tool_rejects_before_cache_access(self):
         root = Path(__file__).resolve().parents[2] / "astrbot_plugin_congling"
         tree = ast.parse((root / "capability/registry.py").read_text(encoding="utf-8-sig"))

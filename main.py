@@ -26,7 +26,8 @@ try:  # 作为插件包加载时走相对导入
     from .images.guard_media import image_target
     from .reply.guard_reply_delivery import ReplyDelivery
     from .reply.guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
-    from .reply.guard_reply_fallback import ReplyFallback
+    from .reply.guard_reply_fallback import ReplyFallback, find_current_runner
+    from .input.guard_history_view import HistoryView
     from .reply.guard_reasoning_retry import ReasoningRetry
     from .input.guard_fragments import FragmentWait
     from .reply.guard_expression import Expression, congling_for, takeover
@@ -46,8 +47,9 @@ try:  # 作为插件包加载时走相对导入
         failure_category_label,
         redacted_provider_id,
     )
-    from .input.guard_understanding import Understanding
+    from .input.guard_understanding import Understanding, kind, payload
     from .reply.guard_segments import ReplySegments
+    from .reply.guard_prompt_injection import TOPIC_CONTRACT, MARKER as EXPRESSION_MARKER, expression_text, attach_shared, shared_snapshot, request_config
     from .integrations.guard_evidence import EvidenceMemory
     from .observability.guard_request_trace import RequestTrace, emit, touch
 except ImportError:  # 单文件调试兜底
@@ -57,7 +59,8 @@ except ImportError:  # 单文件调试兜底
     from images.guard_media import image_target
     from reply.guard_reply_delivery import ReplyDelivery
     from reply.guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
-    from reply.guard_reply_fallback import ReplyFallback
+    from reply.guard_reply_fallback import ReplyFallback, find_current_runner
+    from input.guard_history_view import HistoryView
     from reply.guard_reasoning_retry import ReasoningRetry
     from input.guard_fragments import FragmentWait
     from reply.guard_expression import Expression, congling_for, takeover
@@ -77,8 +80,9 @@ except ImportError:  # 单文件调试兜底
         failure_category_label,
         redacted_provider_id,
     )
-    from input.guard_understanding import Understanding
+    from input.guard_understanding import Understanding, kind, payload
     from reply.guard_segments import ReplySegments
+    from reply.guard_prompt_injection import TOPIC_CONTRACT, MARKER as EXPRESSION_MARKER, expression_text, attach_shared, shared_snapshot, request_config
     from integrations.guard_evidence import EvidenceMemory
     from observability.guard_request_trace import RequestTrace, emit, touch
 
@@ -156,6 +160,11 @@ class Main(Star):
             self.reply_fallback = ReplyFallback(self)
         return self.reply_fallback
 
+    def _history_view(self):
+        if not hasattr(self, "history_view"):
+            self.history_view = HistoryView(self)
+        return self.history_view
+
     def _policy(self):
         if not hasattr(self, "message_policy"):
             self.message_policy = MessagePolicy(self.config)
@@ -210,6 +219,10 @@ class Main(Star):
         }
         return result
 
+    def get_shared_prompt_snapshot(self, *, variant="v4"):
+        """LE consumes only these two settings through the public runtime interface."""
+        return shared_snapshot(self.config, variant)
+
     def _freeze_emotion_snapshot(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
         """同一轮内复用最先拿到的情绪状态，重跑主模型不重新读。
 
@@ -221,6 +234,10 @@ class Main(Star):
             return
         snapshot = event.get_extra("_at_guard_emotion_snapshot")
         fresh = [part for part in parts if is_state_line(getattr(part, "text", ""))]
+        for part in fresh:
+            mark = getattr(part, "mark_as_temp", None)
+            if callable(mark):
+                mark()
         if snapshot is None:
             if fresh:
                 event.set_extra("_at_guard_emotion_snapshot", fresh[0])
@@ -1247,7 +1264,10 @@ class Main(Star):
             return False
         getter = getattr(event, "get_messages", None)
         components = getter() if callable(getter) else []
-        return any(isinstance(component, (Image, Reply)) for component in components[:30])
+        return any(isinstance(component, (Image, Reply))
+                   or type(component).__name__.lower() in {"forward", "nodes", "node", "xml"}
+                   or isinstance(component, dict) and component.get("type") in {"forward", "nodes", "node", "xml"}
+                   for component in components[:30])
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 10)
     async def parse_reply_input(self, event: AstrMessageEvent):
@@ -1267,9 +1287,16 @@ class Main(Star):
         if (event.get_message_type() != MessageType.GROUP_MESSAGE
                 and not str(getattr(event, "message_str", "") or "").strip()):
             placeholder = self._text_or_face(event)
+            # 纯合并转发也没有 message_str；只补真实的附件类型，不伪造内部正文。
+            if not placeholder.strip() and takeover(self.config):
+                components = event.get_messages() or []
+                if any(kind(c) in {"forward", "nodes", "node"}
+                       or kind(c) == "xml" and self._understanding().xml_forward(payload(c)) is not None
+                       for c in components[:30]):
+                    placeholder = "[用户发送了合并转发消息]"
             if placeholder.strip():
                 event.message_str = placeholder
-                self.logger.warning("[LivingHello] 纯表情消息补占位：%s", placeholder)
+                self.logger.info("[LivingHello] 纯附件消息补占位：%s", placeholder)
         touch(event, "input_parse")
         # 先登记本轮起点，再解析图片：首条是图片时也要能被后续新消息顶替。
         self._note_reply_turn(event)
@@ -1325,19 +1352,21 @@ class Main(Star):
         emit(event, "contracts", "success")
         # 放行、私聊与直接@路径共用理解要求；不让提前返回的路径漏掉工具/记忆交接。
         # 去重只限制顺带复述其他事项，保留用户重说与进展追问的出口。
-        if not event.get_extra("_at_guard_topic_contract"):
-            req.extra_user_content_parts.append(TextPart(text=(
-                "回复前确认当前用户实际问什么、引用的是谁、话题中的对象是什么。"
-                "优先复用已提供的消息解析、原文、长期记忆、向量检索和媒体观察；"
-                "事实不足时使用本轮实际可用的查询工具，无法核实就追问，不凭印象接话。"
-                "稳定且有来源的事实通过可用长期记忆写入工具保存精简事实、来源和日期；"
-                "临时天气、价格和查询失败不写成长期事实。"
-                "先定位用户这条消息回应的是上一轮哪一个点，只谈那一个。"
-                "上一轮的其他承诺、画面描写和收尾话不要顺带重提；"
-                "指向不明时用一句确认接住，不要逐条列举。"
-                "用户明确要求重说或追问进展时，照常回答。"
-            )).mark_as_temp())
-            event.set_extra("_at_guard_topic_contract", True)
+        # Shared built-ins have request-local ownership; independent and coupled hooks merge by ID.
+        variant = attach_shared(self, event, req, lambda text: TextPart(text=text))
+
+        # 独立临时表达区：重新装配同一请求也仅保留一份，不写入聊天历史。
+        req.extra_user_content_parts = [
+            part for part in req.extra_user_content_parts
+            if not getattr(part, "text", "").startswith(EXPRESSION_MARKER)
+        ]
+        extra_expression = expression_text(
+            request_config(req, self.config), group=event.get_message_type() == MessageType.GROUP_MESSAGE,
+            logger=self.logger,
+            variant=variant,
+        )
+        if extra_expression:
+            req.extra_user_content_parts.append(TextPart(text=extra_expression).mark_as_temp())
 
         # 图片预算：base64 原图能把上下文撑到几十万 token，必须在最后一次请求前排掉。
         # 放在这里是因为此时 LivingHello、分片、image_history、其他插件的图片都已追加完。
@@ -1380,6 +1409,9 @@ class Main(Star):
 
         # 复用线上最终装配钩子，避免新增重复监听或覆盖图片/思考清理。
         await self.fit_final_request_images(event, req)
+        # 仅精简发给 Provider 的副本，保留原历史及本轮完整情绪状态。
+        self._freeze_emotion_snapshot(event, req)
+        self._history_view().prepare(event, req)
         self.logger.warning("[LH-trace] 契约钩子完成，即将请求主模型")
 
     @filter.on_llm_request(priority=-maxsize - 10)
@@ -1457,6 +1489,7 @@ class Main(Star):
 
     @filter.on_using_llm_tool()
     async def trace_tool_start(self, event, tool, tool_args):
+        # 定时/工具发送走宿主 context.send_message，不经过普通回复分段装饰。
         self._delivery().expression.tool_arguments(tool, tool_args)
         service = self._trace(event)
         touch(event, "tool_start")
@@ -1475,6 +1508,7 @@ class Main(Star):
     async def trace_agent_begin(self, event, run_context):
         service = self._trace(event)
         self._reply_health().watch(event, expected=True)
+        self._history_view().bind(event, find_current_runner(run_context))
         self._reply_fallback().bind_current(event, run_context)
         # 宿主已选择本轮provider；只取名称，后备切换的最终归属仍以宿主日志为准。
         try:
@@ -1958,6 +1992,9 @@ class Main(Star):
         if turns is not None:
             turns.close()
         fallback = getattr(self, "reply_fallback", None)
+        history_view = getattr(self, "history_view", None)
+        if history_view is not None:
+            await history_view.close()
         if fallback is not None:
             await fallback.close()
         reply_health = getattr(self, "reply_health", None)
@@ -2526,12 +2563,8 @@ class Main(Star):
             # 被闸门拦下的场景压根走不到这里，自然不会多发一句。
             self._arm_early_ack(event)
             req.extra_user_content_parts.append(TextPart(
-                text="你已获准参与当前话题。以下为判定时同一会话的原始流水，"
-                     "按交流对象和时间顺序接话，优先回答当前用户的具体问题。"
-                     "判定通过只代表适合参与，不代表事实已核实。先复用本次已有记忆和媒体观察；"
-                     "信息不足时使用可用的搜索、记忆、向量或图片工具补充；仍不明确就简短追问，勿猜测。"
-                     "检索获得的稳定事实应通过可用记忆写入工具保存精简事实及来源；"
-                     "时效信息保留日期，后续过期应重新核实，不能把推测当记忆。\n"
+                text="你已获准参与当前话题。以下仅为本轮同一会话的原始流水，"
+                     "按其来源、交流对象与时间使用，不表示事实已核实或工具执行成功。\n"
                      '<at_guard_topic untrusted="true">\n'
                      + json.dumps({"recent_messages_old_to_new": context_lines,
                                    "current_message": {"text": self._fragment_text(event), **message_meta}},

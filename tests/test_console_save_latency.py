@@ -75,6 +75,9 @@ class SaveReceiptTest(unittest.IsolatedAsyncioTestCase):
 
 class ProviderCacheTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        # Slow enumeration is an explicit compatibility path. The default fast
+        # path must never call a real upstream's get_models().
+        self.enterContext(patch.object(guard_webui, "PROVIDER_LIST_FAST", False))
         self.started, self.release = asyncio.Event(), asyncio.Event()
         self.calls = 0
         self.slow = False
@@ -94,7 +97,7 @@ class ProviderCacheTest(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_cold_reads_share_one_catalog_query(self):
         self.slow = True
         tasks = [asyncio.create_task(guard_webui._providers(self.guard)) for _ in range(10)]
-        await self.started.wait()
+        await asyncio.wait_for(self.started.wait(), 2)
         self.assertEqual(self.calls, 1)
         self.release.set()
         rows = await asyncio.gather(*tasks)
@@ -129,6 +132,7 @@ class ProviderCacheTest(unittest.IsolatedAsyncioTestCase):
         self.provider.provider_config["enable"] = False
         self.assertEqual(await guard_webui._providers(self.guard), [])
         self.provider.provider_config["enable"] = True
+        self.provider.provider_config["model"] = "model-b"
         replacement = SimpleNamespace(**vars(self.provider))
         self.registered[:] = [replacement]
         await guard_webui._providers(self.guard)
@@ -173,10 +177,29 @@ class ProviderCacheTest(unittest.IsolatedAsyncioTestCase):
     async def test_connection_change_during_load_does_not_cache_old_revision(self):
         self.slow = True
         task = asyncio.create_task(guard_webui._providers(self.guard))
-        await self.started.wait()
+        await asyncio.wait_for(self.started.wait(), 2)
         self.provider.provider_config["display_name"] = "updated"
         self.release.set()
         rows = await task
         self.assertEqual(rows[0]["display"], "updated")
         await guard_webui._providers(self.guard)
         self.assertEqual(self.calls, 2)
+
+    async def test_fast_catalog_never_enumerates_upstream_models(self):
+        with patch.object(guard_webui, "PROVIDER_LIST_FAST", True):
+            self.provider.get_models = AsyncMock(side_effect=AssertionError("paid upstream"))
+            self.assertEqual((await guard_webui._providers(self.guard))[0]["id"], "text")
+            self.provider.get_models.assert_not_called()
+
+    async def test_fast_catalog_reuses_replacement_and_refreshes_display(self):
+        with patch.object(guard_webui, "PROVIDER_LIST_FAST", True), \
+                patch.object(guard_webui, "_build_providers",
+                             wraps=guard_webui._build_providers) as build:
+            await guard_webui._providers(self.guard)
+            self.registered[:] = [SimpleNamespace(**vars(self.provider))]
+            await guard_webui._providers(self.guard)
+            self.assertEqual(build.await_count, 1)
+            self.provider.provider_config["display_name"] = "updated"
+            rows = await guard_webui._providers(self.guard)
+            self.assertEqual(rows[0]["display"], "updated")
+            self.assertEqual(build.await_count, 2)

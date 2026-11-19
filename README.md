@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.10-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.11-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -367,7 +367,7 @@ flowchart TD
 
 ## 📦 更新日志
 
-当前版本 **2.7.10**：生图失败只发一次普通说明，待办交接后不再追加等待提示；
+当前版本 **2.7.11**：生图失败只发一次普通说明，待办交接后不再追加等待提示；
 502、超时等未知结果仍等待核对。[行为与验证](docs/image-failure-notice.md)。
 
 2.7.9 限制图片实际解码像素和并发，OCR先截取再拼接，长正文及畸形JSON有界清理；
@@ -409,3 +409,7 @@ README 提供中英双语入门；下面的详细文档主要为中文，代码�
 **👋 Hello，先听懂，再接话。**
 
 </div>
+
+## 2.7.11 更新日志
+
+预置与边界修复的用法见[本版说明](docs/stability-2.7.11.md)，变化见[更新日志](CHANGELOG.md)。

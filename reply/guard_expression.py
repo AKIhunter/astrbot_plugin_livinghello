@@ -31,7 +31,7 @@ _PROTECTED = re.compile(
     r"|\b[A-Za-z0-9_]+(?:[./:@+_-][A-Za-z0-9_]+)+\b"
     r"|\b\d+(?:[.,:/+-]\d+)+(?:%)?)"
 )
-# 未加代码围栏的常见命令整行保留，参数引号/括号不能套用聊天标点规则。
+# 未加代码围栏的命令整行保留，参数不能套用聊天标点规则。
 _COMMAND_LINE = re.compile(
     r"(?m)^[ \t]*(?:[$#][ \t]+)?(?:sudo[ \t]+)?"
     r"(?:curl|wget|python(?:\d+(?:\.\d+)?)?|pip3?|ssh|scp|rsync|git|"
@@ -87,7 +87,6 @@ def protected_parts(text):
         if (protected_index < len(existing)
                 and existing[protected_index][0] <= start < existing[protected_index][1]):
             continue
-        # raw_decode在畸形嵌套结构上会反复扫描尾部；按最坏尾部长度计费。
         parse_chars += len(text) - start
         attempts += 1
         if parse_chars > JSON_PARSE_CHAR_BUDGET or attempts > JSON_PARSE_MAX_ATTEMPTS:
@@ -136,7 +135,7 @@ def normalize_punctuation(text, keep_inner_period=False, space="1"):
             value = _MULTI_SPACE.sub(" ", value)
         else:
             value = _MULTI_SPACE_WIDE.sub("  ", value)
-        # 只整理聊天片段内部的行边缘，不能对拼回后的代码再去缩进/空行。
+        # 只整理聊天片段的行边缘，不能对拼回后的代码去缩进。
         value = re.sub(_GAP, lambda _m: " " * punct_gap_width(space), value)
         value = re.sub(r"(?<=\n)[ \t]+|[ \t]+(?=\n)", "", value)
         value = _MANY_BLANK.sub("\n\n", value)
@@ -179,7 +178,7 @@ def forbid_phrases(config):
 
 
 def strip_forbidden(text, phrases):
-    """只清理聊天片段；禁忌词删除后的所有后处理也不得跨入技术片段。"""
+    """只清理聊天片段，所有后处理也不得跨入技术片段。"""
     if not text or not phrases or len(text) > MAX_CLEANUP_CHARS:
         return text
     parts = []

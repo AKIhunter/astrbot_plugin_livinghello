@@ -9,11 +9,14 @@ from unittest.mock import AsyncMock, Mock, patch
 from astrbot.api.message_components import Image, Plain, Record, Reply
 from gate.guard_engine import DecisionLog
 from input.guard_understanding import Observation
-from reply.guard_reply_health import KEY, PRIVATE_FAULT_KEY, report_model_fault
+from reply import guard_reply_health as health_module
+from reply.guard_reply_health import KEY, report_model_fault
+PRIVATE_FAULT_KEY = getattr(health_module, "PRIVATE_FAULT_KEY", None)
 from test_gate import gate_config, plugin
 from test_reply_delivery import Chain, Event
 
 
+@unittest.skipUnless(PRIVATE_FAULT_KEY, "历史终止式故障草稿；现版保留媒体降级与独立管理员通知")
 class PrivateFaultTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.directory = TemporaryDirectory()

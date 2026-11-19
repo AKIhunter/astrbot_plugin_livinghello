@@ -54,11 +54,13 @@ def enabled(context, config, kind):
 def clean_request(req, *, emotion, memory):
     """末端清理只改当前请求；ToolSet 可来自宿主共享注册表，必须先复制。"""
     prefixes = []
-    if not emotion:
-        prefixes += ["<!--livingemotion:state:v1-->", "<!--livingemotion:crawled_history:v2-->"]
+    # LivingEmotion owns its autonomous state/history, even with coupling disabled.
+    # Its hook removes stale blocks itself; LH must not delete a live contribution.
     if not memory:
         prefixes += ["<RAG-Faiss-Memory>", "<Agent-Recall-Policy>",
-                     "<at_guard_memory", "<!--livingemotion:memory:v2-->"]
+                     "<at_guard_memory"]
+        if emotion:
+            prefixes += ["<!--livingemotion:memory:v2-->"]
     # 配套插件的动态层由协作入口让位；清理旧请求残留，固定人设和感知仍保留。
     prefixes += ["<!--congling:state-->", "<!--congling:memory-->",
                  "<!--congling:crawled_history-->", "<!--congling:wake_reply-->",

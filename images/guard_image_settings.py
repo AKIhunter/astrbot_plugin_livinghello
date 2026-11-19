@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 try:
     from ..reply.guard_native_reply import NativeReplyError, revision
-    from .guard_image_contract import IMAGE_CONTRACT, IMAGE_PREPARED
+    from ..reply.guard_prompt_injection import preset_text, request_config
     from ..integrations.guard_router_connections import router_connections, CHAT_TYPES
     from ..observability.guard_request_trace import emit, TRACE_KEY, touch
     from ..reply.guard_reply_health import report_model_fault
@@ -30,7 +30,7 @@ try:
     from .guard_image_failure import describe_failure, http_failure, REASONS
 except ImportError:
     from reply.guard_native_reply import NativeReplyError, revision
-    from images.guard_image_contract import IMAGE_CONTRACT, IMAGE_PREPARED
+    from reply.guard_prompt_injection import preset_text, request_config
     from integrations.guard_router_connections import router_connections, CHAT_TYPES
     from observability.guard_request_trace import emit, TRACE_KEY, touch
     from reply.guard_reply_health import report_model_fault
@@ -335,16 +335,21 @@ class ImageSettings:
             emit(event, "image_tool_attachment", "failed", reason="tool_import_failed")
             return
         from astrbot.core.agent.tool import ToolSet
+        prompt_config = request_config(req, getattr(self.plugin, "config", {}) or {})
+        event.set_extra("_livinghello_prompt_config", dict(prompt_config))
+        # Descriptor edits are request-local; the cached tool's callable/schema stay intact.
+        tool = copy.copy(tool)
+        tool.description = preset_text(prompt_config, "prompt_image_description")
         # 复制工具集，避免在共享人格工具集中污染其他请求。
         tools = ToolSet()
         for existing in getattr(getattr(req, "func_tool", None), "tools", []):
-            tools.add_tool(existing)
-        if not any(t.name == TOOL_NAME for t in tools.tools):
-            tools.add_tool(tool)
+            if existing.name != TOOL_NAME:
+                tools.add_tool(existing)
+        tools.add_tool(tool)
         req.func_tool = tools
         if getattr(self.plugin, "_livinghello_detached_enabled", False):
-            instruction = IMAGE_CONTRACT
-            if instruction not in (getattr(req, "system_prompt", "") or ""):
+            instruction = preset_text(prompt_config, "prompt_image_order")
+            if instruction and instruction not in (getattr(req, "system_prompt", "") or ""):
                 req.system_prompt = (getattr(req, "system_prompt", "") or "") + "\n" + instruction
         # 标记本次请求挂过生图工具，供最晚钩子复核它是否被后续插件覆盖。
         event.set_extra("_livinghello_image_tool_attached", True)
@@ -528,7 +533,10 @@ class ImageSettings:
             kind = "quota_exhausted" if job["status"] == "quota" else "provider_error"
             self._image_failure(event, job, kind)
             return job["reply"]
-        job.update(status="prepared", reply=IMAGE_PREPARED)
+        prompt_config = event.get_extra("_livinghello_prompt_config")
+        if prompt_config is None:
+            prompt_config = getattr(self.plugin, "config", {}) or {}
+        job.update(status="prepared", reply=preset_text(prompt_config, "prompt_image_prepared"))
         if mood:
             job["reply"] += "当前情绪：" + json.dumps(mood, ensure_ascii=False)
         return job["reply"]

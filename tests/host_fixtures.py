@@ -79,7 +79,11 @@ def dashboard_auth():
                  "error": lambda message: {"status": "error", "message": message},
                  "cast": lambda _, value: value, "DASHBOARD_JWT_COOKIE_NAME": "dashboard_jwt"}
     path = source() / "dashboard/plugin_page_auth.py"
-    exec(compile(path.read_text(), str(path), "exec"), namespace)
+    # 只编译认证辅助类及常量，避免宿主顶层导入初始化网络客户端。
+    nodes = [n for n in ast.parse(path.read_text()).body
+             if isinstance(n, (ast.ClassDef, ast.Assign, ast.AnnAssign))]
+    exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])),
+                 str(path), "exec"), namespace)
     path = source() / "dashboard/server.py"
     owner = next(n for n in ast.parse(path.read_text()).body
                  if isinstance(n, ast.ClassDef) and n.name == "AstrBotDashboard")

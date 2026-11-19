@@ -155,7 +155,7 @@ class RuntimeFlowAuditTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(event.stopped)
                 texts = [p.text for p in req.extra_user_content_parts]
                 self.assertEqual(sum(t.startswith(STATE_MARKER) for t in texts),
-                                 int(emotion_on))
+                                 1)
                 self.assertEqual(any(t.startswith("<RAG-Faiss-Memory>") for t in texts),
                                  memory_on)
                 names = [t.name for t in req.func_tool.tools]
@@ -220,7 +220,8 @@ class RuntimeFlowAuditTests(unittest.IsolatedAsyncioTestCase):
         await guard.guard_llm_request(event, req)
         await guard.attach_reply_contract(event, req)
         self.assertFalse(event.stopped)
-        self.assertFalse(any(p.text.startswith((STATE_MARKER, "<RAG-Faiss-Memory>"))
+        self.assertIn(STATE, [p.text for p in req.extra_user_content_parts])
+        self.assertFalse(any(p.text.startswith("<RAG-Faiss-Memory>")
                              for p in req.extra_user_content_parts))
 
     async def test_emotion_sleep_blocks_even_private_without_participation(self):

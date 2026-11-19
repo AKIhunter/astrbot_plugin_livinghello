@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.10-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.7.11-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -370,9 +370,9 @@ Find a recent record in **Overview**, copy its `request_id`, and inspect receivi
 
 ## 📦 Changelog
 
-Current version **2.7.10** sends one ordinary image-failure notice without appending a
-second waiting message after the handoff. Unknown results still require verification.
-[Behavior and validation (Chinese)](docs/image-failure-notice.md).
+Current version **2.7.11** adds editable prompt presets and fixes model cache and
+LivingEmotion handoff boundaries. Media errors retain the text fallback.
+[Usage and boundaries (Chinese)](docs/stability-2.7.11.md).
 
 Version 2.7.9 limits decoded image pixels and concurrency, clips OCR before
 joining text, and bounds cleanup of long or malformed input while preserving technical

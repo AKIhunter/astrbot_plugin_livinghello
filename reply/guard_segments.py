@@ -11,7 +11,7 @@ try:
                                        normalize_punctuation, punct_cleanup_enabled,
                                        punct_space_mode)
     from .guard_native_reply import managed_options, second_period_regex
-    from .guard_prompt_injection import SEGMENT_CONTRACT, PARAGRAPH_CONTRACT
+    from .guard_prompt_injection import preset_text, request_config
     from ..observability.guard_request_trace import emit
     from .guard_thinking_filter import strip_thinking
 except ImportError:
@@ -19,7 +19,7 @@ except ImportError:
                                           normalize_punctuation, punct_cleanup_enabled,
                                           punct_space_mode)
     from reply.guard_native_reply import managed_options, second_period_regex
-    from reply.guard_prompt_injection import SEGMENT_CONTRACT, PARAGRAPH_CONTRACT
+    from reply.guard_prompt_injection import preset_text, request_config
     from observability.guard_request_trace import emit
     from reply.guard_thinking_filter import strip_thinking
 
@@ -42,14 +42,13 @@ class ReplySegments:
 
     def attach(self, event, req):
         raw = self.config(event)
-        if managed_options(raw) is None or event.get_extra("_at_guard_segment_prompt"):
+        if managed_options(raw) is None or getattr(req, "_livinghello_segment_prompt", False):
             return
-        if raw.get("only_llm_result") is True:
-            text = SEGMENT_CONTRACT
-        else:
-            text = PARAGRAPH_CONTRACT
-        req.extra_user_content_parts.append(TextPart(text=text).mark_as_temp())
-        event.set_extra("_at_guard_segment_prompt", True)
+        stem = "prompt_segment" if raw.get("only_llm_result") is True else "prompt_paragraph"
+        text = preset_text(request_config(req, getattr(self.plugin, "config", {}) or {}), stem)
+        if text:
+            req.extra_user_content_parts.append(TextPart(text=text).mark_as_temp())
+        req._livinghello_segment_prompt = True
 
     def active(self, event):
         return managed_options(self.config(event)) is not None
@@ -57,7 +56,7 @@ class ReplySegments:
     @staticmethod
     def structured(text):
         return ("```" in text or "~~~" in text
-                or len(re.findall(r"(?m)^[ \t]*\|.+\|[ \t]*$", text)) >= 2)
+                or len(re.findall(r"(?m)^\s*\|.+\|\s*$", text)) >= 2)
 
     @staticmethod
     def paragraphs(text, options):

@@ -439,7 +439,7 @@ def decision_identity(entry: dict[str, Any]) -> dict[str, str]:
 
 
 class DecisionLog:
-    """判定留痕：有界内存，永久轮转归档；重载恢复最近记录。"""
+    """判定留痕：有界内存和轮转归档；重载恢复最近记录。"""
 
     def __init__(
         self,

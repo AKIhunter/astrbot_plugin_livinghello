@@ -43,7 +43,7 @@ class RecordsTest(unittest.TestCase):
     def test_rotation_and_reload_preserve_all_archives(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "decisions.jsonl"
-            log = DecisionLog(path, max_bytes=70)
+            log = DecisionLog(path, max_bytes=70, keep_archives=0)
             for index in range(12):
                 log.add({"ts": index, "gid": "1001", "raw": "中文" * 10})
             self.assertEqual([r["ts"] for r in DecisionLog(path).recent(100)], list(reversed(range(12))))
@@ -66,7 +66,7 @@ class RecordsTest(unittest.TestCase):
             self.assertEqual([r["ts"] for r in rows], [5999, 5998, 5997, 5996, 5995])
 
     def test_search_reaches_older_than_default_page_and_private_umo(self):
-        log = DecisionLog(None)
+        log = DecisionLog(None, ring_size=200)
         log.add({"gid": "aiocqhttp:FriendMessage:998877", "raw": "旧私聊"})
         for index in range(150):
             log.add({"gid": "1001", "ts": index})
@@ -80,7 +80,7 @@ class RecordsTest(unittest.TestCase):
         self.assertEqual(group["private_qq"], "")
 
     def test_category_filters_full_ring_before_page_limit_and_can_combine_search(self):
-        log = DecisionLog(None)
+        log = DecisionLog(None, ring_size=200)
         log.add({"gid": "qq:FriendMessage:998877", "raw": "关键旧私聊"})
         log.add({"gid": "1001", "raw": "关键呼叫",
                  "chat_data": {"current_message": {"explicit_call": True}}})

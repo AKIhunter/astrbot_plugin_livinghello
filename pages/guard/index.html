@@ -23,6 +23,14 @@
     --bar: #d4d4d8;
     --radius: 10px;
   }
+  .prompt-entry { padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
+  .prompt-entry h3 { margin: 0; font-size: 14px; }
+  .prompt-core > summary { cursor: pointer; padding: 10px 0; min-height: 44px; color: var(--muted); }
+  .prompt-core[open] > summary { color: var(--text); }
+  .prompt-readonly { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font: inherit; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  .prompt-entry textarea { width: 100%; min-height: 100px; box-sizing: border-box; resize: vertical; font: inherit; }
+  .prompt-switch { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-weight: 600; }
+  .prompt-switch input { width: 18px; height: 18px; accent-color: var(--accent); }
   html[data-theme="dark"] {
     --bg: #16161a;
     --panel: #1d1d22;
@@ -1022,8 +1030,15 @@
     <button type="button" class="sub-tab" data-sub="mention" aria-selected="false">称呼与理解</button>
     <button type="button" class="sub-tab" data-sub="policy" aria-selected="false">黑白灰名单</button>
     <button type="button" class="sub-tab" data-sub="outage" aria-selected="false">断线恢复</button>
+    <button type="button" class="sub-tab" data-sub="prompts" aria-selected="false">提示词注入</button>
   </nav>
 <div class="reply-card-grid">
+  <section data-sub="prompts" class="card" id="promptInjection" style="grid-column:1 / -1">
+    <h2>提示词注入</h2>
+    <p class="sub">每项默认开启，可独立开关、反复编辑并保存；关闭保留文本，只停止本项注入。通用说明与记忆写入同步用于 LE。</p>
+    <h3>预置提示词</h3><div id="promptCore"></div>
+    <h3>普通提示词</h3><div id="promptOrdinary"></div>
+  </section>
     <section data-sub="reply" class="card reply-card reply-compact-card" id="expression">
     <h2>回复方式</h2><p class="sub">引用和@可同时开启，首条正文带头。私聊默认直接回复，开启复用后沿用本卡片设置。</p>
     <div id="expressionFields"></div>
@@ -1067,7 +1082,7 @@
     </details>
     <details class="native-group"><summary>原生分段回复</summary>
     <div id="nativeSegmentFields" class="native-fields-grid"></div>
-    <p class="sub">模型自行分段控制段落；启用分段回复后，每段单独发送。第二句号和分段词分别开启后才细化断句，默认关闭。最多分几段为0时不限，超出会合并正文。</p>
+    <p class="sub">模型自行分段：完整回答后，每段尽量8–20字，不限制总字数；关闭时用连贯段落。启用分段回复：每段一个气泡；关闭时合成一条消息。第二句号和分段词开启后才细化断句。最多分几段为0时不限。</p>
     <div class="segment-example" aria-label="第二句号断句示例"><span>甲。乙。</span><span>丙！</span><span>丁。戊。</span></div>
     <details><summary>原生高级参数</summary><div id="nativeSegmentAdvanced" class="native-fields-grid"></div></details>
     </details>
@@ -2042,7 +2057,7 @@
     reply_mention_enabled: { desc: "在群聊回复开头 @ 当前发送者；私聊不适用。", ex: "开启：群消息显示 @某人；私聊仍直接发正文。" },
     expression_strip_emoji: { desc: "发送前删掉正文里的 Emoji 和颜文字，避免和人格设定冲突。", ex: "开启：「好的😊」变成「好的」；代码块内不改动。" },
     expression_punct_cleanup: {
-      desc: "在本页回复设置调整。开启后聊天标点换间隔，代码、网址、邮箱、路径、数字格式和表格保留；超过16384字或JSON识别预算时保留原文。关闭后标点原样发送。",
+      desc: "开启后在本卡片设置空格数：普通回复与模型工具发送的聊天标点换成间隔，独立于私聊引用复用开关。代码、网址、数字格式和表格保留；关闭后标点原样发送。",
       examples: [
         "开启：「才聊过两句，你上来就这个。」变成「才聊过两句 你上来就这个」",
         "关闭：标点原样发出，适合排错时对照模型原话。",
@@ -2062,7 +2077,7 @@
     understand_forward_summary_threshold: { desc: "展开内容超过这个字数就只做摘要，不再全文送进模型。", ex: "设 2000 字：展开后有 8000 字，先摘要再判断。" },
     understand_quote_depth: { desc: "引用链往上追几层；层数越多越看得懂「他在回谁」，也更费 token。", ex: "设 3 层：A 引用 B、B 引用 C，会读到 C；设 0 只看直接引用。" },
     understand_card_parse: { desc: "解析分享卡片和小程序链接的标题与简介，避免只看到一串 URL。", ex: "开启：B 站分享卡片能读到视频标题；关闭只剩链接。" },
-    understand_image_enabled: { desc: "是否让插件自己读图并生成摘要给判定和回复用；关闭则只知道有几张图。", ex: "开启：能说出「图上是一张装备截图」；关闭只知道「含 1 张图」。" },
+    understand_image_enabled: { desc: "开启后在消息理解选择视觉模型；QQ图片刷新一次，平台OCR提供文字证据，视觉模型补充画面。下载单张最多8秒，失败保留已有证据；关闭后交给宿主或配套插件。", ex: "文字截图：先保留OCR文字，画面没读到时明确说明，不根据文字猜图。" },
     understand_image_provider_id: { desc: "只覆盖回复前的图片理解，需支持图片输入。留空跟随「视觉模型（共用）」；共用也为空时跟随会话当前模型。", ex: "选 qwen3-vl-plus：图片理解固定用它；留空则与共用视觉模型一致。" },
     understand_voice_enabled: { desc: "是否把语音转成文字再判断；关闭则忽略语音内容。", ex: "开启：有人发语音时先转文字，再判断要不要接话。" },
     understand_voice_provider_id: { desc: "语音转写用的模型，需支持音频输入或原生 STT。留空则无法转写。", ex: "选原生 STT：用宿主语音识别转写。" },
@@ -2495,8 +2510,50 @@
     renderConglingCompat();
     renderPolicyFields();
     renderCoupling();
+    renderPromptInjection();
   }
 
+  function renderPromptInjection() {
+    const catalog = state.data.prompt_injection;
+    const core = el("promptCore"), ordinary = el("promptOrdinary");
+    core.replaceChildren(); ordinary.replaceChildren();
+    if (!catalog) { core.textContent = "提示词读取失败，请检查插件版本。"; return; }
+    const ordinaryStems = new Set((catalog.ordinary || []).map(item => item.stem));
+    for (let item of [...catalog.shared || [], ...catalog.core || [], ...catalog.ordinary || []]) {
+      const enabledKey = item.stem + "_enabled", textKey = item.stem + "_text";
+      const article = document.createElement("article"); article.className = "prompt-entry"; article.dataset.promptStem = item.stem;
+      const label = document.createElement("label"); label.className = "prompt-switch"; label.textContent = item.title;
+      const toggle = document.createElement("input"); toggle.type = "checkbox"; toggle.id = "field-" + enabledKey;
+      toggle.checked = (currentConfig(enabledKey) ?? item.enabled_default) === true; label.htmlFor = toggle.id; label.append(toggle);
+      const scope = document.createElement("p"); scope.className = "sub";
+      scope.textContent = "在本页编辑并保存；开启后" + item.scope + "提供本项，关闭保留文本并停止本项注入。";
+      const area = document.createElement("textarea"); area.id = "field-" + textKey; area.spellcheck = false;
+      area.value = currentConfig(textKey) ?? item.default; area.setAttribute("aria-label", item.title + " · 提示词");
+      const count = document.createElement("p"); count.className = "msg"; count.id = area.id + "-count"; area.setAttribute("aria-describedby", count.id);
+      const reset = document.createElement("button"); reset.type = "button"; reset.className = "btn"; reset.textContent = "恢复预置";
+      function paint() {
+        const size = Array.from(area.value).length;
+        const invalid = size > catalog.max_chars || (toggle.checked && !area.value.trim()) ||
+          Array.from(area.value).some(c => c.length === 1 && c.charCodeAt(0) >= 0xD800 && c.charCodeAt(0) <= 0xDFFF);
+        area.setCustomValidity(invalid ? "文本最多10000字，开启时不能为空，不能含无效字符" : "");
+        count.textContent = size + " / " + catalog.max_chars + " 字 · " + (area.value === item.default ? "预置" : "自定义") + (invalid ? " · 文本最多10000字，开启时不能为空" : "");
+        count.className = "msg" + (invalid ? " err" : "");
+      }
+      toggle.addEventListener("change", () => { setDirty(enabledKey, toggle.checked); paint(); });
+      area.addEventListener("input", () => { setDirty(textKey, area.value); paint(); });
+      reset.addEventListener("click", () => { area.value = item.default; setDirty(textKey, area.value); paint(); });
+      article._syncPrompt = () => {
+        const live = state.data.prompt_injection;
+        item = [...live?.shared || [], ...live?.core || [], ...live?.ordinary || []]
+          .find(value => value.stem === item.stem) || item;
+        if (!state.dirty.has(enabledKey)) toggle.checked = (currentConfig(enabledKey) ?? item.enabled_default) === true;
+        if (!state.dirty.has(textKey) && area !== document.activeElement) area.value = currentConfig(textKey) ?? item.default;
+        paint();
+      };
+      article.append(label, scope, area, count, reset);
+      (ordinaryStems.has(item.stem) ? ordinary : core).append(article); paint();
+    }
+  }
 
   const COUPLING_HELP = {
     overview: {title: "功能耦合", text: "在这里选择 LivingHello 要接入的插件能力。插件加载并就绪后才能启用；修改开关后点击保存。接入状态会随插件启停更新。"},
@@ -3874,7 +3931,7 @@
     }
   });
 
-  const SUB_PANELS = ["reply", "native", "mention", "policy", "outage"];
+  const SUB_PANELS = ["reply", "native", "mention", "policy", "outage", "prompts"];
   function switchSub(name) {
     if (!SUB_PANELS.includes(name)) name = "reply";
     document.querySelectorAll("#replySubTabs .sub-tab").forEach(button => {
@@ -4007,6 +4064,11 @@
       renderCoupling();
       state.data.outage_recovery = data.outage_recovery;
       state.data.message_policy = data.message_policy;
+      state.data.prompt_injection = data.prompt_injection;
+      for (const item of [...data.prompt_injection?.shared || [], ...data.prompt_injection?.core || [], ...data.prompt_injection?.ordinary || []]) {
+        for (const suffix of ["_enabled", "_text"]) state.data.config[item.stem + suffix] = data.config[item.stem + suffix];
+      }
+      document.querySelectorAll("#promptInjection [data-prompt-stem]").forEach(article => article._syncPrompt?.());
       renderPolicyStatus(data.message_policy);
       renderConglingCompat();
       // 轮询只更新只读状态，不重建开关控件，保留未保存草稿和当前焦点。
@@ -4026,6 +4088,11 @@
 
   async function save() {
     if (state.saving || state.policyChecking || nativeLoading) return;
+    const invalidPrompt = el("promptInjection").querySelector("textarea:invalid");
+    if (invalidPrompt) {
+      switchSub("prompts"); invalidPrompt.focus(); invalidPrompt.reportValidity();
+      el("saveMsg").textContent = "提示词文本最多10000字，开启时不能为空"; return;
+    }
     const payload = {};
     if (state.dirty.has("gate_mode")) payload.gate_mode = state.mode;
     state.dirty.forEach((key) => {
@@ -4033,7 +4100,8 @@
       if (key === "gate_mode") return;
       const value = state.draft[key];
       if (value === null || value === undefined) return;
-      if (value === "" && key !== "classifier_provider_id" && key !== "vision_provider_id"
+      if (value === "" && !key.endsWith("_prompt_text") && !el("field-" + key)?.closest("#promptInjection")
+          && key !== "classifier_provider_id" && key !== "vision_provider_id"
           && key !== "vision_shared_provider_id" && key !== "understand_image_provider_id") return;
       payload[key] = value;
     });

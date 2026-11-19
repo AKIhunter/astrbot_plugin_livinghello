@@ -561,9 +561,12 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         event.set_extra("_livinghello_image_owner", "livinghello")
         req = SimpleNamespace(extra_user_content_parts=[])
 
-        await guard._understanding().attach(event, req)
+        with patch("images.guard_image_evidence.prepare_image",
+                   AsyncMock(return_value=("fixture.png", "", ""))):
+            await guard._understanding().attach(event, req)
 
         prompt = req.extra_user_content_parts[0].text
+        provider.text_chat.assert_awaited_once()
         self.assertIn("未能读取，勿猜测内容", prompt)
         self.assertNotIn(url, prompt)
 
@@ -602,6 +605,11 @@ class HelpTest(unittest.TestCase):
     def test_all_new_fields_have_two_examples_and_native_schema(self):
         schema = _load_schema_subset()
         for key in EDITABLE:
+            from console.guard_webui import PROMPT_TEXT_KEYS, PROMPT_BOOL_KEYS
+            if key in PROMPT_TEXT_KEYS | PROMPT_BOOL_KEYS or key == "expression_short_prompt_enabled":
+                # 预置提示词及兼容字段由独立页面接管，旧表达帮助不重复展示。
+                self.assertIn(key, schema)
+                continue
             if key.startswith(("expression_", "understand_", "reply_typing_", "reply_recall_")):
                 self.assertIn(key, schema)
                 self.assertIn(key, HELP)

@@ -437,7 +437,7 @@ class ImageTraceTests(unittest.IsolatedAsyncioTestCase):
         event = ImageEvent()
         self.trace.begin(event)
         result = await self.service.generate(event, "画猫")
-        self.assertIn("次数已用完", result)
+        self.assertIn("今天的图片数量已经到上限", result)
         row = await self.trace.get(event.get_extra(ID_KEY))
         self.assertEqual(row["features"]["image_quota"]["reason"], "quota_exhausted")
         self.assertEqual(row["summary"]["image_api_calls"], 0)
