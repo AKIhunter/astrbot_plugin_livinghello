@@ -481,7 +481,7 @@ class ConsolePageContractTest(unittest.TestCase):
         self.assertIn('["enforce", "shadow"].forEach((mode)', page)
         mode_block = page[
             page.index("const MODE_HINT"):
-            page.index("const STATUS_LABEL")
+            page.index("};", page.index("const MODE_HINT")) + 2
         ]
         self.assertNotIn("legacy:", mode_block)
         self.assertNotIn("off:", mode_block)
@@ -513,16 +513,14 @@ class ConsolePageContractTest(unittest.TestCase):
         self.assertNotIn("inputData.opening_rules", copy_handler)
         self.assertNotIn("inputData.ending_requirements", copy_handler)
 
-    def test_reply_page_appends_outage_recovery_without_reordering_old_cards(self):
+    def test_reply_page_uses_one_navigation_and_keeps_all_function_panels(self):
         page = (Path(__file__).resolve().parents[1] / "pages/guard/index.html").read_text()
-        links = (
-            '<a href="#expression">回复方式</a><a href="#integration">功能耦合</a>'
-            '<a href="#nativeSegments">原生分段</a>'
-            '<a href="#rhythm">回复节奏</a><a href="#recall">撤回保护</a>'
-            '<a href="#mentions">称呼私聊</a><a href="#understanding">内容理解</a>'
-            '<a href="#outageRecovery">断线恢复</a>'
-        )
-        self.assertIn(links, page)
+        self.assertEqual(page.count('id="replySubTabs"'), 1)
+        for name in ("reply", "coupling", "native", "mention", "understanding",
+                     "policy", "outage", "prompts"):
+            self.assertIn(f'class="sub-tab" data-sub="{name}"', page)
+        reply_header = page[page.index('id="panel-reply"'):page.index('id="replySubTabs"')]
+        self.assertNotIn('class="section-links"', reply_header)
         old_cards = [
             'id="expression"', 'id="rhythm"', 'id="mentions"',
             'id="nativeSegments"', 'id="recall"', 'id="understanding"',

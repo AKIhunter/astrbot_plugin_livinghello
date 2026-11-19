@@ -133,7 +133,7 @@
   .row.inactive { opacity: .78; }
   .reply-card-grid {
     display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
-    gap: 16px; align-items: stretch;
+    gap: 16px; align-items: start;
   }
   .reply-card-grid > .card {
     min-width: 0; padding: 18px 20px; scroll-margin-top: 16px;
@@ -149,18 +149,21 @@
   .reply-card-grid > .card > .sub {
     max-width: 68ch; line-height: 1.55;
   }
-  .reply-compact-card > .sub { min-height: 3.1em; }
+  .reply-compact-card > .sub { min-height: 0; }
   .reply-card-grid .row {
     grid-template-columns: minmax(0, 1fr) minmax(140px, 1fr);
     padding: 10px 0;
   }
   .reply-card-grid .field-control:has(input[type="checkbox"]),
   .reply-card-grid .native-toggle { justify-content: flex-end; }
-  #expression, #rhythm, #recall { grid-column: span 4; }
+  #expression, #rhythm { grid-column: span 6; }
+  #recall { grid-column: 1 / -1; }
+  #recallFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 28px; }
   #nativeSegments { grid-column: 1 / -1; }
-  #mentions, #understanding { grid-column: span 6; }
+  #mentions, #understanding { grid-column: 1 / -1; }
+  #understandingFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 28px; }
   @media (max-width: 1180px) {
-    #expression, #rhythm, #mentions, #understanding { grid-column: span 6; }
+    #expression, #rhythm { grid-column: span 6; }
     #recall, #nativeSegments { grid-column: 1 / -1; }
   }
   .outage-recovery-card { margin-top: 16px; scroll-margin-top: 16px; }
@@ -725,6 +728,7 @@
   .chip { transition: color .15s ease, border-color .15s ease, background .15s ease; }
   .chip:hover { background: var(--accent-soft); }
   .field-help-trigger {
+    width: 30px; height: 30px;
     border-radius: 2px;
     font: 500 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
     transition: color .15s ease, border-color .15s ease, background .15s ease;
@@ -788,11 +792,12 @@
   .sub-tabs {
     display: flex; flex-wrap: wrap; gap: 2px;
     margin: -4px 0 16px; border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 10; background: var(--bg);
   }
   .sub-tab {
     border: 0; background: transparent; color: var(--muted);
     cursor: pointer; font: inherit; font-size: 12.5px;
-    padding: 8px 14px; position: relative;
+    padding: 8px 12px; min-height: 42px; position: relative;
     transition: color .15s ease, background .15s ease;
   }
   .sub-tab:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 8%, transparent); }
@@ -800,6 +805,39 @@
   .sub-tab[aria-selected="true"]::after {
     content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px;
     height: 2px; background: var(--accent);
+  }
+  /* 所有开关平铺；文字标签也可点击，窄屏下不压缩控件。 */
+  input[type="checkbox"] { flex: 0 0 20px !important; width: 20px !important; height: 20px !important; cursor: pointer; }
+  .switch-state { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; cursor: pointer; }
+  .switch-state span { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .switch-state:has(input:checked) span { color: var(--ok); }
+  .switch-state:has(input:disabled) { cursor: default; opacity: .65; }
+  .field-control > .switch-state { margin-left: auto; }
+  .field-help-facts { margin: 0 0 14px; }
+  .field-help-facts div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line-soft); }
+  .field-help-facts dt { color: var(--muted); }
+  .field-help-facts dd { margin: 0; overflow-wrap: anywhere; }
+  #saveMsg { display: block; margin-top: 3px; overflow-wrap: anywhere; }
+  .save-bar .save-bar-text { min-width: 0; }
+  .save-bar { box-shadow: 0 -3px 14px rgba(0,0,0,.06); }
+  #nativeSettingsFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 28px; }
+  #nativeSettingsFields > .native-group:first-child { grid-column: 1 / -1; }
+  #nativeSettingsFields > .native-group:not(:first-child) .native-fields-grid { grid-template-columns: minmax(0, 1fr); }
+  .prompt-switch { justify-content: initial; }
+  .prompt-switch .switch-state { margin-left: auto; }
+  .prompt-entry > .sub { margin-top: 4px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 880px) {
+    #expression, #rhythm { grid-column: 1 / -1; }
+    #recallFields, #understandingFields, #nativeSettingsFields { grid-template-columns: minmax(0, 1fr); }
+    .sub-tabs { gap: 0; }
+    .sub-tab { padding: 8px 10px; }
+    .reply-card-grid .row { grid-template-columns: minmax(0, 1fr) minmax(110px, 1fr); }
+    .reply-card-grid .row:has(.switch-state) { grid-template-columns: minmax(0, 1fr) auto; }
+  }
+  @media (max-width: 380px) {
+    .reply-card-grid .row { grid-template-columns: minmax(0, 1fr); }
+    .reply-card-grid .row:has(.switch-state) { grid-template-columns: minmax(0, 1fr) auto; }
   }
   .modal.modal-intro {
     width: min(680px, 100%); max-height: 84vh; border-radius: 4px;
@@ -884,7 +922,6 @@
   <button class="btn" id="introBtn" title="五步配好核心项">快速开始</button>
   <button class="btn" id="helpBtn" title="查看每个配置项的作用与示例">参数手册</button>
   <button class="btn primary" id="saveBtn">保存参数</button>
-  <span class="msg" id="saveMsg" role="status"></span>
 </div>
 <p class="sub">可独立使用，也可与配套插件联用，仅管理回复判定与发送方式。</p>
 
@@ -1004,7 +1041,7 @@
     <input id="probeBot" type="text" placeholder="（可选）机器人上一句说了什么" />
     <label for="probeContext" class="msg">上下文（可选，每行一条，从旧到新）</label>
     <textarea id="probeContext" placeholder="[甲]: 最近在聊这个门派&#10;[乙]: 新版本的技能调整了"></textarea>
-    <label class="field-title"><input id="probePrivate" type="checkbox" /> 按私聊场景判定</label>
+    <div class="field-title"><label class="switch-state"><input id="probePrivate" type="checkbox" /> 按私聊场景判定</label><button class="field-help-trigger" type="button" id="probePrivateHelp" aria-label="私聊试跑说明">?</button></div>
     <div class="actions" style="margin-top:0">
       <button class="btn primary" id="probeBtn">判定一下</button>
       <span class="msg" id="probeMsg" role="status"></span>
@@ -1022,12 +1059,13 @@
 <div id="panel-reply" role="tabpanel" aria-labelledby="tab-reply" hidden>
 <div class="config-heading">
   <div><h2>回复与私聊</h2><p>引用、@与清理按开关生效；分段与AstrBot共用配置。点击 ? 查看示例。</p></div>
-  <nav class="section-links" aria-label="回复分组"><a href="#expression">回复方式</a><a href="#integration">功能耦合</a><a href="#nativeSegments">原生分段</a><a href="#rhythm">回复节奏</a><a href="#recall">撤回保护</a><a href="#mentions">称呼私聊</a><a href="#understanding">内容理解</a><a href="#outageRecovery">断线恢复</a><a href="#messagePolicy">黑白灰名单</a></nav>
 </div>
   <nav class="sub-tabs" id="replySubTabs" aria-label="回复分组">
     <button type="button" class="sub-tab" data-sub="reply" aria-selected="true">回复行为</button>
+    <button type="button" class="sub-tab" data-sub="coupling" aria-selected="false">功能耦合</button>
     <button type="button" class="sub-tab" data-sub="native" aria-selected="false">原生配置</button>
-    <button type="button" class="sub-tab" data-sub="mention" aria-selected="false">称呼与理解</button>
+    <button type="button" class="sub-tab" data-sub="mention" aria-selected="false">称呼与私聊</button>
+    <button type="button" class="sub-tab" data-sub="understanding" aria-selected="false">内容理解</button>
     <button type="button" class="sub-tab" data-sub="policy" aria-selected="false">黑白灰名单</button>
     <button type="button" class="sub-tab" data-sub="outage" aria-selected="false">断线恢复</button>
     <button type="button" class="sub-tab" data-sub="prompts" aria-selected="false">提示词注入</button>
@@ -1049,10 +1087,10 @@
     <div id="replyFields"></div>
   </section>
   <section data-sub="reply" class="card reply-card reply-compact-card" id="recall">
-    <h2>撤回保护</h2><p class="sub">只在「碎片消息等待」窗口内保护，续发会重置整批截止时间。窗口内撤回任一原消息，本批不回复；等待为0或私聊不等待时没有保护窗口。</p>
+    <h2>撤回保护</h2><p class="sub">收到原消息撤回通知后停止未发送的回复；已发出的内容保留。群聊和私聊分别控制，需要平台支持撤回通知。</p>
     <div id="recallFields"></div>
   </section>
-  <section data-sub="reply" class="card reply-card" id="integration">
+  <section data-sub="coupling" class="card reply-card" id="integration">
     <h2>功能耦合 <button class="field-help-trigger" type="button" data-coupling-help="overview" aria-label="功能耦合说明">?</button></h2>
     <div class="coupling-row" data-coupling="livingemotion">
       <div class="coupling-info"><label for="field-coupling_livingemotion_enabled">LivingEmotion</label><button class="field-help-trigger" type="button" data-coupling-help="livingemotion" aria-label="LivingEmotion 说明">?</button><span class="coupling-status" role="status">检测中</span></div>
@@ -1077,23 +1115,23 @@
       <p class="sub">选择的配置会记住；模型与分段只保存到此配置。会话配置仍由AstrBot分配。</p>
     </div>
     <div id="nativeSettingsFields"></div>
-    <details class="native-group"><summary>AI生图（文生图 / 图生图） <button class="field-help-trigger" id="imageGroupHelp" aria-label="AI生图说明">?</button></summary>
+    <section class="native-group"><h3>AI生图（文生图 / 图生图） <button class="field-help-trigger" id="imageGroupHelp" aria-label="AI生图说明">?</button></h3>
       <p class="sub" id="imageSettingsStatus" role="status">读取中…</p><div id="imageSettingsFields" class="native-fields-grid"></div>
-    </details>
-    <details class="native-group"><summary>原生分段回复</summary>
+    </section>
+    <section class="native-group"><h3>原生分段回复</h3>
     <div id="nativeSegmentFields" class="native-fields-grid"></div>
     <p class="sub">模型自行分段：完整回答后，每段尽量8–20字，不限制总字数；关闭时用连贯段落。启用分段回复：每段一个气泡；关闭时合成一条消息。第二句号和分段词开启后才细化断句。最多分几段为0时不限。</p>
     <div class="segment-example" aria-label="第二句号断句示例"><span>甲。乙。</span><span>丙！</span><span>丁。戊。</span></div>
     <details><summary>原生高级参数</summary><div id="nativeSegmentAdvanced" class="native-fields-grid"></div></details>
-    </details>
-    <div class="actions"><p class="msg" id="nativeStatus" role="status">读取中…</p><button class="btn" id="nativeReload">重新读取</button></div>
+    </section>
+    <div class="actions"><p class="msg" id="nativeStatus" role="status">读取中…</p><button class="btn" id="nativeReload" hidden>重新读取</button></div>
   </section>
   <section data-sub="mention" class="card reply-card reply-compact-card" id="mentions">
     <h2>称呼、空 @ 与私聊</h2>
     <p class="sub">明确叫机器人时怎么回应，是否过滤私聊。</p>
     <div id="mentionFields"></div>
   </section>
-  <section data-sub="mention" class="card reply-card reply-compact-card" id="understanding">
+  <section data-sub="understanding" class="card reply-card reply-compact-card" id="understanding">
     <h2>内容理解</h2><p class="sub" id="understandingMode">当前独立处理转发、引用、卡片、图片、动图、视频和语音。</p>
     <div id="understandingFields"></div>
   </section>
@@ -1201,7 +1239,7 @@
 </div>
 
 <div class="save-bar" id="saveBar">
-  <span class="save-bar-text"><span id="saveBarText" aria-live="polite">有改动未保存</span><span id="saveWarning" class="save-warning" role="status" hidden></span></span>
+  <span class="save-bar-text"><span id="saveBarText" aria-live="polite">有改动未保存</span><span id="saveWarning" class="save-warning" role="status" hidden></span><span class="msg" id="saveMsg" role="status" aria-live="polite"></span></span>
   <button class="danger" id="saveBarDiscard">放弃更改</button>
   <button class="primary" id="saveBarSave">保存更新</button>
 </div>
@@ -1244,9 +1282,70 @@
   function nativeHelp(title, text) {
     el("fieldHelpTitle").textContent = title;
     el("fieldHelpModalBody").replaceChildren();
-    const paragraph = document.createElement("p"); paragraph.textContent = text;
+    const paragraph = document.createElement("p");
+    paragraph.className = "field-help-desc";
+    paragraph.style.whiteSpace = "pre-line";
+    paragraph.textContent = typeof text === "string" ? text : text.desc;
     el("fieldHelpModalBody").append(paragraph);
+    if (typeof text === "object") appendHelpFacts(el("fieldHelpModalBody"), text);
     toggleDialog("fieldHelpModal", true);
+  }
+  function appendHelpFacts(host, help) {
+    const facts = document.createElement("dl"); facts.className = "field-help-facts";
+    for (const [key, label] of [["on","开启后"],["off","关闭后"],["setup","去哪设置"]]) {
+      if (!help[key]) continue;
+      const row = document.createElement("div"), term = document.createElement("dt"), value = document.createElement("dd");
+      term.textContent = label; value.textContent = help[key]; row.append(term, value); facts.append(row);
+    }
+    host.append(facts);
+  }
+  function switchLabel(input) {
+    const label = document.createElement("label"); label.className = "switch-state"; label.htmlFor = input.id;
+    const status = document.createElement("span");
+    const sync = () => { status.textContent = input.checked ? "已开启" : "已关闭"; };
+    input.addEventListener("change", sync); label.append(input, status); sync();
+    return label;
+  }
+  const NATIVE_HELP = {
+    only_llm_result: {desc:"选择由模型按语义分段，或由发送阶段断句。",
+      on:"只对模型结果分段，并提供模型分段要求；工具主动发送的内容不强制套用。",
+      off:"模型按连贯段落回应，发送阶段按当前断句设置拆分。",
+      setup:"本页 → 原生分段回复；同时开启「启用分段回复」。"},
+    enable: {desc:"与所选 AstrBot 配置共用的多消息分段开关。",
+      on:"按语义或断句规则，把回复分成多个气泡。",
+      off:"正文合成一条消息，下面的细化断句设置不生效。",
+      setup:"本页 → 原生分段回复，设置模型自行分段、分段词及段数上限。"},
+    second_period: {desc:"细化断句时，中文句号遇到第二个才断开；其他分段词照常断句。",
+      on:"「甲。乙。丙。丁。」分成「甲。乙。」和「丙。丁。」。",
+      off:"不使用第二句号规则，按其余已启用的断句设置处理。",
+      setup:"本页 → 原生分段回复；需先开启分段回复。"},
+    split_words_enabled: {desc:"用指定文字或符号作为额外分段标记。",
+      on:"命中下方分段词时拆成新的气泡。",
+      off:"不按分段词拆分，列表内容仍保留。",
+      setup:"本页 → 原生分段回复 → 分段词，每行填写一个；需先开启分段回复。"},
+    split_words: {desc:"每行一个断句标记，保存到所选 AstrBot 配置。",setup:"本页 → 原生分段回复，开启「启用分段词」后使用。"},
+    max_segments: {desc:"最多发送几段；0 表示不限，范围 0–20。",setup:"本页 → 原生分段回复；先开启分段回复。"},
+    split_mode: {desc:"选择原生正则断句或分段词断句。管理模式下由上面的开关生成规则。",setup:"本页 → 原生分段回复 → 原生高级参数。"},
+    regex: {desc:"AstrBot 原生正则断句规则。管理模式由开关生成，不显示此编辑项。",setup:"本页 → 原生分段回复 → 原生高级参数；仅正则模式生效。"},
+    words_count_threshold: {desc:"超过此字数时不使用原生规则拆分；0 不设此限制。",setup:"本页 → 原生分段回复 → 原生高级参数。"},
+    content_cleanup_rule: {desc:"原生分段前使用的文本清理正则，留空不清理。",setup:"本页 → 原生分段回复 → 原生高级参数。"},
+    streaming_response: {on:"使用 AstrBot 流式输出；实际发送仍受宿主、平台和 LE 工作模式约束。",
+      off:"等主模型返回完整结果后处理回复。",setup:"本页 → 模型；分段方式在本页「原生分段回复」设置。"},
+    tts_enabled: {on:"满足会话允许、概率及模型条件时，将文字合成为语音。",
+      off:"不触发所选配置的原生语音合成。",setup:"本页 → 语音回复 → 默认 TTS 模型；触发概率、双输出和文件服务在 AstrBot 设置。"},
+    t2i: {on:"超过字数阈值时，把回复文字排版为图片。",
+      off:"不进行文本排版转图；AI 生图由独立开关控制。",
+      setup:"本页 → 文本排版转图，设置字数阈值、渲染方式、地址和模板。"},
+    enabled: {on:"向主模型提供 AI 生图工具，按需要生成或编辑图片。",
+      off:"不提供此工具；已保存的模型和画风设置保留。",
+      setup:"本页 → AI生图，选择实际支持生图的模型，并设置接口、额度、尺寸和超时。"},
+    follow_server_time: {on:"生图描述附加服务器日期、星期和时分。",
+      off:"不附加服务器时间。",setup:"本页 → AI生图；同时开启 AI 生图，服务器时区决定这里的时间。"},
+  };
+  function nativeFieldHelp(field, prefix) {
+    const setup = prefix === "image-" ? "本页 → AI生图；保存更新后生效。"
+      : "本页 → " + field.group + "；保存到上方选中的 AstrBot 配置。";
+    return {desc: field.help, setup, ...NATIVE_HELP[field.key]};
   }
   function helpButton(title, text) {
     const button = document.createElement("button");
@@ -1261,12 +1360,13 @@
     const row = document.createElement("div"); row.className = "row";
     const title = document.createElement("div"); title.className = "field-title";
     const label = document.createElement("label"); label.htmlFor = prefix + key; label.textContent = field.title;
-    title.append(label, helpButton(field.title, field.help));
+    title.append(label, helpButton(field.title, nativeFieldHelp(field, prefix)));
     const changed = next => {
       if (JSON.stringify(next) === JSON.stringify(data.values[key])) delete draft[key];
       else draft[key] = next;
       el("nativeProfile").disabled = el("nativeScope").disabled = nativeDirty() > 0;
       showSaveBar();
+      el("saveMsg").textContent = "";
       el("nativeStatus").textContent = "有配置更改，保存后生效";
     };
     if (kind === "providers") {
@@ -1341,11 +1441,15 @@
     } else if (kind === "bool") { input.type="checkbox"; input.checked=!!value; }
     else { input.type = ["int","float"].includes(kind) ? "number" : "text"; input.value = value ?? ""; }
     if (["int","float"].includes(kind)) input.step = kind === "float" ? "0.1" : "1";
+    if (prefix === "setting-" && kind === "int") {
+      input.min = key === "request_max_retries" ? "1" : "0";
+      input.max = key === "request_max_retries" ? "10" : "100000";
+    }
     if (key==="daily_limit") {input.min="0";input.max="1000";}
     if (key==="timeout_seconds") {input.min="10";input.max="500";}
     input.disabled = nativeSaving || nativeLoading || state.saving;
     const cell = document.createElement("div"); cell.className = kind === "bool" ? "native-toggle" : "field-control";
-    cell.append(input);
+    cell.append(kind === "bool" ? switchLabel(input) : input);
     if (kind === "size") {
       const box = document.createElement("div"); box.className = "field-control size-custom";
       const dims = (typeof value === "string" ? value.match(/^(\d{3,4})x(\d{3,4})$/) : null);
@@ -1387,8 +1491,6 @@
   function renderNativeSettings() {
     if (settingsData) {
       const host = el("nativeSettingsFields");
-      const opened = new Set([...host.querySelectorAll("details[open]")].map(d=>d.dataset.group));
-      const initial = !host.children.length;
       host.replaceChildren();
       // 人格只读展示：来自AstrBot配置，修改请到AstrBot面板的人格管理。
       el("nativePersonaStatus").textContent=settingsData.persona_error ? "人格配置读取失败，请检查AstrBot设置。" :
@@ -1396,11 +1498,8 @@
         "当前配置未设置人格（可在AstrBot面板设置）。";
       const groups = [...new Set(settingsData.fields.filter(f=>f.key!=="persona_id").map(f=>f.group))];
       groups.forEach(group => {
-        const details=document.createElement("details"); details.className="native-group"; details.dataset.group=group;
-        // 只有「模型」默认展开；其余分组（语音回复、文本排版转图等）默认收敛，
-        // 但重渲染时保留用户手动展开过的状态。
-        details.open = initial ? group === "模型" : opened.has(group);
-        const summary=document.createElement("summary"); summary.textContent=group;
+        const details=document.createElement("section"); details.className="native-group"; details.dataset.group=group;
+        const summary=document.createElement("h3"); summary.textContent=group;
         summary.append(" ",helpButton(group, group === "语音回复"
           ? "开关与默认TTS模型同步所选AstrBot原生配置。实际语音还要求会话允许且触发概率通过；概率、双输出和文件服务仍在AstrBot设置。"
           : "这些参数同步修改所选AstrBot原生配置，标题右侧问号可查看具体用途。"));
@@ -1567,8 +1666,10 @@
       const cell = document.createElement("div");
       cell.className = kind === "bool" ? "native-toggle switch" : "field-control";
       if (kind === "words" || key === "regex") cell.classList.add("native-wide");
-      cell.append(input);
-      row.append(label, cell);
+      cell.append(kind === "bool" ? switchLabel(input) : input);
+      const titleCell = document.createElement("div"); titleCell.className = "field-title";
+      titleCell.append(label, helpButton(title, NATIVE_HELP[key] || {desc:"AstrBot 原生分段参数。",setup:"本页 → 原生分段回复。"}));
+      row.append(titleCell, cell);
       el(advanced ? "nativeSegmentAdvanced" : "nativeSegmentFields").append(row);
     });
     const profile = el("nativeProfile");
@@ -1631,6 +1732,38 @@
       renderNative();
     }
   }
+  async function refreshNative() {
+    if (!nativeData || nativeLoading || nativeSaving || state.saving ||
+        document.querySelector(".modal-mask.show")) return;
+    try {
+      const configId = nativeData.config_id;
+      const versions = () => JSON.stringify([nativeData?.revision,settingsData?.revision,imageData?.revision]);
+      const startedVersions = versions();
+      const [segments, settings, images] = await Promise.all([
+        apiGet("console/native-segments", {config_id:configId}),
+        apiGet("console/native-settings", {config_id:configId}),
+        apiGet("console/image-settings"),
+      ]);
+      if (nativeLoading || nativeSaving || state.saving || nativeData.config_id !== configId || versions() !== startedVersions ||
+          document.querySelector(".modal-mask.show")) return;
+      const changed = segments.revision !== nativeData.revision || settings.revision !== settingsData?.revision ||
+        images.revision !== imageData?.revision || JSON.stringify(images.usage) !== JSON.stringify(imageData?.usage);
+      // 自动读回不替换编辑中的 DOM，也不推进草稿的保存版本；外部冲突仍由后端拦截。
+      if (nativeDirty() || el("nativeSegments").contains(document.activeElement)) {
+        if (changed) el("nativeStatus").textContent = "检测到原生配置更新，保留你的编辑；保存时会核验版本。";
+        return;
+      }
+      if (changed) {
+        nativeData=segments; settingsData=settings; imageData=images;
+        renderNative();
+      }
+      el("nativeStatus").textContent = "与 AstrBot 配置同步 · 每 15 秒自动更新";
+      el("nativeStatus").className = "msg";
+    } catch(error) {
+      el("nativeStatus").textContent = "自动读取失败：" + error.message + "；稍后自动重试";
+      el("nativeStatus").className = "msg err";
+    }
+  }
   async function saveNative() {
     if (!nativeData || !Object.keys(nativeDraft).length || nativeSaving) return;
     nativeSaving = true;
@@ -1682,6 +1815,8 @@
     else if (hash.startsWith("page-")) selectPage(hash.slice(5));
     else if (el(hash)?.closest('[role="tabpanel"]')) {
       selectPage(el(hash).closest('[role="tabpanel"]').id.replace("panel-", ""));
+      const sub = el(hash).closest("section[data-sub]")?.dataset.sub;
+      if (sub) switchSub(sub);
       el(hash).scrollIntoView();
     }
   }
@@ -2042,7 +2177,7 @@
     apply_to_private: { desc: "开启后私聊也受参与判断约束；关闭仅跳过参与判断，碎片等待、表达与撤回由独立开关控制。", ex: "关闭：私聊不被本插件的阈值拦住；开启：私聊理解不清时也可能静默。" },
     classifier_outage_recovery_enabled: { desc: "默认关闭。开启后私聊通知管理员；群聊异常附群号和请求编号。回复异常始终留在最近判断，通知按配置间隔节流。", ex: "主备模型都失败或最终发送失败会私聊提醒；后备成功发出正式回复则不提醒。" },
     reply_health_timeout_seconds: { desc: "默认900秒。流程正常结束会立即核对；挂起时到此上限记录未知并提醒。", ex: "不会取消主模型，也不会重试未确认的回复或提醒。" },
-    gate_upstream_fanout_enabled: { desc: "文字判定同时向路由里多个上游发请求，谁先给出合格结果用谁；关闭则只按优先级挨个尝试。上游多且都健康时更快，但单次判定会更费额度。", ex: "开启：路由有 4 个上游，判定同时发出，最快返回的那个生效，其余丢弃。" },
+    gate_upstream_fanout_enabled: { desc: "未锁定具体上游且路由有多个可用上游时，按优先级逐个短超时轮转；不是同时并发。锁定上游或普通模型不受影响。", ex: "开启：第一个上游超过单上游时限后，取消本次等待并尝试下一个；获得合格结果后停止。" },
     gate_upstream_try_timeout_seconds: { desc: "轮转开启时，给每个上游各自的等待上限；超过就换下一个，不等整条判定时限。", ex: "设 2 秒：某个上游 2 秒没动静立刻换下一个，不会一直挂到总时限。" },
     reply_early_ack_seconds: { desc: "判定放行后，主模型迟迟没出结果时先发一句简短垫场；只有这一轮真的卡住才发，同群受下面的冷却约束。设 0 完全关闭。", ex: "设 20 秒：模型 20 秒还没出正文，先发一句「稍等我看下」；正常 5 秒内出结果就完全不发。" },
     reply_early_ack_cooldown_seconds: { desc: "同一群发过垫场句后，这段时间内不再发第二句；单条消息本身也只会垫一次。", ex: "设 600 秒：某群刚垫过一句，10 分钟内再慢也不会重复，避免刷屏。" },
@@ -2092,6 +2227,47 @@
     outage_watch_tts: { desc: "监控语音回复合成；它依赖主模型，属于间接监控。", ex: "开启：语音回复合成失败时提醒。" },
     outage_watch_image_gen: { desc: "监控 AI 生图链路。", ex: "开启：生图接口失败或额度用尽时提醒。" },
   };
+  // 问号中的开启/关闭/设置位置单独明确，作用与示例仍复用后端参数手册。
+  const SWITCH_HELP = {
+    gate_upstream_fanout_enabled: {on:"自动路由按优先级逐个短超时尝试上游。",off:"交给所选模型或路由的原生请求流程。",setup:"判定参数 → 参与判断 → 判定小模型、单上游尝试超时；锁定上游时不轮转。"},
+    gate_main_fallback_enabled: {on:"判定看图调用异常时，尝试支持图片的会话主模型；正常静默不兜底。",off:"不调用主模型补做看图判定，视觉调用失败时保持静默。",setup:"判定参数 → 图片与主模型兜底，设置视觉模型和兜底超时；主模型在原生配置页选择。"},
+    fragment_wait_private: {on:"私聊同一用户的碎片合并后处理，续发重置静默等待。",off:"私聊不等待碎片；群聊按自己的等待设置处理。",setup:"回复行为 → 回复节奏，设置碎片消息等待与批次总等待上限。"},
+    expression_takeover_enabled: {on:"使用 LH 的引用、@、Emoji 清理和模拟打字设置管理回复方式。",off:"回复方式交给宿主或配套插件；撤回与碎片等待仍由独立开关控制。",setup:"回复行为 → 回复方式与回复节奏；多气泡在原生配置 → 原生分段回复设置。"},
+    expression_private_reuse: {on:"私聊沿用回复方式中的引用与 Emoji 清理设置；@ 仍仅用于群聊。",off:"私聊不自动引用当前消息，并保留正文 Emoji。",setup:"回复行为 → 回复方式，先开启回复方式管理，再选择引用与清理开关。"},
+    reply_quote_enabled: {on:"首条可承载头的正文引用当前有效原消息；没有有效消息 ID 不添加。",off:"不添加自动引用，工具明确引用的其他消息仍保留。",setup:"回复行为 → 回复方式；先开启回复方式管理，私聊还需开启私聊复用。"},
+    reply_mention_enabled: {on:"群聊首条正文使用平台原生 @ 提醒当前发送者，可与引用同时使用。",off:"不添加自动 @；正文原有对其他人的 @ 保留。",setup:"回复行为 → 回复方式；需先开启回复方式管理，私聊不适用。"},
+    expression_strip_emoji: {on:"清理正文 Emoji 和颜文字，不删除原生图片、表情包。",off:"保留模型正文的 Emoji 和颜文字。",setup:"回复行为 → 回复方式；需开启回复方式管理，私聊还需开启复用。"},
+    expression_punct_cleanup: {on:"将聊天标点替换为空格间隔，代码、网址、数字和表格保留。",off:"正文标点原样发送。",setup:"回复行为 → 回复方式 → 标点空格数；普通回复与工具发送均适用。"},
+    integrate_livingemotion_catchup: {on:"为 LE 爬楼补答保留独立回复时限，避免过期历史消息被普通时限丢弃。",off:"不预留这段配合时限；LE 自身的爬楼开关和运行仍独立。",setup:"功能耦合 → 接入 LivingEmotion；爬楼开关、窗口和补答参数在 LE 配置页设置。"},
+    understand_expand_forward: {on:"独立模式展开合并转发，保留原作者，并遵守条数与深度预算。",off:"LH 不读取转发内部聊天。",setup:"内容理解 → 转发条数、层数与摘录阈值；会话接入配套插件时由其原生感知处理。"},
+    understand_card_parse: {on:"独立模式本地解析卡片标题、来源与地址，不访问链接正文。",off:"LH 只保留收到卡片的提示。",setup:"内容理解；接入配套插件的会话遵循其原生感知配置。"},
+    understand_image_enabled: {on:"运行 LH 图片理解，OCR 提供文字证据，视觉模型补充画面。",off:"不运行此理解链路，图片交给宿主或配套插件；判定看图仍独立。",setup:"内容理解 → 图片理解模型；共用视觉模型在判定参数页设置。"},
+    understand_gif_enabled: {on:"将 GIF 第一帧转成静图交给模型，无法理解完整动作过程。",off:"GIF 原样透传，是否接受取决于上游模型。",setup:"内容理解 → 图片理解与图片模型；本项只决定动图的处理方式。"},
+    understand_video_enabled: {on:"短视频抽帧后交给视觉模型理解，每次会消耗视觉模型额度。",off:"视频只记为收到视频，不描述画面。",setup:"内容理解 → 视频时长、帧数和视频模型；服务器需安装 ffmpeg 与 ffprobe。"},
+    understand_voice_enabled: {on:"独立模式先真实转写语音，缺模型或失败时明确提示。",off:"LH 不自动转写语音。",setup:"内容理解 → 语音理解模型，选择原生 STT 或支持音频的模型。"},
+    reply_recall_group: {on:"群聊收到对应原消息撤回通知后，停止等待、生成及未发气泡。",off:"不因群聊原消息撤回取消本轮回复，仍受其他有效期规则约束。",setup:"回复行为 → 撤回保护；平台必须能上报撤回通知，无需额外等待参数。"},
+    reply_recall_private: {on:"私聊收到对应撤回通知后，取消尚未发送的回复。",off:"私聊撤回不触发取消；群聊遵循群聊开关。",setup:"回复行为 → 撤回保护；平台必须支持私聊撤回通知。"},
+    apply_to_private: {on:"私聊也做参与判断，未达条件时可能静默。",off:"私聊跳过参与判断；碎片、表达、名单与撤回仍分别控制。",setup:"称呼与私聊 → 过滤私聊；判定模型和阈值在判定参数页设置。"},
+    reply_fallback_enabled: {on:"已放行的主模型失败时按兜底规则重试；耗尽后提醒并延后再尝试一次。",off:"不启用 LH 主回复兜底重试，宿主自己的回退设置仍有效。",setup:"断线恢复 → 提醒管理员 QQ；宿主回退模型和尝试次数在原生配置 → 模型设置。"},
+    classifier_outage_recovery_enabled: {on:"启用文字判定故障状态、探测与恢复补读，并按通知间隔提醒管理员。",off:"不启用此恢复流程；判定失败遵循现有静默规则，兜底回复独立。",setup:"断线恢复 → 提醒管理员 QQ、提醒间隔及各模型提醒开关；判定冷却参数在判定参数页。"},
+    coupling_livingemotion_enabled: {on:"在接口就绪后接入情绪、好感度及爬楼背景，遵循 LE 自身模式。",off:"LH 不接入这些能力，LE 自身仍按它的配置运行。",setup:"功能耦合 → LivingEmotion；情绪、作息、主动行为与爬楼参数到 LE 配置页设置。"},
+    coupling_livingmemory_enabled: {on:"按当前会话授权范围获取记忆，并允许按需检索与回忆。",off:"LH 不接入 LivingMemory 能力，插件本身仍独立运行。",setup:"功能耦合 → LivingMemory；存储、授权范围和检索参数到 LivingMemory 配置页设置。"},
+  };
+  for (const [key, model] of Object.entries({classifier:"判断",vision:"判定看图",understand_image:"图片理解",
+    understand_voice:"语音转写",main_model:"主对话",tts:"语音回复（间接感知）",image_gen:"AI 生图"})) {
+    SWITCH_HELP["outage_watch_"+key] = {
+      on:"此模型调用失败或超时时，按共享通知间隔私聊提醒管理员。",
+      off:"不发送此类模型故障提醒，故障记录仍保留；最终回复未确认发出时仍按全局健康检查处理。",
+      setup:"断线恢复 → 开启断线恢复，填写提醒管理员 QQ 和提醒间隔；本项监控"+model+"链路。",
+    };
+  }
+  function fieldHelp(key) {
+    const source = key === "gate_mode" ? MODE_CONFIG_HELP : FIELD_HELP[key] ||
+      {desc: state.data?.schema?.[key]?.hint || "控制本项配置，保存后影响新的请求。"};
+    const group = FIELD_GROUPS.find(group=>group.fields.some(item=>item.key===key));
+    return {...source, setup:group ? "本页 → "+group.title+"；保存更新后生效。" : "判定参数 → 闸门模式；保存后生效。",
+      ...SWITCH_HELP[key]};
+  }
   const FIELD_EXAMPLE_2 = {
     participation_confidence_threshold: "设 80：机器人只在明确被邀请、上下文完整且参与价值很高时主动接话。",
     classifier_provider_id: "留空：不同会话会跟随各自主模型，成本和评分尺度可能随会话变化。",
@@ -2159,6 +2335,7 @@
   }
   function helpExamples(key, help) {
     if (Array.isArray(help.examples)) return help.examples.slice(0, 2);
+    if (!help.ex) return [];
     return [help.ex, FIELD_EXAMPLE_2[key] || defaultExample(key)];
   }
   const FIELD_GROUPS = [
@@ -2170,7 +2347,7 @@
     { id: "mentionFields", title: "称呼、空 @ 与私聊", fields: MENTION_FIELDS },
     { id: "expressionFields", title: "回复方式", fields: EXPRESSION_FIELDS },
     { id: "integrationFields", title: "功能耦合", fields: INTEGRATION_FIELDS },
-    { id: "understandingFields", title: "看得懂什么", fields: UNDERSTANDING_FIELDS },
+    { id: "understandingFields", title: "内容理解", fields: UNDERSTANDING_FIELDS },
     { id: "recallFields", title: "撤回保护", fields: RECALL_FIELDS },
     { id: "outageRecoveryFields", title: "断线恢复", fields: OUTAGE_FIELDS },
     { id: "outageWatchJudge", title: "判定链路", fields: OUTAGE_WATCH_JUDGE },
@@ -2187,6 +2364,7 @@
   }
 
   function setDirty(key, value) {
+    el("saveMsg").textContent = "";
     state.draft[key] = value;
     if (JSON.stringify(value) === JSON.stringify(state.data.config[key])) {
       state.dirty.delete(key); delete state.draft[key];
@@ -2211,7 +2389,7 @@
   }
 
   function hideSaveBar() {
-    el("saveBar").classList.remove("show");
+    el("saveBar").classList.toggle("show", !!el("saveMsg").textContent);
   }
 
   function renderModes() {
@@ -2275,8 +2453,9 @@
     helpButton.type = "button";
     helpButton.className = "field-help-trigger";
     helpButton.textContent = "?";
-    helpButton.title = "查看详情和示例";
+    helpButton.title = "查看用途、开关效果和设置位置";
     helpButton.setAttribute("aria-label", "查看" + field.label + "详情和示例");
+    helpButton.dataset.helpKey = field.key;
     helpButton.addEventListener("click", () => openFieldHelp(field.key, field.label));
     title.append(label, helpButton);
     const cell = document.createElement("div");
@@ -2433,18 +2612,15 @@
       tip.id = "provider-note-" + field.key;
       row.appendChild(tip);
     } else if (field.type === "bool") {
-      const wrap = document.createElement("div");
-      wrap.className = "switch";
+      const wrap = document.createElement("label");
+      wrap.className = "switch-state";
+      wrap.htmlFor = "field-" + field.key;
       const input = document.createElement("input");
       input.type = "checkbox";
       input.checked = !!value;
       const tip = document.createElement("span");
       tip.className = "msg";
-      const boolHint = () => field.key === "gate_main_fallback_enabled"
-        ? (input.checked ? "视觉异常时兜底一次" : "视觉异常则静默")
-        : field.key === "apply_to_private" ? (input.checked ? "私聊也走判定" : "私聊直接放行")
-        : field.key === "expression_takeover_enabled" ? (input.checked ? "主回复按本页方式发送" : "使用配套插件或宿主的原生方式")
-        : (input.checked ? "已开启" : "已关闭");
+      const boolHint = () => input.checked ? "已开启" : "已关闭";
       tip.textContent = boolHint();
       input.addEventListener("change", () => {
         setDirty(field.key, input.checked);
@@ -2486,11 +2662,11 @@
       host.innerHTML = "";
       const valueOf = (field) => Object.prototype.hasOwnProperty.call(state.draft, field.key)
         ? state.draft[field.key] : cfg[field.key];
-      // 基准项直接铺开；高级项（超时、故障冷却、轮转等）默认收起，避免一屏全是数字。
-      fields.filter((field) => !field.advanced).forEach((field) => {
+      // 开关直接铺开；只收起超时、故障冷却等高级数值。
+      fields.filter((field) => !field.advanced || field.type === "bool").forEach((field) => {
         buildField(field, valueOf(field), host);
       });
-      const advanced = fields.filter((field) => field.advanced);
+      const advanced = fields.filter((field) => field.advanced && field.type !== "bool");
       if (!advanced.length) return;
       const details = document.createElement("details");
       details.className = "advanced-block";
@@ -2522,9 +2698,16 @@
     for (let item of [...catalog.shared || [], ...catalog.core || [], ...catalog.ordinary || []]) {
       const enabledKey = item.stem + "_enabled", textKey = item.stem + "_text";
       const article = document.createElement("article"); article.className = "prompt-entry"; article.dataset.promptStem = item.stem;
-      const label = document.createElement("label"); label.className = "prompt-switch"; label.textContent = item.title;
+      const label = document.createElement("div"); label.className = "prompt-switch";
+      const title = document.createElement("label"); title.textContent=item.title;
       const toggle = document.createElement("input"); toggle.type = "checkbox"; toggle.id = "field-" + enabledKey;
-      toggle.checked = (currentConfig(enabledKey) ?? item.enabled_default) === true; label.htmlFor = toggle.id; label.append(toggle);
+      toggle.checked = (currentConfig(enabledKey) ?? item.enabled_default) === true; title.htmlFor = toggle.id;
+      label.append(title,helpButton(item.title,{
+        desc:"控制「"+item.title+"」是否提供给本轮请求。",
+        on:"在「"+item.scope+"」的适用条件下提供本项提示词；仍需对应功能可用。",
+        off:"只停止本项注入，保留编辑文本；其他提示词与功能开关仍独立。",
+        setup:"提示词注入 → "+item.title+"，编辑下方文本并保存；最多 10000 字，开启时不能为空。",
+      }),switchLabel(toggle));
       const scope = document.createElement("p"); scope.className = "sub";
       scope.textContent = "在本页编辑并保存；开启后" + item.scope + "提供本项，关闭保留文本并停止本项注入。";
       const area = document.createElement("textarea"); area.id = "field-" + textKey; area.spellcheck = false;
@@ -2547,6 +2730,7 @@
         item = [...live?.shared || [], ...live?.core || [], ...live?.ordinary || []]
           .find(value => value.stem === item.stem) || item;
         if (!state.dirty.has(enabledKey)) toggle.checked = (currentConfig(enabledKey) ?? item.enabled_default) === true;
+        toggle.nextElementSibling.textContent = toggle.checked ? "已开启" : "已关闭";
         if (!state.dirty.has(textKey) && area !== document.activeElement) area.value = currentConfig(textKey) ?? item.default;
         paint();
       };
@@ -2572,8 +2756,8 @@
         ? (state.dirty.has(key) ? "开关修改待保存。" : currentConfig(key) === true ? "已接入并启用。" : "已接入，开关已关闭。")
         : (item.reason || "请安装并启用插件") + (currentConfig(key) === true ? "；已保存的开启设置当前不生效。" : "。"));
     }
-    nativeHelp(help.title, text);
-    el("fieldHelpModalBody").lastElementChild.style.whiteSpace = "pre-line";
+    nativeHelp(help.title, {desc:text, ...(SWITCH_HELP["coupling_"+topic+"_enabled"] ||
+      {setup:topic==="catchup" ? "功能耦合 → 启用爬楼配合；LE 配置页设置爬楼窗口与补答。" : "功能耦合页选择接入能力，保存后生效。"})});
   }
 
   function renderCoupling() {
@@ -3673,8 +3857,26 @@
     },
     ...FIELD_GROUPS.map(group => ({
       title: group.title,
-      items: group.fields.map(field => ({ name: field.label, key: field.key, ...FIELD_HELP[field.key] })),
+      items: group.fields.map(field => ({ name: field.label, key: field.key, ...fieldHelp(field.key) })),
     })),
+    {
+      title:"原生分段回复",
+      items:NATIVE_FIELDS.map(([key,name])=>({key,name,...NATIVE_HELP[key]})),
+    },
+    {
+      title:"原生模型、语音与排版",
+      items:(settingsData?.fields || []).filter(field=>field.key!=="persona_id")
+        .map(field=>({key:"setting-"+field.key,name:field.title,...nativeFieldHelp(field,"setting-")})),
+    },
+    {
+      title:"提示词开关",
+      items:[...state.data.prompt_injection?.shared || [],...state.data.prompt_injection?.core || [],
+        ...state.data.prompt_injection?.ordinary || []].map(item=>({
+          key:item.stem+"_enabled",name:item.title,desc:"控制本项在「"+item.scope+"」提供给本轮请求。",
+          on:"适用条件满足时提供本项提示词。",off:"停止本项注入，保留文本。",
+          setup:"提示词注入 → "+item.title+"，编辑并保存。",
+        })),
+    },
     {
       title: "独立 AI 生图",
       items: [
@@ -3734,7 +3936,7 @@
     let count = 0;
     HELP_MANUAL().forEach((group) => {
       const items = group.items.filter(item => !query ||
-        [group.title, item.name, item.key, item.desc, ...helpExamples(item.key, item)]
+        [group.title, item.name, item.key, item.desc, item.on, item.off, item.setup, ...helpExamples(item.key, item)]
           .join(" ").toLowerCase().includes(query));
       if (!items.length) return;
       const g = document.createElement("div");
@@ -3758,6 +3960,8 @@
         desc.textContent = item.desc;
         it.appendChild(name);
         it.appendChild(desc);
+        appendHelpFacts(it, group.title==="独立 AI 生图"
+          ? {...item,...NATIVE_HELP[item.key],setup:"原生配置 → AI生图；保存更新后生效。"} : item);
         helpExamples(item.key, item).forEach((text, index) => {
           const ex = document.createElement("div");
           ex.className = "help-ex";
@@ -3789,8 +3993,7 @@
   }
 
   function openFieldHelp(key, label) {
-    const help = key === "gate_mode" ? MODE_CONFIG_HELP : FIELD_HELP[key];
-    if (!help) return;
+    const help = fieldHelp(key);
     el("fieldHelpTitle").textContent = label || "配置详情";
     const body = el("fieldHelpModalBody");
     body.innerHTML = "";
@@ -3810,7 +4013,9 @@
       item.append(heading, document.createTextNode(text));
       examples.appendChild(item);
     });
-    body.append(code, desc, examples);
+    body.append(code, desc);
+    appendHelpFacts(body, help);
+    body.append(examples);
     toggleDialog("fieldHelpModal", true);
   }
 
@@ -3854,7 +4059,7 @@
       p: "装了 LivingEmotion 的话，它会在睡眠期把消息存下来，醒来后爬楼补答。这里决定本插件是否配合——比如把爬楼耗时从回复有效期里预留出去。",
       li: ["群聊补答会先过本插件的名单：黑名单不读不发，灰名单只读不发。",
            "关掉「启用爬楼配合」只是不再预留时限，爬楼本身仍由 LivingEmotion 自己跑。"],
-      t: { page: "reply", sub: "reply", anchor: "integration", label: "去看功能耦合" },
+      t: { page: "reply", sub: "coupling", anchor: "integration", label: "去看功能耦合" },
     },
   ];
   let introStep = 0;
@@ -3931,7 +4136,7 @@
     }
   });
 
-  const SUB_PANELS = ["reply", "native", "mention", "policy", "outage", "prompts"];
+  const SUB_PANELS = ["reply", "coupling", "native", "mention", "understanding", "policy", "outage", "prompts"];
   function switchSub(name) {
     if (!SUB_PANELS.includes(name)) name = "reply";
     document.querySelectorAll("#replySubTabs .sub-tab").forEach(button => {
@@ -3979,6 +4184,7 @@
 
   function discardChanges() {
     if (state.saving) return;
+    el("saveMsg").textContent = "";
     state.draft = {};
     state.dirty.clear();
     nativeDraft = {};
@@ -4048,6 +4254,26 @@
         applyState(data);
         return;
       }
+      // 已保存的外部更改自动显示；草稿与当前输入不被轮询覆盖。
+      for (const [key, value] of Object.entries(data.config || {})) {
+        if (state.dirty.has(key)) continue;
+        const control = el("field-"+key);
+        if (control === document.activeElement) continue;
+        state.data.config[key]=value;
+        if (!control || control.closest("#promptInjection") || control.closest("#messagePolicy")) continue;
+        if (control.type === "checkbox") {
+          control.checked=value === true;
+          const text=control.closest(".switch-state")?.querySelector("span");
+          if (text) text.textContent=control.checked ? "已开启" : "已关闭";
+        } else if (control.tagName === "SELECT") {
+          if ([...control.options].some(option=>option.value===String(value))) control.value=value;
+        } else {
+          control.value=Array.isArray(value) ? value.join("，") : value ?? "";
+          if (control.type === "range") control.closest(".field-control").querySelector(".val").textContent=control.value;
+        }
+      }
+      if (!state.dirty.has("gate_mode") && state.mode!==data.mode) {state.mode=data.mode;themeModeBadge(state.mode);renderModes();}
+      syncFieldAvailability();
       // 宿主 provider 晚于首屏注册时选择器会是空的；补到候选就重建一次下拉。
       if ((state.data.providers || []).length === 0 && (data.providers || []).length
           && !state.dirty.size) {
@@ -4170,6 +4396,8 @@
     showSaveBar();
     el("saveMsg").textContent = [...saved, ...warnings, ...errors].join(" · ");
     el("saveMsg").className = errors.length ? "msg err" : "msg ok";
+    el("saveBar").classList.add("show");
+    if (!state.dirty.size && !nativeDirty()) el("saveBarText").textContent = "配置已保存";
     if (errors.length) el("saveBarText").textContent = "仍有改动未保存 · " + errors.join(" · ");
     // 先显示确认结果；读取失败只显示在各自区域，不改变保存结果。
     if (saved.length) {
@@ -4298,6 +4526,11 @@
   });
   el("resetBtn").addEventListener("click", reset);
   el("helpBtn").addEventListener("click", openHelp);
+  el("probePrivateHelp").addEventListener("click",()=>nativeHelp("按私聊场景试跑",{
+    desc:"只选择这次文字试跑的会话类型，不修改线上私聊开关。",
+    on:"本次按私聊场景判断。",off:"本次按群聊场景判断。",
+    setup:"流程与试跑 → 待判断消息 → 判定一下；会产生模型 API 用量。",
+  }));
   el("helpSearch").addEventListener("input", renderHelp);
   el("saveBarSave").addEventListener("click", save);
   el("saveBarDiscard").addEventListener("click", discardChanges);
@@ -4367,7 +4600,7 @@
     // 上一轮没返回就不再发新的：2 核机器上 state 可能被拖到十几秒，
     // 定时叠加会把请求通道塞满，连「查看详情」都排在后面超时。
     const poll = async () => {
-      try { await load(false); } catch (_) { /* load 内部已提示 */ }
+      try { await Promise.all([load(false), refreshNative()]); } catch (_) { /* 各读取函数已提示 */ }
       finally { setTimeout(poll, 15000); }
     };
     setTimeout(poll, 15000);

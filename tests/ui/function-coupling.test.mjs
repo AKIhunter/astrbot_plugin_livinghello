@@ -32,6 +32,7 @@ async function run(name, task, connected=true, width=1280) {
     await page.goto(url+(connected?"?coupling=connected":""),{waitUntil:"domcontentloaded"});
     await page.waitForFunction(()=>document.getElementById("ver").textContent.includes("fixture"));
     await page.locator('.page-tabs [data-page="reply"]').click();
+    await page.locator('#replySubTabs [data-sub="coupling"]').click();
     await page.locator("#integration").scrollIntoViewIfNeeded();
     await task(page);
     report.cases.push({name,passed:true});

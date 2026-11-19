@@ -26,7 +26,7 @@ const expectedState = {
   recovering: ["恢复中", "依赖已恢复，正在补读受影响会话"],
   needs_attention: ["需处理", "认证、配置或 Provider 需要管理员处理"],
 };
-const expectedLinks = ["回复行为", "原生配置", "称呼与理解", "黑白灰名单", "断线恢复"];
+const expectedLinks = ["回复行为", "功能耦合", "原生配置", "称呼与私聊", "内容理解", "黑白灰名单", "断线恢复", "提示词注入"];
 const report = {
   environment: {
     os: `${os.platform()} ${os.release()}`,
