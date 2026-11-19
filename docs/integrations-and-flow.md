@@ -1,6 +1,6 @@
 # 从消息到发送：四种接入组合
 
-对应 LivingHello 2.7.5，源码核对与合成验证日期：2026-11-12。[浏览器流程图](flow/index.html) · [验证报告](validation-20261112.md)。
+对应 LivingHello 2.9.0，源码核对日期：2026-11-19。[浏览器流程图](flow/index.html) · [历史记录](../CHANGELOG.md)。
 
 ## 共同主流程
 

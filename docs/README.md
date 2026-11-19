@@ -1,64 +1,21 @@
-# LivingHello 文档
+# LivingHello 当前文档
 
-从 [README](../README.md) 了解插件，再按当前任务选择下列入口。本文档描述仓库当前实现；配套插件须满足各自事件约定，不推测任意已部署实例的状态。
+适用2.9.0，2026-11-19核对。README只介绍当前产品；历史变更统一见[更新日志](../CHANGELOG.md)。
+源码变化时同步权威文档，每次提交检查链接、默认值、版本、资产和离线回归。
 
-| 你要做什么 | 阅读入口 |
-| --- | --- |
-| 用浏览器看从消息到发送的完整分支图 | [HTML 全流程](flow/index.html)（下载仓库后离线打开） |
-| 比较独立 / 仅记忆 / 仅情绪 / 两者接入 | [四种接入组合](integrations-and-flow.md) |
-| 查功能、边界、接口和历史回放的最终验收 | [本轮验证报告](validation-20261113.md) |
-| 安装后设置、试跑、固定人格、调整分段、查异常 | [使用指南](usage.md) |
-| 查默认值、原生字段、保存目标和生效范围 | [配置参考](configuration.md) |
-| 配置慢回复垫场、了解触发场景与短句轮换 | [垫场句说明](early-ack.md) |
-| 配置文生图、图生图和每日共享次数 | [生图操作](usage.md#配置独立ai生图)及[生图参数](configuration.md#独立ai生图) |
-| 图片内容拒绝后的调整、取消与双插件升级 | [失败交接说明](image-failure-followup.md) |
-| 生图失败后普通说明的发送次数与边界 | [失败通知说明](image-failure-notice.md) |
-| 提示词映射、按模型复用成功用词与有限自动调整 | [生图映射说明](image-prompt-mapping.md)（LH 2.8.0 / LE 0.5.0） |
-| 图片解码、OCR长度、长正文和代码缩进保护 | [边界修复说明](boundary-safety.md) |
-| 只按流水条数、关闭时间过滤 | [上下文设置](usage.md#只限制流水条数) |
-| 单独理解接话判断、评分、否决、阈值和图片补证 | [判断逻辑说明](decision-logic.md) |
-| 排查 XML 嵌套聊天记录和路由视觉能力识别 | [合并转发与视觉修复记录](forward-xml-and-vision.md) |
-| 看完整判定/生成图、缓存、撤回窗口和配套约定 | [流程与集成说明](architecture.md) |
-| 修改代码、执行离线回归、检查发布包或维护记录 | [开发与维护](development.md) |
-| 看版本变化 | [更新日志](../CHANGELOG.md) |
-| 查群聊回复保护、多图预算和私聊异常提醒 | [优化与排查说明](optimizations-20261109.md) |
-| 追溯旧总库迁移 | [历史迁移档案](history/README.md) |
+| 用途 | 权威入口 | 依据 |
+| --- | --- | --- |
+| 操作、试跑、模型、人格、分段与排障 | [使用指南](usage.md) | pages/guard、原生桥与投递 |
+| 每项配置默认值、位置、作用与例子 | [配置参考](configuration.md) | schema、页面帮助、保存校验、运行限幅 |
+| 技术与判断流程 | [架构](architecture.md)、[判断逻辑](decision-logic.md) | main、gate、input、reply、images |
+| 可离线打开的完整分支图 | [流程HTML](flow/index.html) | 当前规则与集成契约 |
+| 独立、记忆、情绪、双接入 | [集成组合](integrations-and-flow.md) | 各方公开契约 |
+| 生图映射、长度与学习 | [提示词映射](image-prompt-mapping.md) | ImagePromptMapping、LE修复契约 |
+| 生图回执与原事项结算 | [发送回执](image-delivery-receipts.md) | SQLite回执、image-result.v1 |
+| 图片预算与技术正文保护 | [资源边界](boundary-safety.md) | 解码、OCR、分段与正文保护 |
+| 失败通知和需用户调整 | [通知](image-failure-notice.md)、[失败交接](image-failure-followup.md) | 失败类别、唯一通知与恢复 |
+| 主模型失败与慢回复 | [兜底](reply_fallback.md)、[垫场](early-ack.md) | 有界重试与取消守卫 |
+| 开发、接口与测试 | [开发维护](development.md) | tests、scripts、CI |
 
-## 权威来源与更新规则
-
-每项内容只保留一个权威位置；README 提供简短介绍并链接详细文档，不复制完整参数表或维护流程。旧专题文档已归并，历史可从 Git 查询；历史迁移档案明确标记为非当前实现基线。
-
-下表的责任人均为仓库维护者或修改对应源文件的贡献者。`Last verified` 表示核对仓库源码的日期；上线状态和付费模型语义质量须另外验证。
-
-| Doc | Diátaxis quadrant | Responsibility path | Source of truth | Last verified | Verification cadence | Staleness signal |
-| --- | --- | --- | --- | --- | --- | --- |
-| [README](../README.md) | tutorial / 首次入门 | 发布维护者 | metadata、配置及各详细文档 | 2026-11-04 | 每次版本发布 | 版本/名称/入口改变 |
-| [使用](usage.md) | how-to | 控制台修改者 | pages/guard、原生桥与发送逻辑 | 2026-11-04 | 每次 UI 或行为变更；90 天复核 | 控件、保存流程或失败原因改变 |
-| [配置](configuration.md) | reference | schema / 原生桥修改者 | _conf_schema、guard_native_*、guard_image_settings.DEFAULTS | 2026-11-04 | 每次字段变更；每个文档 PR 自动校验 | 字段/默认值不匹配或宿主接口变化 |
-| [流程](architecture.md) | explanation | 判定/发送/配套修改者 | main、guard_engine、guard_* 及配套源码约定 | 2026-11-04 | 每次链路或配套变更；90 天复核 | 钩子、缓存、撤回或计时约定改变 |
-| [判断逻辑](decision-logic.md) | explanation | 判定与输入理解修改者 | main、guard_engine、guard_understanding | 2026-11-05 | 每次判断协议、模式或图片理解变更 | 评分字段、否决原因、阈值或所有权改变 |
-| [合并转发与视觉修复](forward-xml-and-vision.md) | explanation / 修复记录 | 输入理解与视觉模型修改者 | guard_understanding、guard_media、guard_webui、相关回归测试 | 2026-11-17 | 转发遍历或视觉能力判断改变时 | 配置页与运行时不一致、未展开标记或预算改变 |
-| [垫场句](early-ack.md) | reference / explanation | 回复链路修改者 | main._early_ack_text、main._early_ack_worker、_conf_schema | 2026-11-17 | 句库、触发条件或轮换方式改变时 | 配置与默认句库不一致、重复垫场或发送时机改变 |
-| [图片失败交接](image-failure-followup.md) | reference / explanation | 图片与配套接口修改者 | guard_image_settings、guard_image_failure、guard_livingemotion、双插件测试 | 2026-11-18 | 失败类别、通知或恢复契约变更时 | 重复追问、未知结果重试或配套版本不匹配 |
-| [图片失败通知](image-failure-notice.md) | reference / explanation | 图片发送链路修改者 | guard_image_settings._notify_image_failure、test_image_failure_contract | 2026-11-18 | 失败说明或待办交接变更时 | 重复提示或发送未受理后交接 |
-| [边界修复](boundary-safety.md) | reference / explanation | 图片与回复修改者 | guard_image_budget、guard_image_evidence、guard_expression、guard_segments、边界回归 | 2026-11-18 | 资源预算或清理规则变更时 | 原图回退、额外大分配或技术内容改变 |
-| [维护](development.md) | how-to / operational | 测试与发布维护者 | tests、runner、日志实现、CI、归档属性 | 2026-11-04 | 每次发布；故障后复核 | 命令不可执行、指标/恢复规则改变 |
-| [更新日志](../CHANGELOG.md) | reference | 发布维护者 | 对应版本提交与源码 | 2026-11-04 | 每次版本发布 | metadata 新版本没有记录 |
-| [历史说明](history/README.md) | reference / archived | 历史档案维护者 | migration-manifest.json | 2026-11-04 | 档案路径或解释变更时 | 被引用为当前源码哈希 |
-
-超过复核周期或发生对应变更而未更新时，标为 `stale` 并核对来源；不能继续当作当前操作依据。源码修改和文档更新进入同一提交或关联 PR。CI 在每个 PR / 主分支推送检查 Markdown 链接、配置表、版本、资产和离线回归。模型、阈值、依赖或线上故障改变时，同步检查使用排查步骤和维护指标解释。
-
-## 旧入口归并
-
-| 原文件 | 当前入口 |
-| --- | --- |
-| current-features.md | [README](../README.md) 与[配置参考](configuration.md) |
-| compact-config-help.md、reply-delivery.md | [使用指南](usage.md) |
-| native-settings-flow.md | [配置参考](configuration.md) 与[流程说明](architecture.md) |
-| fragments.md、reply-topic-flow.md、expression-takeover.md、congling-compat.md | [流程说明](architecture.md)；操作见[使用指南](usage.md) |
-| console-records.md、maintenance.md | [开发与维护](development.md) |
-| migration-manifest.json | [history/migration-manifest.json](history/migration-manifest.json) |
-
-- [主模型失败兜底](reply_fallback.md)：开关、重试预算、提醒及取消边界。
-
-- [2.7.11 提示词与边界说明](stability-2.7.11.md)
+维护责任由对应功能修改者承担。文档核对的是仓库实现；生产部署、真实费用与模型效果另需证据。
+超90天未复核，或接口/行为变化未更新时标记stale，不把历史报告当作当前验收。

@@ -189,6 +189,26 @@ async def image_followup(context, event, config=None, *, promise_id=None, prompt
         return None
 
 
+async def image_result(context, event, config=None, *, bind=False):
+    """通过版本化接口关联、结算原事项，不跨插件读取私有存储。"""
+    operation = "bind_image_promise" if bind else "settle_image_promise"
+    api, scope = await _current(context, event, operation, config)
+    if api is None:
+        return None
+    try:
+        value = await asyncio.wait_for(getattr(api, operation)(scope, event=event), 5.0)
+        if (not _same_request(context, event, api, scope)
+                or not coupling_enabled(context, config, "livingemotion")
+                or not isinstance(value, dict) or value.get("status") != "ok"
+                or value.get("contract") != "livingemotion.image-result.v1"
+                or not isinstance(value.get("data"), dict)):
+            return None
+        return value["data"]
+    except Exception:
+        # 可能已提交：回执超时不能触发重新收费。
+        return None
+
+
 async def image_prompt_retry_ready(context, event, config=None):
     """发送失败说明前核验 LE 能否承接改词；旧版或独立模式保留调整询问。"""
     api, scope = await _current(context, event, "get_image_prompt_retry_policy", config)

@@ -22,6 +22,9 @@ class GenerateImageTool(FunctionTool[AstrAgentContext]):
         "properties": {
             "prompt": {"type": "string", "description": "所需画面或编辑要求，1~4000字"},
             "use_reference": {"type": "boolean", "description": "true使用本次输入图片做图生图；false文生图"},
+            "promise_id": {"type": "string", "description": (
+                "本轮兑现当前会话已经接受、尚未执行的图片事项时填写原ID。"
+                "发送成功才完成该项；暂停项须先按followup_id规则恢复，不绕过未知结果。")},
             "followup_id": {"type": "string", "description": (
                 "用户已明确调整此前被内容规则拒绝的画面时，填当前会话待办ID，恢复原待办。"
                 "仅限文生图；结果未知、发送未知和接口设置问题不能用它强行重试。")},
@@ -40,6 +43,16 @@ class GenerateImageTool(FunctionTool[AstrAgentContext]):
                 return "缺少当前会话，不能生图或发送图片。"
         if not callable(getattr(node, "get_sender_id", None)) or self.service is None:
             return "缺少当前会话或生图能力。"
+        pid = kwargs.get("promise_id")
+        if pid is not None:
+            if (not isinstance(pid, str) or not 1 <= len(pid) <= 128
+                    or kwargs.get("followup_id") is not None
+                    or kwargs.get("use_reference", False) or node.get_extra("cron_job")):
+                return "原图片事项参数无效；暂停项先按原规则恢复，不要绕过。"
+        cached = node.get_extra("_livinghello_image_job")
+        if cached and cached.get("promise_id") != pid:
+            return "本轮已有另一张图片决定；这次事项未执行，不要声称已完成。"
+        node.set_extra("_livinghello_requested_promise", pid)
         if kwargs.get("followup_id") is not None:
             if kwargs.get("use_reference", False) or node.get_extra("cron_job"):
                 return "该待办需要用户新一轮调整文生图需求，不能用参考图或定时任务强行恢复。"

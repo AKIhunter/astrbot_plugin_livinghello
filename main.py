@@ -597,6 +597,7 @@ class Main(Star):
             return receipt("unknown", "send_failed")
         if accepted is True:
             service.settle_deferred_image(request_id, "sent")
+            await service.finish_image(event, artifact, "sent")
             event._has_send_oper = True
             return receipt("sent")
         if accepted is False:
@@ -1343,7 +1344,10 @@ class Main(Star):
         # 主模型只回思考时，用同一份请求补答；这里只暂存，不修改请求。
         event.set_extra("_livinghello_provider_request", req)
         self._delivery()
-        self._image_generation().attach(event, req)
+        image_service = self._image_generation()
+        await image_service.prepare_receipt_context(event)
+        await image_service.reconcile_receipts(event)
+        image_service.attach(event, req)
         self.segments.attach(event, req)
         # 图片摘要与旧图补读属于输入理解；私聊跳过参与判定也必须保留。
         if not self._policy_send_reason(event):
@@ -3283,10 +3287,15 @@ class Main(Star):
         request_id = pending.get("request_id")
         service = self._image_generation()
         if not path or not Path(path).is_file():
+            await service.finish_image(event, {**pending, "kind": "delivery_unknown",
+                                                "reason": "已生成文件丢失，未确认发送"}, "unknown")
             emit(event, "image_delivery", "failed", reason="pending_file_missing")
             return
         if event.get_extra("_at_guard_delivery_blocked") or self._delivery().recalled(event):
             service.mark(request_id, "cancelled")
+            await service.finish_image(event, {**pending, "kind": "delivery_unknown",
+                                                "reason": "回复取消，未确认发送"},
+                                       "unknown" if pending.get("promise_id") else "cancelled")
             emit(event, "image_delivery", "cancelled", reason="reply_cancelled_after_text")
             return
         try:
@@ -3299,6 +3308,7 @@ class Main(Star):
             accepted = False
         if accepted is False or (event.get_extra("_at_guard_delivery_plan") or {}).get("failed"):
             service.mark(request_id, "unknown")
+            await service.finish_image(event, pending, "unknown")
             emit(event, "image_delivery", "unknown", reason="send_not_confirmed")
             if pending.get("prompt"):
                 failure = service._image_failure(
@@ -3306,6 +3316,7 @@ class Main(Star):
                 await service._notify_image_failure(event, {}, failure)
             return
         service.mark(request_id, "sent")
+        await service.finish_image(event, pending, "sent")
         emit(event, "image_delivery", "success", source="after_reply")
 
     @filter.after_message_sent()

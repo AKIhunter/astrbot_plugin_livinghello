@@ -1,16 +1,99 @@
-"""标准库文档校验：本地链接、默认值、版本及市场资产；不联网。"""
+"""文档校验：Python标准库和Node解析静态帮助；检查链接、默认值、版本及资产，不联网。"""
 from __future__ import annotations
 
 from collections import Counter
+import argparse
 import ast
 import json
 from pathlib import Path
 import re
 import struct
+import subprocess
 import sys
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def configuration_guide(root: Path) -> str:
+    """使用页面同源帮助和 schema；仅解析静态常量，不启动宿主。"""
+    program = r"""
+const fs = require("node:fs"), vm = require("node:vm");
+const source = fs.readFileSync(process.argv[1], "utf8");
+const names = ["GATE_FIELDS","VISION_FIELDS","CONTEXT_FIELDS","BUDGET_FIELDS","REPLY_FIELDS",
+  "EXPRESSION_FIELDS","INTEGRATION_FIELDS","UNDERSTANDING_FIELDS","RECALL_FIELDS",
+  "MENTION_FIELDS","OUTAGE_FIELDS","OUTAGE_WATCH_JUDGE","OUTAGE_WATCH_UNDERSTAND",
+  "OUTAGE_WATCH_REPLY","FIELD_HELP","SWITCH_HELP","MODE_CONFIG_HELP","FIELD_GROUPS"];
+let code = "";
+for (const name of names) {
+  const start = source.indexOf("  const " + name + " =");
+  if (start < 0) throw Error("Missing " + name);
+  const tail = source.slice(start);
+  const end = tail.search(/\n  [}\]];/);
+  if (end < 0) throw Error("Missing static terminator " + name);
+  code += tail.slice(0, end + 6) + "\n";
+}
+const loop = source.slice(source.indexOf('  for (const [key, model] of Object.entries({classifier:'),
+  source.indexOf("  function fieldHelp(key)"));
+code += loop;
+code += "\nJSON.stringify({help:FIELD_HELP,switches:SWITCH_HELP,mode:MODE_CONFIG_HELP,groups:FIELD_GROUPS})";
+console.log(vm.runInNewContext(code, {}, {timeout:1000}));
+"""
+    page = root / "pages/guard/index.html"
+    data = json.loads(subprocess.check_output(["node", "-e", program, str(page)], text=True))
+    schema = json.loads((root / "_conf_schema.json").read_text(encoding="utf-8"))
+    controls = {f["key"]: (g["title"], f) for g in data["groups"] for f in g["fields"]}
+    lines = ["### 逐项设置与用法", "",
+             "每项同时可在AstrBot插件配置页按字段名设置。表中位置是LH控制台入口；",
+             "已有保存值优先于默认值。数值范围由页面、保存校验与运行时共同约束，",
+             "互相关联的时限另见下文。提示词字段可在“预置提示词”编辑并恢复预置。", "",
+             "| 配置项 | 控制台位置 / 作用与例子 |", "| --- | --- |"]
+
+    def cell(value):
+        return str(value).replace("|", "&#124;").replace("\n", "<br>")
+
+    for key, item in schema.items():
+        title, control = controls.get(key, ("插件配置", {}))
+        if key.startswith("prompt_"):
+            title = "回复与私聊 → 预置提示词"
+        elif key.startswith("coupling_"):
+            title = "回复与私聊 → 功能耦合"
+        elif any(word in key for word in ("blacklist", "whitelist", "graylist")):
+            title = "回复与私聊 → 消息名单"
+        if key == "gate_mode":
+            help_ = data["mode"]
+            title = "判定设置 → 闸门模式"
+        else:
+            help_ = data["help"].get(key, {})
+        switch = data["switches"].get(key, {})
+        description = help_.get("desc") or item.get("hint") or item["description"]
+        details = f"位置：{switch.get('setup') or title}。{description}"
+        if switch:
+            details += f" 开启：{switch['on']} 关闭：{switch['off']}"
+        elif item["type"] == "bool":
+            details += " 开启执行上述功能；关闭停止该项功能，其他独立开关仍分别生效。"
+        if "min" in control:
+            details += f" 页面范围{control['min']}–{control['max']}{control.get('unit', '')}。"
+        example = help_.get("ex") or (
+            "开启后在此编辑说明中关联的参数，再保存。"
+            if item["type"] == "bool" else
+            "在此选择已注册模型；留空行为以本项说明为准。"
+            if "provider_id" in key else
+            "填写本项要求的说明，保存后作用于后续请求；恢复预置可撤销自定义。"
+            if key.startswith("prompt_") else
+            "先使用上表默认值，按本项单位调整并保存，随后用试跑核对。")
+        lines.append(f"| `{key}` | {cell(details)} 例：{cell(example)} |")
+    lines += ["", "### 生图逐项设置", "",
+              "入口为“回复与私聊 → 原生配置 → AI生图”。各字段保存至独立生图配置，",
+              "先选择实际支持生图的连接；每天次数按全插件共用。", "",
+              "| 配置项 | 作用、开启关闭效果与用法 |", "| --- | --- |"]
+    fields = literal_assignment(root / "images/guard_image_settings.py", "FIELDS")
+    for key, (label, kind, hint) in fields.items():
+        effect = hint
+        if kind == "bool" and "关闭" not in hint:
+            effect += "关闭停止本项功能；其他独立设置保持各自作用。"
+        lines.append(f"| `{key}` / {label} | {cell(effect)} 在上述入口设置并保存。 |")
+    return "\n".join(lines).rstrip()
 
 
 def prose(text: str) -> str:
@@ -53,7 +136,8 @@ def marked_table(text: str, marker: str, failures: list[str]) -> str:
 
 def check(root: Path) -> list[str]:
     failures = []
-    docs = [root / "README.md", root / "CHANGELOG.md", *sorted((root / "docs").rglob("*.md"))]
+    docs = [root / "README.md", root / "README.en.md", root / "CHANGELOG.md",
+            *sorted((root / "docs").rglob("*.md"))]
     for path in docs:
         if not path.is_file():
             failures.append(f"缺少 {path.relative_to(root)}")
@@ -78,6 +162,9 @@ def check(root: Path) -> list[str]:
 
     schema = json.loads((root / "_conf_schema.json").read_text(encoding="utf-8"))
     table = (root / "docs/configuration.md").read_text(encoding="utf-8")
+    generated = configuration_guide(root)
+    if marked_table(table, "field-usage", failures).strip() != generated:
+        failures.append("逐项用法已过期：运行 python scripts/check_docs.py --write")
     rows = re.findall(r"(?m)^\| `([^`]+)` \| `([^`]+)` \| ([^|]+) \|$",
                       marked_table(table, "schema-defaults", failures))
     listed = {}
@@ -150,6 +237,16 @@ def check(root: Path) -> list[str]:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--write", action="store_true")
+    args = parser.parse_args()
+    if args.write:
+        path = ROOT / "docs/configuration.md"
+        text = path.read_text(encoding="utf-8")
+        pattern = r"(<!-- field-usage:start -->\n).*?(<!-- field-usage:end -->)"
+        assert re.search(pattern, text, re.S), "Missing field-usage markers"
+        path.write_text(re.sub(pattern, lambda m: m[1] + configuration_guide(ROOT)
+                              + "\n" + m[2], text, flags=re.S), encoding="utf-8")
     errors = check(ROOT)
     for error in errors:
         print(f"[FAIL] {error}")

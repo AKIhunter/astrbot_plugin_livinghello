@@ -1,6 +1,7 @@
 # 图片失败后的调整与取消
 
-适用 **LivingHello 2.7.8 + LivingEmotion 0.4.1**。拍照、自拍、画图共用日常说明：
+适用 **LivingHello 2.9.0 + LivingEmotion 0.6.0**。映射关闭、需改变画面或用尽次数后，
+拍照、自拍、画图共用日常说明：
 
 > 这张没能弄好，有些内容我暂时做不了。你想换个人物、场景或风格再试试，还是这次就算了？
 
@@ -23,7 +24,7 @@ LivingEmotion；LE 保留承诺开关开启。关闭 LE 接入时仍会说明失
 
 | 受控类别 | 行为 |
 | --- | --- |
-| `content_rejected` | 保持原图片等待，问具体调整或取消；不会重试原画面 |
+| `content_rejected` | 映射许可通过时沿原事项有限改词；否则等待具体调整或取消 |
 | `rate_limited` | 文生图沿用 LE 五分钟延期；图生图保持等待 |
 | `provider_error` | 先停下核对设置，不自动换上游或重试 |
 | `result_unknown` | 核对是否生成过，禁止重复收费请求 |
@@ -51,19 +52,15 @@ LH 不追加第二条“记下 / 等待”说明。发送失败或结果未知�
 开启 LE 接入时用 `livingemotion.image-policy.v1` 核验关系许可，无法核验则婉拒；
 关闭接入时仍用原独立情绪规则。
 
-升级两插件并按宿主提示加载即可，LH 不新增配置键或额度表。
-原配置、额度和缓存继续沿用。LE 自动为承诺表增加三个通知字段，已有内容拒绝
-等待图片缺少通知记录时补问一次；升级前备份插件数据目录。
-详细状态机与旧库处理见 [LE 主动调整说明](https://github.com/AKIhunter/astrbot_plugin_livingemotion/blob/main/docs/promise-adjustment-20261118.md)。
+升级两插件并按宿主提示加载，原配置、额度和缓存继续沿用。
+通知、回执和绑定字段按缺省迁移；升级前备份插件数据目录。
+详细状态机见 [LE 承诺说明](https://github.com/AKIhunter/astrbot_plugin_livingemotion/blob/main/docs/promise.md)，
+原事项收费前领取与结算见[回执](image-delivery-receipts.md)。
 
 ## 离线验收
 
-2026-11-18 发布代码实测：独立追问 7/7、实际双插件门面交接 1/1；
-原有生图回归 Git 基线 56/56，发布版更新 3 处旧发送预期后 56/56。
-失败分类、到期执行与本地双协议交接前置验收 11/11 通过。
-LE 新矩阵 60/60，原有相关回归改前、改后均 91 通过、11 失败，名称一致。
-这些数字仅代表对应范围，不表示全量 CI 或真实平台送达已经通过。
-测试模型和发送均打桩，协议测试只用本地 HTTP，真实付费 API 为 0 次。
+历史计数与旧失败对照统一见[更新日志](../CHANGELOG.md)。
+测试模型和发送均打桩，协议测试只用本地HTTP，不代表真实平台送达。
 
 普通独立用例由现有 `run_offline_tests.py` 自动发现。
 实际门面放在 `tests/promise_adjustment_handoff.py`，单独执行，

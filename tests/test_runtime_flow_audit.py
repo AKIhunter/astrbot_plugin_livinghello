@@ -34,7 +34,9 @@ class RuntimeFlowAuditTests(unittest.IsolatedAsyncioTestCase):
             SequenceProvider(output()))
         guard.segments = ReplySegments(guard)
         # Independent generation tests cover this service; keep this fixture in memory.
-        guard._image_generation = lambda: SimpleNamespace(attach=lambda *_: None)
+        guard._image_generation = lambda: SimpleNamespace(
+            attach=lambda *_: None, prepare_receipt_context=AsyncMock(),
+            reconcile_receipts=AsyncMock())
         self.guards.append(guard)
         return guard
 

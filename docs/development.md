@@ -19,7 +19,7 @@ console/                     控制台接口、流程与帮助文案
 observability/               请求追踪与诊断
 _conf_schema.json            插件参数的权威默认值
 pages/guard/index.html       四页控制台
-docs/                       使用、配置、流程、维护、历史档案
+docs/                       当前使用、配置、流程与维护说明
 tests/test_*.py              独立回归与可选配套测试
 scripts/check_docs.py        标准库文档校验
 scripts/run_offline_tests.py 离线回归实现
@@ -54,6 +54,18 @@ python3 -B run_offline_tests.py
 
 `ASTRBOT_NATIVE_SOURCE` 指向含 `core/` 的 AstrBot 包目录。未提供源码时相关集成测试标记跳过，独立回归继续；报告应区分通过和跳过，不能将独立通过当作配套验收。标准库 unittest 也可在设置 `PYTHONPATH` 后从 `tests/` 发现，但根入口更方便。
 
+原图片事项和映射学习的显式双插件门面：
+
+```bash
+ASTRBOT_NATIVE_SOURCE=/path/to/astrbot \
+PYTHONPATH=/path/to/parent-of-astrbot_plugin_livingemotion \
+python -B scripts/run_image_handoff_tests.py
+```
+
+LE源码按标准包名放在父目录，使用LE requirements-dev依赖。
+这个入口强制安装隔离宿主接口桩，覆盖真实双方门面、回执与持久状态；
+上游与平台发送均打桩，缺源码直接失败，不计跳过。
+
 回归覆盖语义否决、视觉/记忆降级、碎片合并、撤回窗口、结果交付、分段、保存冲突、人格固定、记录恢复及配套交接。调整模型或提示词后仍需用脱敏实际案例验证语义；离线通过不证明真实准确率或线上 Token 节省比例。
 
 ## UI 隔离回归
@@ -74,15 +86,18 @@ node tests/ui/function-coupling.test.mjs
 | private-reply.test.mjs | 私聊沿用回复方式的开关、保存与回读 | evidence/private-reply-*.png 与结果 JSON |
 | function-coupling.test.mjs | 功能耦合卡片、键盘启用、断开草稿、紧凑布局 | `/tmp/lh-compact-coupling-20261110/local-ui` |
 
-产物统一写入 `tests/ui/evidence/` 或 `/tmp`，前者已在 `.gitignore` 中忽略，可随时重新生成，不作为历史证据提交。2026-11-11 实测：browser 4/8、function-coupling 4/6、save-latency 0/6、private-reply 0/3，失败集中在页面迭代后未同步的选择器与对比度基线，运行前先核对。
+产物统一写入 `tests/ui/evidence/` 或 `/tmp`，前者已在 `.gitignore` 中忽略，不作为历史证据提交。旧布局计数和失败统一见CHANGELOG；运行前核对选择器与对比度基线。
 
 ## 文档检查与发布
 
-`scripts/check_docs.py` 使用标准库检查 Markdown 本地路径与锚点、完整 schema 默认值表、独立生图默认值和原生字段保存路径、当前版本、图标尺寸及测试布局。源码常量通过AST读取，不导入或启动插件。每个 PR 及主分支推送执行文档检查和独立离线回归，不需要密钥。
+`scripts/check_docs.py` 使用Python标准库和Node.js解析页面静态帮助，
+检查全部Markdown链接/锚点、118项schema及13项独立生图默认值、逐项用法、
+原生字段路径、版本、图标与测试布局。运行前准备Node.js，不导入或启动宿主，不需要密钥。
 
 发布前还应使用可用 YAML 解析器解析 metadata，确认 GitHub Markdown 与 Mermaid 渲染。版本以 metadata 为准，同步控制台版本和更新日志；源代码若增加注册版本也须保持一致。
 
-`.gitattributes` 在安装归档中排除 `tests/`、`docs/`、开发脚本和 CI；首页、CHANGELOG、logo、Banner 与运行代码保留。开发请完整克隆，安装包不包含完整文档与回归模块：
+`.gitattributes` 排除tests、开发脚本和CI；当前公开文档、离线流程资源、
+首页、CHANGELOG、logo、Banner与运行代码保留。开发请完整克隆：
 
 ```bash
 git diff --check
@@ -147,7 +162,7 @@ LivingMemory 的 `core/retrieval/request_timing.py` 可通过请求局部 Contex
 
 日志包含聊天内容，备份和支持材料限制访问并脱敏。服务器 LivingMemory 可能包含额外权限筛选补丁，增加计时时保留 `adapter_sql`、`adapter_visible`、FAISS IDSelector 等过滤逻辑；计时不能改变隐私边界。
 
-历史迁移原哈希仅用于追溯：[迁移档案](history/README.md)。不要用旧快照覆盖之后新增的修复或运行数据。
+历史迁移来源与原件统一见[更新日志](../CHANGELOG.md)。不要用旧快照覆盖之后新增的修复或运行数据。
 
 ## WebUI 接口索引
 

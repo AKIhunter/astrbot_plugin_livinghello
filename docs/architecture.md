@@ -1,8 +1,8 @@
 # 流程与集成说明
 
-面向希望理解执行链路的使用者和配套开发者。当前实现依据 [main.py](../main.py)、[gate/guard_engine.py](../gate/guard_engine.py) 及各 `guard_*` 模块，已核对源码：2026-11-19（2.8.0）。完整白话分支见 [HTML 图解](flow/index.html)，四种接入组合见 [集成说明](integrations-and-flow.md)，合成反例见 [验证报告](validation-20261112.md)。钩子、缓存、超时或配套约定改变时更新；以下图不能代替部署状态验证。
+面向希望理解执行链路的使用者和配套开发者。当前实现依据 [main.py](../main.py)、[gate/guard_engine.py](../gate/guard_engine.py) 及各 `guard_*` 模块，已核对源码：2026-11-19（2.9.0）。完整白话分支见 [HTML 图解](flow/index.html)，四种接入组合见 [集成说明](integrations-and-flow.md)，历史反例见 [更新日志](../CHANGELOG.md)。钩子、缓存、超时或配套约定改变时更新；以下图不能代替部署状态验证。
 
-2.7.9 图片入口先刷新平台链接，并行获取OCR与有界下载，下载内容通过像素准入后才交视觉模型。
+图片入口先刷新平台链接，并行获取OCR与有界下载，下载内容通过像素准入后才交视觉模型。
 OCR只提供文字证据，下载失败不猜画面。解码槽位随实际线程释放，达到两份并发时立即省略。
 回复先按原标点分段，再在每段内有预算地保护技术内容、清理聊天标点；禁忌词后处理不跨入技术片段。
 普通发送与 `send_message_to_user` 的 `plain` 正文使用同一清理规则。[具体边界](boundary-safety.md)。
@@ -71,7 +71,7 @@ flowchart TD
 
 `guard_image_failure` 提供受控类别，`guard_livingemotion.image_followup` 通过版本契约交接。
 `guard_image_prompt` 在扣额度前执行映射与长度校验，成功返回图片后记录局部词对。
-LH 2.8.0 / LE 0.5.0 通过 `livinghello.image-prompt-mapping.v1` 和
+LH 2.9.0 / LE 0.6.0 通过 `livinghello.image-prompt-mapping.v1` 和
 `livingemotion.image-prompt-retry.v1` 核对实际模型范围与接手许可；LE 使用自身收尾模型，
 同一图片承诺最多自动调整两次。准备候选可恢复，生成或发送未知不重发。
 未接手或调整耗尽时，内容拒绝的说明与调整问句共用一次发送；已问回执持久交给 LE。
@@ -176,7 +176,7 @@ AstrBot 请求钩子按优先级从高到低执行：
 
 ## 原生模型与固定人格
 
-`integrations/guard_native_settings.py` 按目标原生配置保存主模型、默认TTS模型、语音回复开关及排版等公开字段。聊天与TTS Provider按角色隔离；语音字段与模型字段共用revision、磁盘一致性检查、原子补丁和流水线刷新。AstrBot原生页面修改后重新读取即可同步，本页保存也直接写回同一原生配置。固定人格文件 `native_persona_pins.json` 保留在旧技术 ID 的数据目录。
+`integrations/guard_native_settings.py` 按目标原生配置保存主模型、默认TTS模型、语音回复开关及排版等公开字段。聊天与TTS Provider按角色隔离；语音字段与模型字段共用revision、磁盘一致性检查、原子补丁和流水线刷新。AstrBot原生页面修改后重新读取即可同步，本页保存也直接写回同一原生配置。人格以原生persona_id为真源，旧 `native_persona_pins.json` 不再读取。
 
 插件生命周期包装 `PersonaManager.resolve_selected_persona`，先确定所属原生配置，再返回固定人格原生对象，使系统提示、开场、工具和技能一致；未固定时沿用宿主选择器。固定人格已删除或文件损坏时明确失败，不自动换人。重载清理自己的包装，避免叠加。
 

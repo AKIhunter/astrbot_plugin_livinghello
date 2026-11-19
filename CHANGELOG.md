@@ -1,5 +1,19 @@
 # 更新日志
 
+## 2.9.0 — 2026-11-19
+
+- 图片生成与发送回执持久化，最近同会话事实用于后续追问；成功状态不可被旧失败降级。
+- 通过 `livingemotion.image-result.v1` 收费前领取原图片承诺，发送成功仅完成原ID；
+  未领取、来源变化或结果未知不再生成，明确失败沿用原任务进入有限改词链路。
+- 配套LE 0.6.0；保留独立模式、每日额度、映射开关、失败通知和未知副作用保护。
+- README仅介绍当前功能与结构；配置逐项用法从页面同源帮助生成，
+  历史专题及旧验证记录统一归入本日志的原始来源索引。
+- 归档12项不适用现行媒体降级行为的终止式测试草稿；
+  [原件](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/tests/test_private_faults.py)
+  仅用于历史追溯，现行媒体降级与管理员提醒回归保留。
+- 验证采用离线规则、真实双插件门面、SQLite及全打桩上游/发送；
+  不代表真实模型语义效果或生产已升级。当前契约见[回执说明](docs/image-delivery-receipts.md)。
+
 记录当前独立维护仓库可核对的变化。历史版本以 Git 及迁移档案为准，不补造旧版本编号。
 
 ## 2.8.0 — 2026-11-19
@@ -19,7 +33,7 @@
   关闭映射沿用原描述与 4000 字上限；关闭学习保留历史但停止记录及复用。
 - LH 离线全量实测 976 通过、35 个原有跳过，新增映射场景 24 项通过；
   原生配置页保存、读回及自然轮询 6 项通过，真实付费 API 测试为 0 次。
-  详细格式与边界见[生图映射说明](docs/image-prompt-mapping.md)。
+  详细格式与边界见[生图映射说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/image-prompt-mapping.md)。
 
 ## 2.7.11 — 2026-11-19
 
@@ -29,7 +43,7 @@
 - 修复模型缓存遗漏配置变化、LE 历史视图与请求重试衔接；媒体失败继续降级回复，管理员提醒只发送普通文字。
 - 保留技术正文、原生工具链与图片拒绝后的通知去重；私聊水位规则仍会丢弃已过时的未发送回复。
 - 配套 LivingEmotion 0.4.2 的 `livinghello.shared-prompts.v1`；各自独立运行，未安装配套插件也可使用自身提示词。
-- 离线回归 950 通过、35 跳过；旧的终止式私聊故障契约未实现，媒体降级另有专门测试。详见[提示词与边界说明](docs/stability-2.7.11.md)。
+- 离线回归 950 通过、35 跳过；旧的终止式私聊故障契约未实现，媒体降级另有专门测试。详见[提示词与边界说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/stability-2.7.11.md)。
 
 ## 2.7.10 — 2026-11-18
 
@@ -38,7 +52,7 @@
 - 生图失败的普通说明发送受理后，待办交接只保存后续状态，不再追加第二条等待文字。
   内容拒绝仍在同一条消息里询问调整或取消；502、超时等结果未知保留待核对状态。
 - 保留重复通知拦截与发送未受理时不交接的行为。管理员模型故障提醒仍是独立通知。
-- 新增后台 502、六类失败交接与发送未受理的离线回归；详见[失败通知说明](docs/image-failure-notice.md)。
+- 新增后台 502、六类失败交接与发送未受理的离线回归；详见[失败通知说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/image-failure-notice.md)。
 
 ### 兼容
 
@@ -63,7 +77,7 @@
   同步现有开关帮助，不新增配置或修改存量配置文件。
 - 测试集中在 `tests/test_boundary_safety.py`；Pillow及真实宿主测试有显式依赖入口。
   新增30/30离线通过，Python3.12与3.11公开版基线对照无新增失败；既有失败与跳过分别记录。
-  验收口径与剩余边界见[边界修复说明](docs/boundary-safety.md)。
+  验收口径与剩余边界见[边界修复说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/boundary-safety.md)。
 
 ## 2.7.8 — 2026-11-18
 
@@ -87,7 +101,7 @@
 - LH 主动追问矩阵 8/8 离线实测通过（7 项独立用例 + 1 项显式双插件实际门面验收）。
   原生生图回归 56/56，通过更新 3 处旧发送预期核验新行为；真实付费 API 测试为 0 次。
   另有失败分类、到期执行及本地双协议前置验收 11/11 通过。
-  详见[失败交接说明](docs/image-failure-followup.md)。
+  详见[失败交接说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/image-failure-followup.md)。
 
 ## 2.7.7 — 2026-11-15
 
@@ -96,13 +110,13 @@
 - 修复配置页可选但运行时拒绝的视觉模型：路由统一以 `api_type=image_to_text/multimodal` 判断能力，锁定上游直连时继续保留声明，兼容 HY4 等未命中型号规则的模型。
 - 识别嵌套合并转发中的 QQ XML 聊天记录卡片，有 `m_resid/resid` 时读取内部正文和图片，复用原有来源名单、去重、层数、条数及回拉预算。
 - 缺少资源 ID、返回为空或回拉失败时明确标注内部未展开；卡片预览不当作正文，`m_fileName` 不作为资源 ID。
-- 新增18项回归用例全部通过，全量同环境基线对照无新增失败或错误。此次不修改模型选择或展开配置；[修复记录](docs/forward-xml-and-vision.md)包含原因、修复提交与验证边界。
+- 新增18项回归用例全部通过，全量同环境基线对照无新增失败或错误。此次不修改模型选择或展开配置；[修复记录](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/forward-xml-and-vision.md)包含原因、修复提交与验证边界。
 - 文档同步更新中英文入门、配置参考和文档索引，并补齐配置表漏列的5个现有动图/视频字段。
 
 ### 改进
 
 - 慢回复垫场句扩充为 12 句无标点短文案，按会话逐次轮换，各群独立循环，避免按分钟选句造成重复。灰名单明确呼叫、普通群 @/名字唤醒及自主参与放行共用句库；私聊仍由 `apply_to_private` 控制。
-- 空配置或旧版默认三句自动使用内置新句库，自定义文案继续优先使用。发送等待、同群冷却及发送前保护保持原有配置；[垫场句说明](docs/early-ack.md)记录配置位置、轮换和失败边界。
+- 空配置或旧版默认三句自动使用内置新句库，自定义文案继续优先使用。发送等待、同群冷却及发送前保护保持原有配置；[垫场句说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/early-ack.md)记录配置位置、轮换和失败边界。
 - 控制台首屏从 18–30 秒降到约 13 毫秒：缓存判据改为只读 provider 配置，不再逐项调用 `get_model()`，也不再拿 `id(provider)` 当指纹（provider 对象重建即导致缓存作废）。
 - 模型目录不再在面板路径联网枚举 `get_models()`，新增 `PROVIDER_LIST_FAST` 开关（默认开启）；置为 `False` 恢复旧行为。
 - 状态缓存有效期 1.5 秒 → 6 秒；参数与统计写入仍经 `_invalidate_state()` 即时作废。
@@ -145,9 +159,9 @@
 
 ### 文档与验证
 
-- 新增可离线打开的 [HTML 全流程](docs/flow/index.html) 和 [四种接入组合说明](docs/integrations-and-flow.md)。
+- 新增可离线打开的 [HTML 全流程](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/flow/index.html) 和 [四种接入组合说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/integrations-and-flow.md)。
 - 合成请求经过实际钩子，覆盖独立、仅 LivingMemory、仅 LivingEmotion、两者接入及拒绝路径；12 项专项通过，外部网络连接被阻断。
-- 同环境全量：修复前 752 项（680 通过、28 失败、16 错误、28 跳过），修复后 764 项（692 通过、28 失败、16 错误、28 跳过），失败和错误 ID 无新增。详见 [验证报告](docs/validation-20261112.md)。
+- 同环境全量：修复前 752 项（680 通过、28 失败、16 错误、28 跳过），修复后 764 项（692 通过、28 失败、16 错误、28 跳过），失败和错误 ID 无新增。详见 [验证报告](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/validation-20261112.md)。
 
 ## 2.7.4 — 2026-11-12
 
@@ -198,7 +212,7 @@
 - 控制台在碎片总上限与回复有效期不匹配时给出联动警告：有效期小于「静默等待 + 总上限 + 40 秒」时提示整批回复可能在发送前过期；只提示，不阻止保存，也不改写用户已保存的值。
 - 碎片总上限为 `0` 时单独提示“续发可无限延长整批”，并建议设置有限上限。
 
-验证为离线模型和平台替身；真实宿主路径由 `ASTRBOT_HOST_SOURCE` 可选检查。不以离线成功替代线上投递证据。[回复闭环说明](docs/reply-health.md)、[碎片说明](docs/fragments.md)。
+验证为离线模型和平台替身；真实宿主路径由 `ASTRBOT_HOST_SOURCE` 可选检查。不以离线成功替代线上投递证据。[回复闭环说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/reply-health.md)、[碎片说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/fragments.md)。
 
 ## 2.7.1 — 2026-11-09
 
@@ -214,14 +228,14 @@
 - 保护取消通知当前 Agent 停止，只记录一次取消，避免空步骤重复刷满请求追踪。
 - 异常摘录隐藏带引号的凭据，提醒额度持久化；健康监测超时与兜底总期限保持独立限制。
 
-验证为离线模型和平台替身；真实宿主路径由 `ASTRBOT_HOST_SOURCE` 可选检查。不以离线成功替代线上投递证据。[兜底说明](docs/reply_fallback.md)。
+验证为离线模型和平台替身；真实宿主路径由 `ASTRBOT_HOST_SOURCE` 可选检查。不以离线成功替代线上投递证据。[兜底说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/reply_fallback.md)。
 
 ## 2.7.0 — 2026-11-04
 
 ### 新增
 
 - “流程与试跑”一级页：判定与生成图、可查看依据的节点、文字试跑。
-- 独立[判断逻辑说明](docs/decision-logic.md)：逐步解释直通、本地规则、模型字段、补证、语义否决、阈值及模式差异。
+- 独立[判断逻辑说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/decision-logic.md)：逐步解释直通、本地规则、模型字段、补证、语义否决、阈值及模式差异。
 - 可选“断线恢复”：文字判定 API 临时异常时通知管理员、冷却10分钟、自动探测，并由配套插件补看受影响历史。
 - 原生主模型、回退模型和文本排版设置桥接，分组可展开并提供解释。
 - 人格手动选择并保存后按原生配置固定，提供配套插件兼容读取接口。
@@ -251,3 +265,47 @@
 - 配套插件准备计时适配、同会话图片观察缓存、原生保存冲突恢复和发送前过期检查。
 
 以上按当前2.7.0实现汇总，包含同日已完成的增量更新。验证覆盖代码分支、接口和隔离发送；具体生图API的可用性和输出质量仍以实际服务为准。
+
+## 历史专题与验证原件
+
+旧专题的改动归入上面的版本记录，原文统一由以下固定Git来源追溯。
+当前使用说明只在docs索引维护。旧验证数量仅证明当时范围，不能用于宣称
+当前版本或生产通过；旧文内证据路径可能已撤下。原始文档也已本地独立归档。
+
+| 原始专题 | 内容与追溯 |
+| --- | --- |
+| [LivingHello 文档](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/README.md) | 权威来源与更新规则；旧入口归并 |
+| [流程与集成说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/architecture.md) | 判定流程；生成与发送；独立AI生图工具；碎片与撤回窗口；图片与查询证据；配套插件联用 |
+| [2.7.9 边界修复](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/boundary-safety.md) | 实际规则；开关与兼容；离线验收；尚未修复的P2 |
+| [LH 配置页面与问号说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/configuration-console.md) | 说明来源；自动刷新与保存；验证 |
+| [配置参考](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/configuration.md) | 配置保存在哪里；插件参数；AstrBot 原生字段；AstrBot 原生分段；独立AI生图；请求诊断存储 |
+| [控制台记录保留、能力耗时与分页面板](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/console-records.md) | 页面与保存；日志恢复与搜索；能力计时；部署注意 |
+| [LivingHello 插件](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/current-features.md) | 快速使用；痛点；功能；行为；闸门模式；控制台 |
+| [LivingHello 判断逻辑说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/decision-logic.md) | 先看结论；判定 API 断线恢复；总流程；第一步：明确呼叫与本地规则；第二步：组织判断上下文；第三步：文字模型初判 |
+| [开发与维护](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/development.md) | 仓库布局；从完整克隆执行验证；UI 隔离回归；文档检查与发布；日志与指标；维护与恢复 |
+| [垫场句轮换](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/early-ack.md) | 配置与触发范围；验证与维护 |
+| [回复方式与原生分段](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/expression-takeover.md) | 回复方式；与AstrBot共用分段；模拟耗时与撤回；代码逻辑与职责；验证 |
+| [合并转发与视觉能力修复](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/forward-xml-and-vision.md) | 问题与根因；视觉模型；XML 嵌套聊天记录；验证与边界；使用与排查 |
+| [碎片消息等待与合并判断](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/fragments.md) | 总等待上限；判断与回复；代码顺序；边界与配置；验证 |
+| [旧情绪与历史搜索输入](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/history-context.md) | 情绪；搜索；发送边界与限制；验证 |
+| [历史图片的输入优化](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/history-images.md) | 每次请求如何处理；需要旧图细节时；预算与保存安全 |
+| [历史迁移档案](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/history/README.md) | 历史迁移档案 |
+| [migration-manifest.json](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/history/migration-manifest.json) | migration-manifest.json |
+| [图片错误体分类](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/image-error-body-classification.md) | 图片错误体分类 |
+| [图片失败后的调整与取消](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/image-failure-followup.md) | 开启与操作；分类与处理；交接与迁移；离线验收 |
+| [生图失败只发送一次普通说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/image-failure-notice.md) | 生图失败只发送一次普通说明 |
+| [生图提示词映射与成功用词](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/image-prompt-mapping.md) | 外部表与热更新；LE 承诺重试；成功记录与追踪；离线验证 |
+| [从消息到发送：四种接入组合](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/integrations-and-flow.md) | 共同主流程；接入组合；图片与旧答；已知边界 |
+| [黑白灰名单](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/message-policy.md) | 规则优先级；跨类型示例；填写、校验和移动；实时、历史和待发消息；LivingEmotion配套；人工复验 |
+| [多图两张批次](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/multi-image-batching.md) | 多图两张批次 |
+| [LivingHello 原生配置与流程说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/native-settings-flow.md) | 原生配置保存；人格固定；图片相关能力；流程节点；名称兼容 |
+| [群聊回复、多图处理与异常提醒](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/optimizations-20261109.md) | 已生成回复的保护；多图与历史图片；异常列表与管理员私聊；官方模型名称；验证与回退 |
+| [功能异常统一私聊](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/private-fault-notifications.md) | 功能异常统一私聊 |
+| [私聊是否复用回复方式](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/private-reply-mode.md) | 私聊是否复用回复方式 |
+| [回复发送、模拟耗时与撤回保护](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/reply-delivery.md) | 回复发送、模拟耗时与撤回保护 |
+| [回复闭环与管理员提醒](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/reply-health.md) | 错误分类与处置；异常锚点 `[ReplyFault]`；水位顶替；状态与不变量；提醒路由与未知结果；数据与验证边界 |
+| [主模型失败兜底](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/reply_fallback.md) | 调用顺序；保护条件；提醒与留痕；验证与限制 |
+| [2.7.11 使用与边界说明](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/stability-2.7.11.md) | 2.7.11 使用与边界说明 |
+| [使用指南](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/usage.md) | 打开控制台并保存；固定主模型与人格；设置语音回复；只限制流水条数；设置分段回复；等待碎片与撤回保护 |
+| [LivingHello 2.7.5 合成数据验证](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/validation-20261112.md) | 反例与修复；同环境全量对照（实测）；场景覆盖；44 项既有失败 / 错误的处理；验证范围与运行方式 |
+| [LivingHello 功能、边界与外部接口验收](https://github.com/AKIhunter/astrbot_plugin_livinghello/blob/d0c611073db5a0ca28642fe5ca8ca9214583075f/docs/validation-20261113.md) | 本次业务修复；遗留测试闭环；真实历史回放范围；对外接口与插件边界；复验 |
