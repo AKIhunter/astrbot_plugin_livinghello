@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import test_image_generation as fixtures
-from images.guard_image_failure import describe_failure, http_failure, REASONS
+from images.guard_image_failure import describe_failure, http_failure, payload_failure, REASONS
 from main import Main
 
 
@@ -33,6 +33,31 @@ class FailureClassificationTests(unittest.TestCase):
         self.assertEqual(describe_failure(ValueError(), requested=False)[0], "provider_error")
         self.assertTrue(all(not any(word in reason for word in ("任务", "接口", "待办", "服务"))
                             for reason in REASONS.values()))
+
+    def test_success_status_error_body_keeps_failure_kind(self):
+        cases = (
+            ({"code": "content_policy_violation"}, "content_rejected"),
+            ({"code": "rate_limit_exceeded"}, "rate_limited"),
+            ({"code": "model_not_found", "type": "invalid_request_error"}, "provider_error"),
+            ({"code": "upstream_timeout"}, "result_unknown"),
+        )
+        for status in (200, 201):
+            for error, expected in cases:
+                with self.subTest(status=status, error=error):
+                    with self.assertRaises(fixtures.NativeReplyError) as raised:
+                        fixtures.ImageSettings.extract({"error": error}, status=status)
+                    self.assertEqual(describe_failure(raised.exception, requested=True)[0], expected)
+                    self.assertEqual(raised.exception.code, error["code"])
+                    self.assertEqual(raised.exception.status, status)
+
+    def test_error_diagnostics_never_include_body_or_credentials(self):
+        for value in ("sk-fixture-sensitive", "https://example.invalid/secret", "raw\nbody", "x" * 81):
+            with self.subTest(value=value):
+                failure = payload_failure(200, {"error": {
+                    "code": value, "type": value, "message": value}})
+                self.assertEqual(failure.code, "")
+                self.assertEqual(failure.error_type, "")
+                self.assertNotIn(value, str(failure))
 
 
 class ImageFailureFlowTests(unittest.IsolatedAsyncioTestCase):
@@ -149,15 +174,25 @@ class ImageFailureHttpTests(unittest.IsolatedAsyncioTestCase):
     asyncTearDown = fixtures.ImageHttpTests.asyncTearDown
 
     async def test_controlled_rejection_through_both_protocols(self):
-        self.http_status = 400
         self.response_payload = {"error": {"code": "content_policy_violation",
                                          "message": "untrusted-upstream-body"}}
+        self.service.values["daily_limit"] = 10
         self.service._request = lambda *args: fixtures.ImageSettings._request(self.service, *args)
         self.service.connection = lambda _: (self.base, "fixture-key", "image-model")
-        for protocol in ("images", "chat_images"):
-            event = fixtures.Event(mid=protocol)
-            self.service.values["protocol"] = protocol
-            response = await self.service.generate(event, "猫")
-            self.assertEqual(event.get_extra("_livinghello_image_failure")["kind"], "content_rejected")
-            self.assertNotIn("untrusted-upstream-body", response)
-        self.assertEqual(len(self.received), 2)
+        for status in (200, 201, 400):
+            self.http_status = status
+            for protocol in ("images", "chat_images"):
+                with self.subTest(status=status, protocol=protocol):
+                    event = fixtures.Event(mid=f"{status}-{protocol}")
+                    self.service.values["protocol"] = protocol
+                    with patch("images.guard_image_settings.emit") as trace:
+                        response = await self.service.generate(event, "猫")
+                    self.assertEqual(event.get_extra("_livinghello_image_failure")["kind"],
+                                     "content_rejected")
+                    api_states = [call.args[2] for call in trace.call_args_list
+                                  if len(call.args) > 2 and call.args[1] == "image_api"]
+                    self.assertIn("failed", api_states)
+                    self.assertNotIn("success", api_states)
+                    self.assertNotIn("untrusted-upstream-body", response)
+        # 每个请求恰好调用一次；内容拒绝不会引入自动重试。
+        self.assertEqual(len(self.received), 6)

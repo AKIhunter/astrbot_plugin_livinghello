@@ -27,7 +27,7 @@ try:
     from ..observability.guard_request_trace import emit, TRACE_KEY, touch
     from ..reply.guard_reply_health import report_model_fault
     from ..integrations.guard_livingemotion import image_permission, image_followup
-    from .guard_image_failure import describe_failure, http_failure, REASONS
+    from .guard_image_failure import describe_failure, http_failure, payload_failure, REASONS
 except ImportError:
     from reply.guard_native_reply import NativeReplyError, revision
     from reply.guard_prompt_injection import preset_text, request_config
@@ -35,7 +35,7 @@ except ImportError:
     from observability.guard_request_trace import emit, TRACE_KEY, touch
     from reply.guard_reply_health import report_model_fault
     from integrations.guard_livingemotion import image_permission, image_followup
-    from images.guard_image_failure import describe_failure, http_failure, REASONS
+    from images.guard_image_failure import describe_failure, http_failure, payload_failure, REASONS
 
 TOOL_NAME = "livinghello_generate_image"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -961,8 +961,11 @@ class ImageSettings:
                         pass
                     failure = http_failure(response.status, detail)
                     self.plugin.logger.warning(
-                        "[LivingHello] 生图接口 HTTP %s reason=%s",
-                        response.status, failure.kind)
+                        "[LivingHello] 生图接口 HTTP %s reason=%s code=%s type=%s",
+                        response.status, failure.kind, failure.code or "-", failure.error_type or "-")
+                    if event:
+                        emit(event, "image_api", "failed", calls=1, reason=failure.kind,
+                             code=failure.code, error_type=failure.error_type)
                     raise failure
                 if response.content_length and response.content_length > MAX_IMAGE_BYTES * 2:
                     raise NativeReplyError("生图响应过大")
@@ -974,9 +977,20 @@ class ImageSettings:
                     chunks.append(chunk)
                 raw = b"".join(chunks)
                 payload = json.loads(raw)
+        try:
+            image_value = self.extract(payload, status=response.status)
+        except NativeReplyError as exc:
+            kind, _ = describe_failure(exc, requested=True)
+            code, error_type = getattr(exc, "code", ""), getattr(exc, "error_type", "")
+            self.plugin.logger.warning(
+                "[LivingHello] 生图响应 HTTP %s reason=%s code=%s type=%s",
+                response.status, kind, code or "-", error_type or "-")
+            if event:
+                emit(event, "image_api", "failed", calls=1, reason=kind,
+                     code=code, error_type=error_type)
+            raise
         if event:
             emit(event, "image_api", "success", calls=1, ms=round((time.monotonic()-started)*1000, 2))
-        image_value = self.extract(payload)
         data, mime = (await self._download(image_value, values["timeout_seconds"])
                       if image_value.startswith(("https://", "http://")) else self._image_bytes(image_value))
         folder = self.directory / "generated_images"
@@ -1021,9 +1035,11 @@ class ImageSettings:
         return ""
 
     @staticmethod
-    def extract(payload):
-        if not isinstance(payload, dict) or payload.get("error"):
+    def extract(payload, *, status=200):
+        if not isinstance(payload, dict):
             raise NativeReplyError("生图服务返回错误或无效响应")
+        if payload.get("error"):
+            raise payload_failure(status, payload)
         # 保留线上阿里百炼兼容响应：output.choices[].message.content[].image。
         out = payload.get("output")
         if isinstance(out, dict) and not payload.get("data") and not payload.get("choices"):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 
 try:
     from ..reply.guard_native_reply import NativeReplyError
@@ -11,26 +12,48 @@ except ImportError:
 
 
 class ImageRequestError(NativeReplyError):
-    def __init__(self, status, kind):
+    def __init__(self, status, kind, *, code="", error_type=""):
         super().__init__(f"生图接口HTTP {status}", status)
         self.kind = kind
+        self.code = code
+        self.error_type = error_type
+
+
+def _error_identifier(value):
+    """仅保留短错误标识；正文、地址及凭据形态不能进入日志。"""
+    if (not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", value) is None
+            or value.lower().startswith(("sk-", "sk_"))):
+        return ""
+    return value
+
+
+def payload_failure(status, payload):
+    """HTTP 成功不代表生图成功；两种响应分支共用错误体分类。"""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    error = error if isinstance(error, dict) else {}
+    code = _error_identifier(error.get("code"))
+    error_type = _error_identifier(error.get("type"))
+    if code.lower() == "content_policy_violation":
+        kind = "content_rejected"
+    elif status == 429 or code.lower() in {"rate_limit_exceeded", "rate_limited", "too_many_requests"}:
+        kind = "rate_limited"
+    elif (400 <= status < 500 or code.lower() in {
+            "invalid_api_key", "authentication_error", "permission_denied", "model_not_found",
+            "invalid_request_error", "invalid_parameter", "unsupported_model",
+    } or error_type.lower() in {"invalid_request_error", "authentication_error", "permission_error"}):
+        kind = "provider_error"
+    else:
+        # 未知上游错误仍可能已执行，不能凭 HTTP 200/5xx 自动重新收费。
+        kind = "result_unknown"
+    return ImageRequestError(status, kind, code=code, error_type=error_type)
 
 
 def http_failure(status, detail):
     try:
-        error = json.loads(detail).get("error", {})
-        code = error.get("code") if isinstance(error, dict) else ""
-    except (ValueError, AttributeError):
-        code = ""
-    if code == "content_policy_violation":
-        kind = "content_rejected"
-    elif status == 429:
-        kind = "rate_limited"
-    elif 400 <= status < 500:
-        kind = "provider_error"
-    else:
-        kind = "result_unknown"
-    return ImageRequestError(status, kind)
+        payload = json.loads(detail)
+    except (ValueError, TypeError):
+        payload = None
+    return payload_failure(status, payload)
 
 
 REASONS = {
