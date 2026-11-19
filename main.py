@@ -508,6 +508,7 @@ class Main(Star):
     def get_deferred_image_contract(self):
         """供承诺执行器使用；连接、额度与开关仍由本插件拥有。"""
         service = self._image_generation()
+        service.refresh()
         return {
             "contract": "livinghello.deferred-image.v1",
             "delivery_contract": "livinghello.deferred-image-delivery.v1",
@@ -515,6 +516,13 @@ class Main(Star):
                 not service._closed and not service.error
                 and service.values["enabled"] and service.values["daily_limit"] > 0),
         }
+
+    def get_image_prompt_mapping_contract(self):
+        """LE 只通过契约获取模型范围与调整次数，不跨插件读取配置。"""
+        return self._image_generation().prompt_policy()
+
+    def prepare_image_prompt_repair(self, prompt, proposal, *, expected_scope):
+        return self._image_generation().prepare_prompt_repair(prompt, proposal, expected_scope)
 
     async def generate_deferred_image(self, event, prompt):
         """只生成并交出待发图片，不触发普通回复的 after-sent 补图。

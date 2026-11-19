@@ -26,16 +26,18 @@ try:
     from ..integrations.guard_router_connections import router_connections, CHAT_TYPES
     from ..observability.guard_request_trace import emit, TRACE_KEY, touch
     from ..reply.guard_reply_health import report_model_fault
-    from ..integrations.guard_livingemotion import image_permission, image_followup
+    from ..integrations.guard_livingemotion import image_permission, image_followup, image_prompt_retry_ready
     from .guard_image_failure import describe_failure, http_failure, payload_failure, REASONS
+    from .guard_image_prompt import ImagePromptMapping, PromptReviewError
 except ImportError:
     from reply.guard_native_reply import NativeReplyError, revision
     from reply.guard_prompt_injection import preset_text, request_config
     from integrations.guard_router_connections import router_connections, CHAT_TYPES
     from observability.guard_request_trace import emit, TRACE_KEY, touch
     from reply.guard_reply_health import report_model_fault
-    from integrations.guard_livingemotion import image_permission, image_followup
+    from integrations.guard_livingemotion import image_permission, image_followup, image_prompt_retry_ready
     from images.guard_image_failure import describe_failure, http_failure, payload_failure, REASONS
+    from images.guard_image_prompt import ImagePromptMapping, PromptReviewError
 
 TOOL_NAME = "livinghello_generate_image"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -52,16 +54,23 @@ FIELDS = {
     "protocol": ("生图接口", "protocol", "标准图片接口使用images/generations和images/edits；对话生图接口使用chat/completions的image模态。"),
     "daily_limit": ("每日生图次数上限", "int", "全插件共用，按服务器本地自然日重置。每次上游请求计一次，失败和结果未知也计数；0禁止生图，重载不清零。"),
     "size": ("生成尺寸", "size", "使用服务支持的尺寸，建议分辨率范围512x512~2048x2048；可选自定义宽高。每次只请求1张图片。"),
-    "style_prompt": ("画面风格提示词（全局）", "text", "每次生图自动附加在描述之后，用来固定整套出图风格；留空则完全不附加。用户明确要求画风时以用户描述为准，本段作为补充。最多1000字；与描述合计超过4000字时只截断风格部分。"),
+    "style_prompt": ("画面风格提示词（全局）", "text", "每次生图自动附加在描述之后，用来固定整套出图风格；留空则完全不附加。用户明确要求画风时以用户描述为准，本段作为补充。最多1000字；启用映射默认总长900字，关闭后4000字，只截断风格部分。"),
     "follow_server_time": ("跟随服务器时间", "bool", "开启后每次生图自动把服务器当前时间（年月日、星期、时分）注入描述，让画面跟随现实昼夜、季节和节日；关闭则完全不附加。"),
+    "prompt_guard_enabled": ("启用提示词映射", "bool", "开启后发送前应用等义替换、长度规则与成功用词；关闭则沿用原描述。开启后在本页设置映射表路径，修改JSON即可热生效。姿势、场景变化需用户确认。"),
+    "prompt_guard_rules_path": ("提示词映射表路径", "string", "在插件数据目录放置image_prompt_rules.json；相对路径从该目录解析，也支持绝对路径。缺失使用内置规则，写坏保留有效规则。支持词语、简单正则、去重补充及调整提醒。"),
+    "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "0~2次，默认2。仅LE承诺执行器对明确内容拒绝或超长描述调用自身收尾模型调整等义用词；用尽后等待用户。每次实际生图仍计每日额度；超时、未知结果不补发。需在LE开启承诺兑现。"),
+    "prompt_guard_learn_enabled": ("记录并复用成功用词", "bool", "开启后按实际生图连接、模型及协议记录成功请求中使用的局部替换，后续自动复用；关闭停止记录与复用，保留已有数据。需开启提示词映射，记录保存在插件数据目录image_prompt_mappings.sqlite3。"),
     "timeout_seconds": ("生图超时（秒）", "int", "10~500秒，超时不会换上游补发，防止重复收费。原自主回复时效仍生效。"),
 }
 DEFAULTS = dict(enabled=False, provider_id="", model="", protocol="images",
                 daily_limit=20, size="1024x1024",
                 style_prompt="", follow_server_time=False,
+                prompt_guard_enabled=True, prompt_guard_rules_path="image_prompt_rules.json",
+                prompt_guard_retry_limit=2, prompt_guard_learn_enabled=True,
                 timeout_seconds=90)
 # 旧版磁盘配置缺少这些键时按默认值迁移，读取与保存共用。
-OPTIONAL_KEYS = {"style_prompt", "follow_server_time"}
+OPTIONAL_KEYS = {"style_prompt", "follow_server_time", "prompt_guard_enabled",
+                 "prompt_guard_rules_path", "prompt_guard_retry_limit", "prompt_guard_learn_enabled"}
 WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 
 
@@ -86,6 +95,9 @@ class ImageSettings:
         self._tool = None
         self._closed = False
         self._tasks = set()
+        self.prompt_mapping = ImagePromptMapping(
+            self.directory, prompt_overhead=lambda values:
+            len(self.timed_prompt("", values.get("follow_server_time", False))))
 
     @staticmethod
     def _mtime(path):
@@ -206,14 +218,41 @@ class ImageSettings:
                     fields=[dict(key=k, title=v[0], kind=v[1], help=v[2]) for k, v in FIELDS.items()],
                     providers=providers, revision=revision(self.values),
                     usage=dict(day=self.today(), used=used, limit=self.values["daily_limit"]),
-                    tool_name=TOOL_NAME, tool_ready=self._tool is not None)
+                    tool_name=TOOL_NAME, tool_ready=self._tool is not None,
+                    prompt_mapping=self.prompt_policy())
+
+    def prompt_policy(self):
+        self.refresh()
+        try:
+            return self.prompt_mapping.policy(self.values, self.connection(self.values))
+        except NativeReplyError:
+            return {"available": False, "reason": "选择生图模型后显示成功用词统计。"}
+
+    def prepare_prompt_repair(self, prompt, proposal, expected_scope):
+        self.refresh()
+        connection = self.connection(self.values)
+        if self.prompt_mapping.scope(self.values, connection) != expected_scope:
+            return {"status": "review", "notice": "生图模型已变化，需要重新确认画面。"}
+        return self.prompt_mapping.prepare_repair(self.values, connection, prompt, proposal)
+
+    def observe_prompt(self, event, request_id, status):
+        if not (self.values.get("prompt_guard_enabled", True)
+                and self.values.get("prompt_guard_learn_enabled", True)):
+            return
+        try:
+            self.prompt_mapping.observe(request_id, event.get_extra("_livinghello_prompt_guard"), status)
+        except (OSError, sqlite3.Error):
+            # 记录失败不能把已生成的图片当作未知结果，避免重复收费。
+            self.plugin.logger.warning("[LH-img] 成功用词记录失败")
 
     @staticmethod
     def _validate(values):
         for key, value in values.items():
             valid = False
-            if key in {"enabled", "follow_server_time"}:
+            if key in {"enabled", "follow_server_time", "prompt_guard_enabled", "prompt_guard_learn_enabled"}:
                 valid = isinstance(value, bool)
+            elif key == "prompt_guard_retry_limit":
+                valid = type(value) is int and 0 <= value <= 2
             elif key in {"daily_limit", "timeout_seconds"}:
                 low, high = (0, 1000) if key == "daily_limit" else (10, 500)
                 valid = isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
@@ -340,6 +379,12 @@ class ImageSettings:
         # Descriptor edits are request-local; the cached tool's callable/schema stay intact.
         tool = copy.copy(tool)
         tool.description = preset_text(prompt_config, "prompt_image_description")
+        # 显式自定义/关闭工具说明时保持原样；仅为默认说明补充当前表的长度建议。
+        if (self.values.get("prompt_guard_enabled", True) and tool.description
+                and not str(prompt_config.get("prompt_image_description_text") or "").strip()):
+            limits = self.prompt_mapping.rules(self.values)["limits"]
+            tool.description += (f"生图描述尽量在{limits['desc_soft']}字以内，"
+                                 "保留人物、场景、风格与必要动作；用简洁表情词，避免重复堆叠细节。")
         # 复制工具集，避免在共享人格工具集中污染其他请求。
         tools = ToolSet()
         for existing in getattr(getattr(req, "func_tool", None), "tools", []):
@@ -604,6 +649,12 @@ class ImageSettings:
             use_reference=job["use_reference"], notified=False,
             request_id=request_id or hashlib.sha256(
                 (str(event.unified_msg_origin) + source + job["prompt"]).encode()).hexdigest())
+        guard = event.get_extra("_livinghello_prompt_guard") or {}
+        failure.update(original_prompt=event.get_extra("_livinghello_image_original_prompt") or job["prompt"],
+                       attempted_prompt=guard.get("prompt", job["prompt"]),
+                       prompt_retry_count=int(event.get_extra("_livinghello_prompt_retry_count") or 0))
+        if guard.get("notice"):
+            failure["notice"] = guard["notice"]
         event.set_extra("_livinghello_image_failure", failure)
         return failure
 
@@ -614,7 +665,21 @@ class ImageSettings:
         event.set_extra("_livinghello_failure_notice_attempted", True)
         from astrbot.api.message_components import Plain
         reason = failure["reason"]
-        if failure["kind"] == "content_rejected":
+        policy = self.prompt_policy()
+        retry = (policy.get("enabled") and policy.get("retry_limit", 0) > 0
+                 and failure["kind"] in {"content_rejected", "prompt_too_long"}
+                 and not failure["use_reference"]
+                 and await image_prompt_retry_ready(
+                     self.context, event, getattr(self.plugin, "config", None)))
+        if self.blocked(event):
+            return
+        if retry:
+            reason = "这张还没弄好，我先保留你要的画面。"
+        elif failure["kind"] == "prompt_adjustment_required":
+            reason = failure.get("notice") or "画面需要调整，你想怎么改，还是这次就算了？"
+        elif failure["kind"] == "prompt_too_long":
+            reason += "你想简化一下画面，还是这次就算了？"
+        elif failure["kind"] == "content_rejected":
             if int(failure.get("adjustment_round") or 0) > 0:
                 reason = ("按你刚才改的想法又试了一下，还是没能弄好，有些内容我暂时做不了。"
                           "我先停在这里。你想再调整一下，还是这次就算了？")
@@ -632,7 +697,8 @@ class ImageSettings:
             return
         failure["notified"] = True
         # 与失败说明同一条发送：LE 能持久区分“已说明失败”和“已问怎样调整”。
-        failure["adjustment_asked"] = failure["kind"] == "content_rejected"
+        failure["adjustment_asked"] = failure["kind"] in {
+            "content_rejected", "prompt_adjustment_required", "prompt_too_long"} and not retry
         receipt = await image_followup(self.context, event, getattr(self.plugin, "config", None))
         job["followup"] = receipt
         emit(event, "image_followup", "success" if receipt else "unavailable",
@@ -683,6 +749,7 @@ class ImageSettings:
                 clear(event)
 
     async def generate(self, event, prompt, use_reference=False, *, _execute=False):
+        self.refresh()
         if getattr(self.plugin, "_livinghello_detached_enabled", False) and not _execute:
             return await self.prepare_image_job(event, prompt, use_reference)
         service = event.get_extra(TRACE_KEY)
@@ -713,6 +780,7 @@ class ImageSettings:
             outcome("rejected", permission.get("reason", "relationship_unavailable"))
             return "当前关系不接受个人生图请求或许可无法核验，请自然婉拒；不要承诺或换工具重试。"
         event.set_extra("_livinghello_image_failure", None)
+        event.set_extra("_livinghello_prompt_guard", None)
         values = copy.deepcopy(self.values)
         request_id = None
         task = asyncio.current_task()
@@ -733,6 +801,13 @@ class ImageSettings:
                     return "回复或生图配置已变化，未请求生图。"
                 # 参考图下载可能跨过模型重载；请求前重新解析当前注册连接。
                 connection = self.connection(values)
+                guarded = self.prompt_mapping.apply(values, connection, prompt.strip(),
+                                                    event.get_extra("_livinghello_image_prompt_repair"))
+                guarded["original"] = event.get_extra("_livinghello_image_original_prompt") or prompt.strip()
+                guarded["styled_prompt"] = self.prompt_body(values, guarded)
+                event.set_extra("_livinghello_prompt_guard", guarded)
+                emit(event, "prompt_guard", "success", before=len(prompt.strip()),
+                     after=len(guarded["prompt"]), types=guarded["hits"], model=connection[2])
                 request_id = self.reserve(event, prompt.strip(), use_reference)
             if not request_id:
                 terminal_status, terminal_reason = "skipped", "duplicate_image_call"
@@ -741,6 +816,7 @@ class ImageSettings:
             emit(event, "image_preflight", "success")
             image, revised = await asyncio.wait_for(self._request(
                 values, connection, prompt.strip(), reference), values["timeout_seconds"])
+            self.observe_prompt(event, request_id, "success")
             if self.blocked(event) or not self.values["enabled"]:
                 self.mark(request_id, "cancelled")
                 terminal_status, terminal_reason = "cancelled", "reply_cancelled_after_generation"
@@ -760,6 +836,9 @@ class ImageSettings:
                 "use_reference": use_reference,
                 "created": time.time(),
                 "revised": revised,
+                "original_prompt": event.get_extra("_livinghello_image_original_prompt") or prompt.strip(),
+                "effective_prompt": guarded["prompt"],
+                "prompt_scope": guarded["scope"],
             })
             terminal_status, terminal_reason = "success", "image_queued"
             # count 记录回传画法的字符数，0 表示上游没给 revised_prompt。
@@ -782,7 +861,7 @@ class ImageSettings:
                 terminal_reason = "quota_exhausted"
                 emit(event, "image_quota", "skipped", reason=terminal_reason)
             emit(event, "image_error", terminal_status, reason=terminal_reason, error_type=type(exc).__name__)
-            if terminal_reason != "quota_exhausted":
+            if terminal_reason != "quota_exhausted" and not isinstance(exc, PromptReviewError):
                 # 额度用尽属于产品限制，不是模型故障，不打扰管理员。
                 report_model_fault(self.plugin, "image_gen", terminal_status,
                                    str(exc)[:80], event)
@@ -791,12 +870,16 @@ class ImageSettings:
                 if row.get("features", {}).get("image_api", {}).get("status") == "running":
                     emit(event, "image_api", terminal_status, reason=terminal_reason)
             if request_id:
+                self.observe_prompt(event, request_id, getattr(exc, "kind", ""))
                 self.mark(request_id, "failed" if getattr(exc, "kind", None) in {
                     "content_rejected", "rate_limited", "provider_error"} else "unknown")
             # 错误只展示受控提示，不将URL、密钥或服务响应正文送给模型。
             kind, reason = describe_failure(exc, requested=bool(request_id))
             if terminal_reason == "quota_exhausted":
                 kind, reason = "quota_exhausted", REASONS["quota_exhausted"]
+            if isinstance(exc, PromptReviewError):
+                event.set_extra("_livinghello_prompt_guard", {"notice": exc.notice})
+                emit(event, "prompt_guard", "review", before=len(prompt.strip()), reason=kind)
             self._image_failure(event, dict(prompt=prompt.strip(), use_reference=use_reference),
                                 kind, request_id)
             charged = "本次已请求，仍计额度。" if request_id else "本次未请求生图，不计额度。"
@@ -917,9 +1000,11 @@ class ImageSettings:
         import aiohttp
         base, key, model = connection
         headers = {"Authorization": f"Bearer {key}"}
-        prompt = self.styled_prompt(
-            self.timed_prompt(prompt, values.get("follow_server_time", False)),
-            values.get("style_prompt", ""))
+        event = IMAGE_EVENT.get()
+        guarded = event.get_extra("_livinghello_prompt_guard") if event else None
+        if not guarded or "prompt" not in guarded:
+            guarded = self.prompt_mapping.apply(values, connection, prompt)
+        prompt = guarded.get("styled_prompt") or self.prompt_body(values, guarded)
         request = dict(model=model, prompt=prompt, n=1, size=values["size"])
         protocol = values["protocol"]
         if protocol == "chat_images":
@@ -1003,6 +1088,15 @@ class ImageSettings:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
         return Path(filename), self.revised(payload)
+
+    def prompt_body(self, values, guarded):
+        limit = guarded.get("limits", {}).get("total_hard", MAX_PROMPT_CHARS)
+        timed = self.timed_prompt(guarded["prompt"], values.get("follow_server_time", False))
+        if len(timed) > limit:
+            raise PromptReviewError("prompt_too_long", "描述和时间信息过长，需要缩短画面描述。")
+        # 总长只裁全局风格，永远不静默截断用户画面描述。
+        style = values.get("style_prompt", "")[:max(0, limit - len(timed) - 1)]
+        return self.styled_prompt(timed, style)
 
     @staticmethod
     def revised(payload):

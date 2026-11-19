@@ -1,0 +1,243 @@
+"""局部映射、热更新、模型隔离、成功学习及请求前熔断；无收费请求。"""
+import copy
+import json
+import logging
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+import unittest
+from unittest.mock import AsyncMock, patch
+
+from images.guard_image_prompt import ImagePromptMapping, PromptReviewError, substitutions
+from images.guard_image_settings import DEFAULTS, ImageSettings
+from reply.guard_native_reply import NativeReplyError
+from test_image_generation import Event
+
+
+class MappingTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.mapping = ImagePromptMapping(self.root)
+        self.values = {**DEFAULTS, "provider_id": "image-native"}
+        self.connection = ("https://example.invalid/v1", "never-persist-this-key", "image-one")
+
+    def apply(self, prompt, **kwargs):
+        return self.mapping.apply(self.values, self.connection, prompt, **kwargs)
+
+    def table(self, rules, **changes):
+        data = {"version": 1, "rules": rules, **changes}
+        (self.root / "image_prompt_rules.json").write_text(json.dumps(data))
+
+    def repair(self, source="blouse", target="shirt", prompt="blue blouse"):
+        return self.mapping.prepare_repair(self.values, self.connection, prompt, {
+            "changes_scene": False, "substitutions": [{"from": source, "to": target}]})
+
+    def test_missing_table_uses_builtin_and_preserves_original(self):
+        result = self.apply("blue neckline, garden")
+        self.assertEqual(result["original"], "blue neckline, garden")
+        self.assertEqual(result["prompt"], "blue collar, garden")
+        self.assertTrue(self.mapping.warning)
+
+    def test_tokens_have_word_boundaries_and_ignore_case(self):
+        self.assertEqual(self.apply("NECKLINE necklineish")["prompt"], "collar necklineish")
+
+    def test_regex_keeps_next_clause(self):
+        self.table([{"id": "short", "type": "regex", "pattern": r"extra detail[^,.;\n]*", "to": "detail"}])
+        self.assertEqual(self.apply("extra detail many words, garden; cat")["prompt"], "detail, garden; cat")
+
+    def test_injection_is_idempotent(self):
+        self.table([{"id": "body", "type": "inject_if_missing", "pattern": "完整身体", "to": "完整身体"}])
+        first = self.apply("猫")["prompt"]
+        self.assertEqual(self.apply(first)["prompt"], first)
+        self.assertEqual(first.count("完整身体"), 1)
+
+    def test_blocklist_does_not_delete_or_charge(self):
+        self.table([], blocklist=["forbidden"])
+        with self.assertRaises(PromptReviewError) as error:
+            self.apply("cat forbidden garden")
+        self.assertEqual(error.exception.kind, "prompt_adjustment_required")
+
+    def test_pose_rule_waits_for_confirmation(self):
+        self.table([{"id": "pose", "type": "token", "from": "symmetrical", "to": "asymmetrical",
+                     "requires_confirmation": True, "notice": "建议换成非对称站姿，需要确认。"}])
+        with self.assertRaisesRegex(PromptReviewError, "调整") as error:
+            self.apply("symmetrical standing cat")
+        self.assertIn("非对称", error.exception.notice)
+        self.table([{"id": "pose", "type": "token", "from": "symmetrical", "to": "asymmetrical"}])
+        with self.assertRaises(PromptReviewError):
+            self.apply("symmetrical standing cat")
+
+    def test_advisory_preserves_scene(self):
+        self.table([{"id": "pose", "type": "advisory", "pattern": "对称站姿", "notice": "站姿需要确认。"}])
+        with self.assertRaises(PromptReviewError):
+            self.apply("对称站姿")
+
+    def test_hot_reload_and_corrupt_file_keep_good_rules(self):
+        self.table([{"id": "one", "type": "token", "from": "cat", "to": "kitty"}])
+        self.assertEqual(self.apply("cat")["prompt"], "kitty")
+        (self.root / "image_prompt_rules.json").write_text("{broken")
+        self.assertEqual(self.apply("cat")["prompt"], "kitty")
+        self.assertTrue(self.mapping.warning)
+        self.table([{"id": "two", "type": "token", "from": "cat", "to": "feline"}])
+        self.assertEqual(self.apply("cat")["prompt"], "feline")
+
+    def test_unsafe_regex_is_rejected(self):
+        for regex in ("(a+)+$", r"a+a+a+$", r"(foo)\1"):
+            with self.subTest(regex=regex), self.assertRaises(ValueError):
+                ImagePromptMapping.validate_table({"version": 1, "rules": [
+                    {"id": "bad", "type": "regex", "pattern": regex, "to": "cat"}]})
+
+    def test_length_limit_is_explicit_and_can_be_disabled(self):
+        with self.assertRaises(PromptReviewError) as error:
+            self.apply("猫" * 501)
+        self.assertEqual(error.exception.kind, "prompt_too_long")
+        self.values["prompt_guard_enabled"] = False
+        self.assertEqual(self.apply("猫" * 4000)["prompt"], "猫" * 4000)
+
+    def test_proposals_do_not_learn_before_success(self):
+        recipe = self.repair()
+        self.assertEqual(recipe["status"], "ready")
+        result = self.apply("blue blouse", repair=recipe)
+        self.assertEqual(result["prompt"], "blue shirt")
+        self.assertEqual(self.mapping.learned(result["scope"]), [])
+
+    def test_success_is_persistent_idempotent_and_model_scoped(self):
+        result = self.apply("blue blouse", repair=self.repair())
+        self.mapping.observe("r1", result, "success")
+        self.mapping.observe("r1", result, "success")
+        restored = ImagePromptMapping(self.root)
+        self.assertEqual(restored.learned(result["scope"])[0]["successes"], 1)
+        self.assertEqual(restored.apply(self.values, self.connection, "red blouse")["prompt"], "red shirt")
+        other = (self.connection[0], self.connection[1], "image-two")
+        self.assertEqual(restored.apply(self.values, other, "red blouse")["prompt"], "red blouse")
+        another_api = ("https://other.invalid/v1", self.connection[1], "image-one")
+        self.assertEqual(restored.apply(self.values, another_api, "red blouse")["prompt"], "red blouse")
+        self.assertNotIn(self.connection[1].encode(), self.mapping.ledger.read_bytes())
+
+    def test_rejection_retires_failed_learned_pair(self):
+        first = self.apply("blue blouse", repair=self.repair())
+        self.mapping.observe("ok", first, "success")
+        second = self.apply("red blouse")
+        self.mapping.observe("bad", second, "content_rejected")
+        self.assertEqual(self.apply("red blouse")["prompt"], "red blouse")
+
+    def test_failure_timeout_and_delivery_do_not_learn(self):
+        result = self.apply("blue blouse", repair=self.repair())
+        for status in ("content_rejected", "unknown", "timeout", "delivery_unknown"):
+            self.mapping.observe(status, result, status)
+        self.assertEqual(self.mapping.learned(result["scope"]), [])
+
+    def test_model_change_rejects_prepared_candidate(self):
+        recipe = self.repair()
+        self.connection = (self.connection[0], self.connection[1], "image-two")
+        with self.assertRaises(PromptReviewError):
+            self.apply("blue blouse", repair=recipe)
+
+    def test_meaning_change_deletion_and_malformed_proposals_are_not_auto_applied(self):
+        proposals = [
+            {"changes_scene": True, "substitutions": []},
+            {"changes_scene": False, "substitutions": [{"from": "blouse", "to": ""}]},
+            {"changes_scene": False, "substitutions": [{"from": "standing", "to": "sitting"}]},
+            {"changes_scene": False, "substitutions": [{"from": "blouse", "to": "naked"}]},
+        ]
+        for proposal in proposals:
+            with self.subTest(proposal=proposal):
+                result = self.mapping.prepare_repair(self.values, self.connection,
+                                                     "standing blue blouse", proposal)
+                self.assertNotEqual(result["status"], "ready")
+
+    def test_shortening_has_no_reusable_rule(self):
+        recipe = self.mapping.prepare_repair(self.values, self.connection, "猫" * 501,
+                                            {"changes_scene": False, "shortened_prompt": "猫"})
+        self.assertEqual((recipe["prompt"], recipe["candidates"]), ("猫", []))
+
+    def test_simultaneous_replacements_do_not_cascade(self):
+        self.assertEqual(substitutions("cat kitty", [{"from": "cat", "to": "kitty"},
+                                                     {"from": "kitty", "to": "feline"}]), "kitty feline")
+
+
+class MappingGenerationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        native = SimpleNamespace(provider_config={"id": "image", "type": "openai",
+            "api_base": "https://example.invalid/v1", "key": "offline-only"}, get_model=lambda: "image-one")
+        plugin = SimpleNamespace(context=SimpleNamespace(get_all_providers=lambda: [native]),
+            data_dir=self.root, logger=logging.getLogger("image-prompt-test"),
+            _delivery=lambda: SimpleNamespace(recalled=lambda _: False),
+            _judged_event=lambda _: False, _gate_mode=lambda: "enforce")
+        self.service = ImageSettings(plugin)
+        self.service.values.update(enabled=True, provider_id="image")
+        output = self.root / "cat.png"
+        output.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+        self.service._request = AsyncMock(return_value=(output, ""))
+
+    async def test_long_description_is_rejected_before_quota(self):
+        event = Event()
+        await self.service.generate(event, "猫" * 501, _execute=True)
+        self.assertEqual(event.get_extra("_livinghello_image_failure")["kind"], "prompt_too_long")
+        self.assertEqual(self.service.used(), 0)
+        self.service._request.assert_not_awaited()
+
+    async def test_repaired_generation_records_only_valid_success(self):
+        recipe = self.service.prepare_prompt_repair("blue blouse",
+            {"changes_scene": False, "substitutions": [{"from": "blouse", "to": "shirt"}]},
+            self.service.prompt_policy()["scope"])
+        event = Event()
+        event.set_extra("_livinghello_image_prompt_repair", recipe)
+        await self.service.generate(event, "blue blouse", _execute=True)
+        self.assertEqual(self.service.prompt_policy()["learned_count"], 1)
+        pending = event.get_extra("_livinghello_pending_image")
+        self.assertEqual((pending["original_prompt"], pending["effective_prompt"]), ("blue blouse", "blue shirt"))
+        self.assertEqual(self.service.used(), 1)
+
+    async def test_style_total_limit_keeps_entire_description(self):
+        self.service.values["style_prompt"] = "风" * 1000
+        event = Event()
+        await self.service.generate(event, "猫" * 500, _execute=True)
+        guarded = event.get_extra("_livinghello_prompt_guard")
+        self.assertEqual(len(guarded["styled_prompt"]), 900)
+        self.assertTrue(guarded["styled_prompt"].startswith("猫" * 500 + "\n"))
+
+    async def test_time_overhead_reduces_shortening_budget_before_quota(self):
+        self.service.values["follow_server_time"] = True
+        (self.root / "image_prompt_rules.json").write_text(json.dumps({
+            "version": 1, "rules": [],
+            "limits": {"desc_soft": 100, "desc_hard": 100, "total_hard": 100}}))
+        policy = self.service.prompt_policy()
+        budget = 100 - len(self.service.timed_prompt("", True))
+        self.assertEqual(policy["limits"]["desc_hard"], budget)
+        event = Event()
+        await self.service.generate(event, "猫" * 100, _execute=True)
+        self.assertEqual(event.get_extra("_livinghello_image_failure")["kind"], "prompt_too_long")
+        self.assertEqual(self.service.used(), 0)
+        recipe = self.service.prepare_prompt_repair("猫" * 100,
+            {"changes_scene": False, "shortened_prompt": "猫" * budget}, policy["scope"])
+        self.assertEqual(recipe["status"], "ready")
+        retry = Event()
+        retry.set_extra("_livinghello_image_prompt_repair", recipe)
+        await self.service.generate(retry, "猫" * 100, _execute=True)
+        self.assertEqual(len(retry.get_extra("_livinghello_prompt_guard")["styled_prompt"]), 100)
+        self.assertEqual(self.service.used(), 1)
+
+    async def test_retry_config_has_same_save_and_load_limits(self):
+        for value in (-1, 3, True, 1.5):
+            with self.subTest(value=value), self.assertRaises(NativeReplyError):
+                ImageSettings._validate({**DEFAULTS, "prompt_guard_retry_limit": value})
+        old = {k: v for k, v in DEFAULTS.items() if not k.startswith("prompt_guard_")}
+        self.service.path.write_text(json.dumps(old))
+        self.assertTrue(ImageSettings._load(self.service.path)["prompt_guard_enabled"])
+
+    async def test_ready_le_notice_defers_adjustment_question_until_retry_exhaustion(self):
+        event = Event()
+        job = {"prompt": "cat", "use_reference": False, "emotion": None}
+        failure = self.service._image_failure(event, job, "content_rejected")
+        with patch("images.guard_image_settings.image_prompt_retry_ready", AsyncMock(return_value=True)), \
+                patch("images.guard_image_settings.image_followup", AsyncMock(return_value={"task_status": "scheduled"})):
+            await self.service._notify_image_failure(event, job, failure)
+        self.assertFalse(failure["adjustment_asked"])
+        self.assertEqual(job["followup"]["task_status"], "scheduled")
+        self.assertEqual(event.send.await_count, 1)

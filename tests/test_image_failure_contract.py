@@ -125,7 +125,8 @@ class ImageFailureFlowTests(unittest.IsolatedAsyncioTestCase):
                     event.send.assert_awaited_once()
                     handoff.assert_awaited_once()
                     self.assertTrue(failure["notified"])
-                    self.assertEqual(failure["adjustment_asked"], kind == "content_rejected")
+                    self.assertEqual(failure["adjustment_asked"], kind in {
+                        "content_rejected", "prompt_too_long", "prompt_adjustment_required"})
         self.service._request.assert_not_awaited()
 
     async def test_unaccepted_failure_notice_never_hands_off_or_resends(self):

@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.11-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.8.0-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -199,10 +199,11 @@ https://github.com/AKIhunter/astrbot_plugin_livinghello
 
 连接复用宿主或路由已配置的地址和密钥，不依赖 BiliBot。[详细设置](docs/usage.md#配置独立ai生图)。
 
-拍照、自拍或画图被内容规则拒绝时，会用日常说法问怎样调整或是否取消；改过仍失败，
-再由你选择。开启 LivingEmotion 接入并使用 **LE 0.4.1**，可以保留原图片等待调整，
-避免重复追问和重复生图。纯“好的 / 再试一次”不恢复，未知结果先核对。
-[失败分类、配置与升级](docs/image-failure-followup.md)。
+提示词映射默认开启，外部 JSON 自动读取，成功用词按实际生图连接、模型和协议记录并复用。
+配套 **LE 0.5.0** 并开启承诺兑现后，明确内容拒绝或描述超长可由 LE 收尾模型调整等义用词，
+最多两次；需改变画面或次数耗尽时问你调整还是取消。纯“好的 / 再试一次”不恢复等待图片，
+未知结果先核对。[映射配置与重试](docs/image-prompt-mapping.md)；
+未开启自动调整时沿用[失败交接](docs/image-failure-followup.md)。
 
 <a name="flow"></a>
 
@@ -367,8 +368,9 @@ flowchart TD
 
 ## 📦 更新日志
 
-当前版本 **2.7.11**：生图失败只发一次普通说明，待办交接后不再追加等待提示；
-502、超时等未知结果仍等待核对。[行为与验证](docs/image-failure-notice.md)。
+当前版本 **2.8.0**：新增提示词映射、发送前长度校验及按模型复用成功用词；
+配套 LE 0.5.0 对同一图片承诺最多自动调整两次，需改变画面时等待确认。
+旧生图配置自动补齐四个字段，原额度保留。[配置、迁移与边界](docs/image-prompt-mapping.md)。
 
 2.7.9 限制图片实际解码像素和并发，OCR先截取再拼接，长正文及畸形JSON有界清理；
 技术片段保留代码缩进和标点。[修复边界与验收](docs/boundary-safety.md)。
@@ -410,6 +412,6 @@ README 提供中英双语入门；下面的详细文档主要为中文，代码�
 
 </div>
 
-## 2.7.11 更新日志
+## 2.8.0 更新日志
 
-预置与边界修复的用法见[本版说明](docs/stability-2.7.11.md)，变化见[更新日志](CHANGELOG.md)。
+生图映射与成功用词见[本版说明](docs/image-prompt-mapping.md)，变化见[更新日志](CHANGELOG.md)。

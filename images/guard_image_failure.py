@@ -57,6 +57,8 @@ def http_failure(status, detail):
 
 
 REASONS = {
+    "prompt_too_long": "描述太长，我先保留画面要点再整理一下。",
+    "prompt_adjustment_required": "这张的画面需要你确认调整，我先停在这里。",
     "content_rejected": "这张没能弄好，有些内容我暂时做不了。",
     "rate_limited": "这会儿还做不了，这张还没开始。",
     "provider_error": "这次没能开始，我先停一下，看看哪里出了岔子。",

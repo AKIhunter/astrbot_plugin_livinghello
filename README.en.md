@@ -7,7 +7,7 @@
 ![LivingHello — pixel robot, message, decide, reply](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.7.11-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.8.0-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -203,10 +203,12 @@ When enabled and available, the image tool can be provided in both group and pri
 
 Connections reuse the host or router’s configured endpoint and credentials. BiliBot is not required. [Detailed setup](docs/usage.md#配置独立ai生图).
 
-Content-rejected photos, selfies and drawings ask what to change or whether to cancel.
-With LivingEmotion integration enabled and **LE 0.4.1**, the original image waits for
-a concrete revision. Repeated rejection offers the choice again; “OK” or “try again” does
-not resume it. Unknown results require verification. [Behavior and upgrade (Chinese)](docs/image-failure-followup.md).
+Prompt mapping is enabled by default. It reloads a JSON rule table automatically and reuses
+successful wording for the same image connection, model and protocol. With **LE 0.5.0**
+and promise fulfillment enabled, explicit content rejection or excessive prompt length allows
+up to two equivalent wording adjustments through LE's closing model. Scene changes or exhausted
+attempts wait for your revision or cancellation. Unknown results are not repeated.
+[Configuration and retry boundaries (Chinese)](docs/image-prompt-mapping.md).
 
 <a name="flow"></a>
 
@@ -370,9 +372,10 @@ Find a recent record in **Overview**, copy its `request_id`, and inspect receivi
 
 ## 📦 Changelog
 
-Current version **2.7.11** adds editable prompt presets and fixes model cache and
-LivingEmotion handoff boundaries. Media errors retain the text fallback.
-[Usage and boundaries (Chinese)](docs/stability-2.7.11.md).
+Current version **2.8.0** adds prompt mapping, length checks and model-scoped successful wording.
+LE 0.5.0 can make up to two equivalent wording adjustments for the same image promise.
+Older image settings gain four default fields without resetting their quota.
+[Configuration and boundaries (Chinese)](docs/image-prompt-mapping.md).
 
 Version 2.7.9 limits decoded image pixels and concurrency, clips OCR before
 joining text, and bounds cleanup of long or malformed input while preserving technical

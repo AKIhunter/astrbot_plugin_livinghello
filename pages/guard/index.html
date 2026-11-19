@@ -1341,6 +1341,12 @@
       setup:"本页 → AI生图，选择实际支持生图的模型，并设置接口、额度、尺寸和超时。"},
     follow_server_time: {on:"生图描述附加服务器日期、星期和时分。",
       off:"不附加服务器时间。",setup:"本页 → AI生图；同时开启 AI 生图，服务器时区决定这里的时间。"},
+    prompt_guard_enabled: {on:"发送前应用等义映射、长度规则和当前模型的成功用词。",
+      off:"使用原描述，暂停映射和学习。",setup:"本页 → AI生图 → 提示词映射表路径；JSON修改后自动生效。"},
+    prompt_guard_learn_enabled: {on:"记录成功请求中的局部替换，后续同一连接和模型自动复用。",
+      off:"停止记录与复用，保留历史。",setup:"本页 → AI生图；同时开启提示词映射。数据在插件数据目录image_prompt_mappings.sqlite3。"},
+    prompt_guard_retry_limit: {setup:"本页 → AI生图，填0~2；需在LE开启承诺兑现，使用LE收尾模型。"},
+    prompt_guard_rules_path: {setup:"在插件数据目录放置image_prompt_rules.json；格式见docs/image-prompt-mapping.md。"},
   };
   function nativeFieldHelp(field, prefix) {
     const setup = prefix === "image-" ? "本页 → AI生图；保存更新后生效。"
@@ -1447,6 +1453,8 @@
     }
     if (key==="daily_limit") {input.min="0";input.max="1000";}
     if (key==="timeout_seconds") {input.min="10";input.max="500";}
+    if (key==="prompt_guard_retry_limit") {input.min="0";input.max="2";}
+    if (key==="prompt_guard_rules_path") input.maxLength=200;
     input.disabled = nativeSaving || nativeLoading || state.saving;
     const cell = document.createElement("div"); cell.className = kind === "bool" ? "native-toggle" : "field-control";
     cell.append(kind === "bool" ? switchLabel(input) : input);
@@ -1522,6 +1530,11 @@
         ? imageData.scope + "。今日已用 " + imageData.usage.used + " / " + imageData.usage.limit
           + " 次。主模型按需调用，图生图使用本次输入图片。"
         : imageData.reason;
+      if (imageData.prompt_mapping?.contract) {
+        const mapping=imageData.prompt_mapping;
+        el("imageSettingsStatus").textContent += " 当前模型成功用词 " + mapping.learned_count
+          + " 条。" + (mapping.warning || "");
+      }
       if (imageData.available) imageData.fields.forEach(f=>
         el("imageSettingsFields").append(settingsControl(f,imageData,imageDraft,"image-")));
     }
@@ -3535,7 +3548,7 @@
       const eventsSummary=document.createElement("summary");eventsSummary.textContent="展开完整工具与发送事件";
       eventsDisclosure.appendChild(eventsSummary);
       const events=document.createElement("ol");events.className="trace-list";
-      (trace.events||[]).filter(e=>["tools","image_tool","image_api","image_preflight","image_quota","image_delivery",
+      (trace.events||[]).filter(e=>["tools","image_tool","image_api","image_preflight","prompt_guard","image_quota","image_delivery",
         "image_download","send","delivery","context_revision","agent_done","lifecycle"].includes(e.feature)).forEach(e=>{
         const li=document.createElement("li");
         li.textContent=new Date(e.at*1000).toLocaleTimeString()+" · "+(TRACE_NAMES[e.feature]||e.feature)+" · "+
@@ -3905,7 +3918,7 @@
           examples: ["选 1536x1024：请求横版图片。",
                      "自定义 768x1344：请求竖版图片，宽高都在允许范围内。"] },
         { name: "画面风格提示词（全局）", key: "style_prompt",
-          desc: "每次生图附加在用户描述之后，最多 1000 字；用户当轮明确要求画风时以用户描述为准。描述与风格合计超过 4000 字时只截断风格部分。",
+          desc: "每次生图附加在用户描述之后，最多 1000 字；用户当轮明确要求画风时以用户描述为准。启用映射默认总长 900 字，关闭后 4000 字；只截断风格部分。",
           examples: ["填「像素游戏画面，16位色，硬边像素，无抗锯齿」：所有生图都追加该画风。",
                      "留空：只发送用户描述，不附加全局风格。"] },
         { name: "跟随服务器时间", key: "follow_server_time",
@@ -3916,6 +3929,8 @@
           desc: "单次生图请求的等待上限，范围 10–500 秒；超时不自动重试或切换上游，避免重复收费。",
           examples: ["设 90：等待 90 秒仍未返回就按失败处理。",
                      "设 300：给较慢的生图服务更多时间，但用户等待也更久。"] },
+        ...(imageData?.fields || []).filter(field=>field.key.startsWith("prompt_guard_"))
+          .map(field=>({key:field.key,name:field.title,...nativeFieldHelp(field,"image-")})),
       ],
     },
     {

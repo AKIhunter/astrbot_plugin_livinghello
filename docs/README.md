@@ -13,6 +13,7 @@
 | 配置文生图、图生图和每日共享次数 | [生图操作](usage.md#配置独立ai生图)及[生图参数](configuration.md#独立ai生图) |
 | 图片内容拒绝后的调整、取消与双插件升级 | [失败交接说明](image-failure-followup.md) |
 | 生图失败后普通说明的发送次数与边界 | [失败通知说明](image-failure-notice.md) |
+| 提示词映射、按模型复用成功用词与有限自动调整 | [生图映射说明](image-prompt-mapping.md)（LH 2.8.0 / LE 0.5.0） |
 | 图片解码、OCR长度、长正文和代码缩进保护 | [边界修复说明](boundary-safety.md) |
 | 只按流水条数、关闭时间过滤 | [上下文设置](usage.md#只限制流水条数) |
 | 单独理解接话判断、评分、否决、阈值和图片补证 | [判断逻辑说明](decision-logic.md) |

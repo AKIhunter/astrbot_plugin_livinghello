@@ -187,3 +187,18 @@ async def image_followup(context, event, config=None, *, promise_id=None, prompt
     except Exception:
         # 可能已落库但回执超时；重交原请求只会拿到同一条待办。
         return None
+
+
+async def image_prompt_retry_ready(context, event, config=None):
+    """发送失败说明前核验 LE 能否承接改词；旧版或独立模式保留调整询问。"""
+    api, scope = await _current(context, event, "get_image_prompt_retry_policy", config)
+    if api is None:
+        return False
+    try:
+        value = await asyncio.wait_for(api.get_image_prompt_retry_policy(scope, event=event), API_TIMEOUT)
+        return bool(_same_request(context, event, api, scope)
+                    and isinstance(value, dict) and value.get("status") == "ok"
+                    and value.get("contract") == "livingemotion.image-prompt-retry.v1"
+                    and isinstance(value.get("data"), dict) and value["data"].get("allowed") is True)
+    except Exception:
+        return False
