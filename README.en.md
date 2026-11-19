@@ -2,7 +2,7 @@
 
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
-[![Version](https://img.shields.io/badge/version-2.9.1-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.2-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -17,9 +17,15 @@ Install on AstrBot 4.29.1 or later and open `guard`. Select a classifier, keep `
 then choose the native reply model and persona and save. AstrBot still decides which configuration a conversation uses.
 
 Image generation runs after the text reply. Persistent receipts distinguish preparation, generation and sending.
-LivingEmotion 0.6.0 can bind and settle the original image promise. Successful substitutions are scoped to
+LivingEmotion 0.6.1 can bind and settle the original image promise. Successful substitutions are scoped to
 the actual provider, model and protocol; unknown generation or delivery is not blindly repeated.
 `sent` records sending-interface acceptance, not user read confirmation.
+Prompt adjustments allow 0–10 attempts, constrained by LE's remaining retry budget.
+LE can close or cancel suspended tasks without repeating unknown image requests.
+
+The editable general and segmentation presets now suggest 8–100 characters per chat paragraph.
+Unedited shipped text follows the updated preset; custom text is preserved.
+Private image prompts, mapping files and learned data remain local.
 
 | Documentation | Contents |
 | --- | --- |

@@ -18,3 +18,6 @@ backups/
 evaluation_cases.json
 evaluation_history.json
 tests/ui/evidence/
+# 本地生图提示词与私有映射表不随插件发布。
+/image_generation.json
+/image_prompt_rules.json

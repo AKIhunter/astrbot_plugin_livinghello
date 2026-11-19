@@ -3,7 +3,7 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.9.1-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.2-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -59,7 +59,11 @@
 
 映射开关、JSON规则和学习开关在同页设置；局部成功词对按实际连接、模型与协议复用。
 LE可以对明确拒绝或超长描述有限调整等义词，改变场景须用户确认；未知请求不重复收费。
-与LivingEmotion0.6.0配合时可按原promise_id结算，成功后后续轮次读取发送事实。
+与LivingEmotion0.6.1配合时可按原promise_id结算，成功后后续轮次读取发送事实。
+LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起任务可在LE页面取消。
+
+「回复与私聊 → 预置提示词」可编辑通用说明和分段规则；新版普通聊天每段建议8–100字。
+旧内置文本自动采用新预置，手写文本保留。生图风格、私人映射表和学习数据留在本地。
 
 <a id="documentation"></a>
 

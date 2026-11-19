@@ -10,7 +10,7 @@ MARKER = "<!--livinghello:expression:v1-->"
 TOPIC_CONTRACT = prompts()["shared_context"]
 SEGMENT_CONTRACT = (
     "先完整回应当前内容，不限制整次回复的总字数。按意思自行分段，"
-    "普通聊天每段尽量8–20字，每段之间用空行分隔；需要时可以多段，"
+    "普通聊天每段尽量8–100字，每段之间用空行分隔；需要时可以多段，"
     "短答不硬凑字数或段数，代码、网址、表格及必要的完整解释不强拆。"
     "同一段内不要仅因出现句号就换行；不要输出分段编号或分隔标签。"
 )
@@ -75,6 +75,10 @@ SCOPES = {
 LEGACY_GENERAL_HASHES = {
     "63d15abf68a673f0e12f5bd1b30eb97bf95ebd5cadcf8eb3fc1d65f78c149ee3",
     "93c1afdb6d4e06bbfc4b9801fa8b25d093fa018e8874cb4d224d9f34fc9f4c75",
+    "62ec0b1e94450cda8d9f3487116398c3427a8e440e89a2abd78f4c137e35784d",
+}
+LEGACY_SEGMENT_HASHES = {
+    "ed102232134394e2b971b19040af3a05af756f91111aa9d551b7e0934ecc494d",
 }
 
 
@@ -117,9 +121,10 @@ def preset_value(config, stem, variant="v4"):
     if not valid_text(value):
         return value
     # Only untouched shipped text follows personality; user edits stay verbatim.
-    legacy_general = (stem == "general_prompt"
-                      and hashlib.sha256(value.encode()).hexdigest() in LEGACY_GENERAL_HASHES)
-    if value in (preset_default(stem, "v3"), preset_default(stem, "v4")) or legacy_general:
+    legacy_hashes = {"general_prompt": LEGACY_GENERAL_HASHES,
+                     "prompt_segment": LEGACY_SEGMENT_HASHES}.get(stem, ())
+    legacy = hashlib.sha256(value.encode()).hexdigest() in legacy_hashes
+    if value in (preset_default(stem, "v3"), preset_default(stem, "v4")) or legacy:
         return preset_default(stem, variant)
     return value
 

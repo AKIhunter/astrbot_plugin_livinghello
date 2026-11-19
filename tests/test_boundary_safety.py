@@ -409,7 +409,7 @@ class BoundaryTests(unittest.IsolatedAsyncioTestCase):
                                      "先把需要说明的内容说完整再按意思分成自然的小段")
                     req = SimpleNamespace(extra_user_content_parts=[])
                     guard.segments.attach(event, req)
-                    self.assertEqual("8–20" in req.extra_user_content_parts[0].text, only)
+                    self.assertEqual("8–100" in req.extra_user_content_parts[0].text, only)
 
     def test_missing_pillow_drops_inline_image_and_keeps_direct_path(self):
         with patch.dict(sys.modules, {"PIL": None}):

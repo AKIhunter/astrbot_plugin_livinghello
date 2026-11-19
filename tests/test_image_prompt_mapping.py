@@ -224,9 +224,14 @@ class MappingGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.used(), 1)
 
     async def test_retry_config_has_same_save_and_load_limits(self):
-        for value in (-1, 3, True, 1.5):
+        for value in (-1, 11, True, 1.5):
             with self.subTest(value=value), self.assertRaises(NativeReplyError):
                 ImageSettings._validate({**DEFAULTS, "prompt_guard_retry_limit": value})
+        for value in (0, 3, 10):
+            ImageSettings._validate({**DEFAULTS, "prompt_guard_retry_limit": value})
+            self.service.values["prompt_guard_retry_limit"] = value
+            self.assertEqual(self.service.prompt_mapping.policy(
+                self.service.values, self.service.connection(self.service.values))["retry_limit"], value)
         old = {k: v for k, v in DEFAULTS.items() if not k.startswith("prompt_guard_")}
         self.service.path.write_text(json.dumps(old))
         self.assertTrue(ImageSettings._load(self.service.path)["prompt_guard_enabled"])

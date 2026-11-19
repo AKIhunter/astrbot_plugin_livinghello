@@ -20,6 +20,19 @@ from test_gate import plugin, gate_config
 
 ROOT = Path(__file__).resolve().parents[1]
 LE = ROOT.parent / "astrbot_plugin_livingemotion"
+OLD_GENERAL = (
+    "称呼沿用当前身份。按当前内容完整回应，不限制整次回复的总字数；该展开时说清楚，短答不硬凑内容。\n"
+    "接眼前这句话，别加总结、评价、建议或新的话题。被叫到就应一声，不为续聊补一句「怎么了」。必要的澄清可以问，已经能回答时直接说。\n"
+    "日常直接聊天，用说的话体现情绪，不写身体动作、旁白或自演场景；对方明确要角色扮演时再随场景表达。\n"
+    "不把接话写成点评话语重量、宣告立场或承诺陪伴，不套用「我认」「我不认」「很重」「更重」「有压」「不接」「我守着」「这话有分量」「我兜着」。这些词确有实际含义时可以正常使用。开头和语气词自然变化。\n"
+    "普通聊天不用书面标点，以空格表达停顿；代码、网址、数字格式保留。聊天不用列表、加粗、标题，代码和命令按实际需要排版，段落和气泡遵循当前回复设置。排版要求不约束记忆写入。"
+)
+OLD_SEGMENT = (
+    "先完整回应当前内容，不限制整次回复的总字数。按意思自行分段，"
+    "普通聊天每段尽量8–20字，每段之间用空行分隔；需要时可以多段，"
+    "短答不硬凑字数或段数，代码、网址、表格及必要的完整解释不强拆。"
+    "同一段内不要仅因出现句号就换行；不要输出分段编号或分隔标签。"
+)
 # Load the real LE modules without running the framework entry point.
 package = ModuleType("_lhle_candidate")
 package.__path__ = [str(LE)]
@@ -121,6 +134,24 @@ class PromptTests(unittest.IsolatedAsyncioTestCase):
                                  prompt.preset_default(stem, variant))
                 stored[stem + "_text"] = "手写  文本\n<标签> 😀"
                 self.assertEqual(prompt.preset_text(stored, stem, variant=variant), stored[stem + "_text"])
+
+    def test_shipped_prompt_migration_preserves_edits_and_disabled_text(self):
+        for stem, old in (("general_prompt", OLD_GENERAL), ("prompt_segment", OLD_SEGMENT)):
+            for variant in ("v3", "v4"):
+                with self.subTest(stem=stem, variant=variant):
+                    config = {stem + "_text": old}
+                    self.assertEqual(prompt.preset_text(config, stem, variant=variant),
+                                     prompt.preset_default(stem, variant))
+                    self.assertEqual(config[stem + "_text"], old)
+                    # Even a one-character user edit must not migrate.
+                    config[stem + "_text"] = old + " "
+                    self.assertEqual(prompt.preset_text(config, stem, variant=variant), old + " ")
+                    config.update({stem + "_text": old, stem + "_enabled": False})
+                    self.assertEqual(prompt.preset_text(config, stem, variant=variant), "")
+                    self.assertEqual(config[stem + "_text"], old)
+        # A historical hash for one field cannot migrate another field.
+        self.assertEqual(prompt.preset_value({"prompt_segment_text": OLD_GENERAL}, "prompt_segment"),
+                         OLD_GENERAL)
 
     async def test_invalid_mixed_save_has_no_partial_write(self):
         with tempfile.TemporaryDirectory() as folder:

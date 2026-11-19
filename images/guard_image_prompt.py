@@ -186,7 +186,7 @@ class ImagePromptMapping:
         except sqlite3.Error:
             count = 0
         return {"contract": CONTRACT, "enabled": values.get("prompt_guard_enabled", True),
-                "retry_limit": max(0, min(2, int(values.get("prompt_guard_retry_limit", 2)))),
+                "retry_limit": max(0, min(10, int(values.get("prompt_guard_retry_limit", 2)))),
                 "learn_enabled": values.get("prompt_guard_learn_enabled", True),
                 "limits": self.limits(values, rules), "scope": scope,
                 "learned_count": count, "warning": self.warning}

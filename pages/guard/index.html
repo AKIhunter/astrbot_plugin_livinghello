@@ -1345,7 +1345,7 @@
       off:"使用原描述，暂停映射和学习。",setup:"本页 → AI生图 → 提示词映射表路径；JSON修改后自动生效。"},
     prompt_guard_learn_enabled: {on:"记录成功请求中的局部替换，后续同一连接和模型自动复用。",
       off:"停止记录与复用，保留历史。",setup:"本页 → AI生图；同时开启提示词映射。数据在插件数据目录image_prompt_mappings.sqlite3。"},
-    prompt_guard_retry_limit: {setup:"本页 → AI生图，填0~2；需在LE开启承诺兑现，使用LE收尾模型。"},
+    prompt_guard_retry_limit: {setup:"本页 → AI生图，填0~10；需在LE开启承诺兑现，实际取此值与LE剩余自动重试次数的较小值。"},
     prompt_guard_rules_path: {setup:"在插件数据目录放置image_prompt_rules.json；格式见docs/image-prompt-mapping.md。"},
   };
   function nativeFieldHelp(field, prefix) {
@@ -1453,7 +1453,7 @@
     }
     if (key==="daily_limit") {input.min="0";input.max="1000";}
     if (key==="timeout_seconds") {input.min="10";input.max="500";}
-    if (key==="prompt_guard_retry_limit") {input.min="0";input.max="2";}
+    if (key==="prompt_guard_retry_limit") {input.min="0";input.max="10";}
     if (key==="prompt_guard_rules_path") input.maxLength=200;
     input.disabled = nativeSaving || nativeLoading || state.saving;
     const cell = document.createElement("div"); cell.className = kind === "bool" ? "native-toggle" : "field-control";

@@ -58,7 +58,7 @@ FIELDS = {
     "follow_server_time": ("跟随服务器时间", "bool", "开启后每次生图自动把服务器当前时间（年月日、星期、时分）注入描述，让画面跟随现实昼夜、季节和节日；关闭则完全不附加。"),
     "prompt_guard_enabled": ("启用提示词映射", "bool", "开启后发送前应用等义替换、长度规则与成功用词；关闭则沿用原描述。开启后在本页设置映射表路径，修改JSON即可热生效。姿势、场景变化需用户确认。"),
     "prompt_guard_rules_path": ("提示词映射表路径", "string", "在插件数据目录放置image_prompt_rules.json；相对路径从该目录解析，也支持绝对路径。缺失使用内置规则，写坏保留有效规则。支持词语、简单正则、去重补充及调整提醒。"),
-    "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "0~2次，默认2。仅LE承诺执行器对明确内容拒绝或超长描述调用自身收尾模型调整等义用词；用尽后等待用户。每次实际生图仍计每日额度；超时、未知结果不补发。需在LE开启承诺兑现。"),
+    "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "本页→AI生图设置0~10次，默认2；需在LE开启承诺兑现，实际取此值与LE剩余自动重试次数的较小值。0关闭自动调整，用尽后等待用户。仅对明确内容拒绝或超长描述调整等义用词，每次实际生图仍计每日额度；超时、未知结果不补发。"),
     "prompt_guard_learn_enabled": ("记录并复用成功用词", "bool", "开启后按实际生图连接、模型及协议记录成功请求中使用的局部替换，后续自动复用；关闭停止记录与复用，保留已有数据。需开启提示词映射，记录保存在插件数据目录image_prompt_mappings.sqlite3。"),
     "timeout_seconds": ("生图超时（秒）", "int", "10~500秒，超时不会换上游补发，防止重复收费。原自主回复时效仍生效。"),
 }
@@ -256,7 +256,7 @@ class ImageSettings:
             if key in {"enabled", "follow_server_time", "prompt_guard_enabled", "prompt_guard_learn_enabled"}:
                 valid = isinstance(value, bool)
             elif key == "prompt_guard_retry_limit":
-                valid = type(value) is int and 0 <= value <= 2
+                valid = type(value) is int and 0 <= value <= 10
             elif key in {"daily_limit", "timeout_seconds"}:
                 low, high = (0, 1000) if key == "daily_limit" else (10, 500)
                 valid = isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
