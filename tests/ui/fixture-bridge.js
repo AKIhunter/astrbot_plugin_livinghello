@@ -73,7 +73,7 @@
     proactive_cooldown_seconds: 8,
     duplicate_window_seconds: 60,
     gate_reply_max_age_seconds: 30,
-    gate_congling_prepare_compat: true,
+    integrate_livingemotion_catchup: true,
     reply_typing_chars_per_second: 4,
     expression_takeover_enabled: true,
     expression_private_reuse: false,
@@ -256,7 +256,6 @@
       lifetime: { total: 2, allowed: 1, blocked: 1, average: 50 },
       budget: {},
       image_cache: { hits: 0, entries: 0 },
-      congling_compat: { detected: true, active: true, order: "after_guard", prepare_accounting: true },
       providers: [{
         id: "fixture-provider", display: "合成文字判定", model: "fixture-text-small",
         kind: "provider", role: "chat", supports_images: false, supports_audio: false,

@@ -10,8 +10,10 @@ from collections import Counter
 
 try:
     from ..observability.guard_request_trace import emit
+    from ..integrations.guard_identity import request_identity
 except ImportError:
     from observability.guard_request_trace import emit
+    from integrations.guard_identity import request_identity
 
 KEY = "_livinghello_history_view"
 TOOL_NAME = "livinghello_read_search_result"
@@ -269,7 +271,7 @@ class HistoryView:
             "origin": str(getattr(event, "unified_msg_origin", "") or ""),
             "cid": str(value(value(request, "conversation"), "cid", "") or ""),
             "sender": str(event.get_sender_id()),
-            "persona": event.get_extra("congling:persona_token"),
+            "identity": request_identity(self.plugin, event, request),
             "revision": self.plugin._policy().revision,
             "emotion": emotion_parts(value(request, "contexts")),
             "search": {}, "used": set(), "protected": set(),
@@ -314,7 +316,8 @@ class HistoryView:
                 and event is scope["event"]
                 and str(getattr(event, "unified_msg_origin", "") or "") == scope["origin"]
                 and str(event.get_sender_id()) == scope["sender"]
-                and event.get_extra("congling:persona_token") == scope["persona"]
+                and scope["identity"] is not None
+                and request_identity(self.plugin, event, scope["request"]) == scope["identity"]
                 and str(value(value(scope["request"], "conversation"), "cid", "") or "")
                 == scope["cid"]
                 and self.plugin._policy().revision == scope["revision"]

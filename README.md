@@ -3,13 +3,16 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.9.0-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.1-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
 让机器人先理解话题，在合适的时候接话。LivingHello先判断参与是否合适，
 再交给AstrBot主模型和人格回复；支持连续消息合并、图片理解、分段、引用、语音和独立生图。
 开发者：[AKIhunter](https://github.com/AKIhunter)；反馈QQ群：991350637。
+
+输入理解、人设隔离和断线补答由LH独立实现；人格与发送沿用AstrBot原生链路。
+恢复补答的有效期和未知发送边界见[独立实现说明](docs/independent-runtime.md)。
 
 ## 能做什么
 

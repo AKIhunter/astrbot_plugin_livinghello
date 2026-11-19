@@ -538,11 +538,6 @@ async def _build_providers(plugin: Any) -> list[dict[str, Any]]:
     return result
 
 
-_CONGLING_PERCEIVED_MARKER = re.compile(
-    r"^\s*<!--congling:perceived:[^>]*-->\s*", re.IGNORECASE)
-_CONGLING_PERCEIVED_TITLE = "以下是这个会话里最近的几条消息"
-_CONGLING_PERCEIVED_END = "【补充结束】"
-_OMISSION_LINE = re.compile(r"^\s*(?:[.…·]{2,}|…)\s*[（(]?.*略.*[）)]?\s*$")
 _MESSAGE_AGE = re.compile(r"^\[(\d+(?:\.\d+)?)秒前\]\s*")
 _MESSAGE_SENDER = re.compile(r"^([^:：\n]{1,80})\s*[:：]\s*(.+)$", re.DOTALL)
 
@@ -599,39 +594,6 @@ def _message_key(message: dict[str, Any]) -> tuple[str, str]:
     return sender, _display_text(message.get("text")).casefold()
 
 
-def _congling_perceived(block: Any) -> tuple[list[dict[str, Any]], bool]:
-    """只解析该插件稳定的感知块；格式未知时返回原块给背景资料展示。"""
-    if not isinstance(block, str) or not _CONGLING_PERCEIVED_MARKER.match(block):
-        return [], False
-    lines = block.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    title_at = next(
-        (index for index, line in enumerate(lines)
-         if _CONGLING_PERCEIVED_TITLE in line),
-        None,
-    )
-    if title_at is None:
-        return [], False
-
-    messages: list[dict[str, Any]] = []
-    for line in lines[title_at + 1:]:
-        text = html.unescape(line).strip()
-        if text == _CONGLING_PERCEIVED_END:
-            break
-        if not text:
-            continue
-        if _OMISSION_LINE.match(text):
-            messages.append({
-                "text": _display_text(text),
-                "sender_name": "",
-                "source": "congling_perceived",
-                "is_omission": True,
-            })
-            continue
-        messages.append(_display_message(text, "congling_perceived"))
-    # 已识别但没有任何可展示行时保留原块，避免静默丢失格式变化。
-    return messages, bool(messages)
-
-
 def _display_chat_data(chat_data: Any) -> Any:
     if not isinstance(chat_data, dict):
         return chat_data
@@ -659,13 +621,7 @@ def _display_chat_data(chat_data: Any) -> Any:
     background: list[Any] = []
     scoped_memory = chat.get("scoped_memory")
     if isinstance(scoped_memory, list):
-        for block in scoped_memory:
-            perceived, parsed = _congling_perceived(block)
-            if not parsed:
-                background.append(block)
-                continue
-            for message in perceived:
-                add(message)
+        background.extend(scoped_memory)
     elif scoped_memory is not None:
         background.append(scoped_memory)
 
@@ -969,7 +925,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     mark("最近判定")
 
     data = {
-        "version": "2.9.0",
+        "version": "2.9.1",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
         "config": config,
@@ -985,7 +941,6 @@ async def _state(plugin: Any) -> dict[str, Any]:
         },
         "budget": budget,
         "image_cache": image_cache,
-        "congling_compat": _congling_compat(plugin),
         "function_coupling": coupling_snapshot(plugin.context, plugin.config),
         "providers": providers,
         "outage_recovery": _outage_status(plugin, providers),
@@ -1007,33 +962,6 @@ async def _state(plugin: Any) -> dict[str, Any]:
     _STATE_CACHE["at"] = time.monotonic()
     _STATE_CACHE["owner"] = plugin
     return copy.deepcopy(data)
-
-
-def _congling_compat(plugin: Any) -> dict[str, Any]:
-    """只检查已加载插件元数据，不导入或修改该插件，也不凭版本号猜测事件计时支持。"""
-    result = {
-        "detected": False,
-        "active": False,
-        "order": "unknown",
-    }
-    try:
-        metadata = plugin.context.get_registered_star("astrbot_plugin_congling")
-        if metadata is None:
-            metadata = plugin.context.get_registered_star("congling")
-        if metadata is None:
-            return result
-        result["detected"] = True
-        result["active"] = bool(getattr(metadata, "activated", False))
-        result["version"] = str(getattr(metadata, "version", "") or "")
-        instance = getattr(metadata, "star_cls", None)
-        module = sys.modules.get(type(instance).__module__) if instance is not None else None
-        priority = getattr(module, "PRIO_PERSONA", None)
-        if isinstance(priority, int) and not isinstance(priority, bool):
-            result["persona_priority"] = priority
-            result["order"] = "after_guard" if priority < 10000 else "before_or_equal_guard"
-    except Exception:
-        pass
-    return result
 
 
 def _load_schema_subset() -> dict[str, Any]:

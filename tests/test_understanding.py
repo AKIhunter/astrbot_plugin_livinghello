@@ -381,7 +381,7 @@ class UnderstandingTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
-    async def test_event_hook_claims_quote_image_before_congling(self):
+    async def test_event_hook_claims_quote_image_independently(self):
         guard = plugin(gate_config(
             expression_takeover_enabled=True,
             understand_image_enabled=True,
@@ -403,7 +403,7 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
             event.get_extra("_livinghello_image_owner"), "livinghello")
         reader.parse.assert_awaited_once_with(event)
 
-    async def test_disabled_image_understanding_does_not_claim_from_congling(self):
+    async def test_disabled_image_still_parses_other_input(self):
         guard = plugin(gate_config(
             expression_takeover_enabled=True,
             understand_image_enabled=False,
@@ -422,7 +422,7 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         await guard.parse_reply_input(event)
 
         self.assertIsNone(event.get_extra("_livinghello_image_owner"))
-        reader.parse.assert_not_awaited()
+        reader.parse.assert_awaited_once_with(event)
 
     async def test_media_plugins_are_never_selected_cancelled_or_counted(self):
         guard = plugin(gate_config(expression_takeover_enabled=True, expression_sticker_enabled=True,
@@ -441,17 +441,11 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         stealer._search_meme_candidates.assert_not_awaited()
         stealer.meme_selector.is_path_allowed_for_event.assert_not_called()
 
-    async def test_current_congling_event_skips_independent_understanding(self):
+    async def test_plain_input_processed_without_registry_access(self):
         guard = plugin(gate_config(expression_takeover_enabled=True))
-        native = SimpleNamespace(enabled_for=lambda event: event.get_group_id() == "native")
-        guard.context = SimpleNamespace(get_registered_star=lambda _: SimpleNamespace(
-            activated=True, star_cls=native))
+        registry = Mock(side_effect=AssertionError("输入处理不能查询其他插件"))
+        guard.context = SimpleNamespace(get_registered_star=registry)
         reader = guard._understanding()
-        with unittest.mock.patch.object(reader, "parse", new_callable=AsyncMock) as parse:
-            req = SimpleNamespace(extra_user_content_parts=[])
-            await reader.attach(Event(group="native"), req)
-            parse.assert_not_awaited()
-            self.assertEqual(req.extra_user_content_parts, [])
         req = SimpleNamespace(extra_user_content_parts=[])
         independent = Event(group="independent")
         independent.message_obj.message = [Plain("独立模式用户正文")]
@@ -460,8 +454,9 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         # 纯文本无需重复附加；只标记本轮已理解，原始正文保持可用。
         self.assertEqual(req.extra_user_content_parts, [])
         self.assertTrue(independent.get_extra("_at_guard_understanding_attached"))
+        registry.assert_not_called()
 
-    async def test_congling_quote_image_uses_livinghello_vision_once(self):
+    async def test_independent_quote_image_preserves_author_text_and_vision_once(self):
         guard = plugin(gate_config(
             expression_takeover_enabled=True,
             understand_image_enabled=True,
@@ -503,13 +498,13 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(req.image_urls, [])
         self.assertEqual(len(req.extra_user_content_parts), 1)
         prompt = req.extra_user_content_parts[0].text
-        self.assertIn("LivingHello独立图片理解", prompt)
-        self.assertIn("用户引用了助手的历史图片消息", prompt)
+        self.assertIn("消息展开/媒体理解", prompt)
+        self.assertIn("助手", prompt)
         self.assertIn("画面里有三张蓝色风景图", prompt)
         self.assertNotIn(url, prompt)
-        self.assertNotIn("你在哪儿找的这些图", prompt)
+        self.assertIn("你在哪儿找的这些图", prompt)
 
-    async def test_congling_plain_quote_does_not_call_vision(self):
+    async def test_independent_plain_quote_expands_without_vision(self):
         guard = plugin(gate_config(
             expression_takeover_enabled=True,
             understand_image_enabled=True,
@@ -533,7 +528,8 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         await guard._understanding().attach(event, req)
 
         provider.text_chat.assert_not_awaited()
-        self.assertEqual(req.extra_user_content_parts, [])
+        self.assertEqual(len(req.extra_user_content_parts), 1)
+        self.assertIn("只是文字", req.extra_user_content_parts[0].text)
 
     async def test_image_failure_injects_unresolved_without_url(self):
         guard = plugin(gate_config(

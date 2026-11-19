@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-import hashlib
 import json
 import re
 import time
 
 from astrbot.core.agent.message import TextPart
+
+try:
+    from .guard_identity import request_identity
+except ImportError:
+    from integrations.guard_identity import request_identity
 
 
 class EvidenceMemory:
@@ -17,19 +21,9 @@ class EvidenceMemory:
         self.rows = OrderedDict()
 
     def scope(self, event):
-        try:
-            origin = str(event.unified_msg_origin or "")
-            if not origin:
-                return None
-            config = self.plugin.context.get_config(origin)
-            identity = {
-                "origin": origin, "sender": str(event.get_sender_id()),
-                "persona": event.get_extra("congling:persona_token"),
-                "providers": config.get("provider_settings", {}),
-            }
-            return hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
-        except Exception:
-            return None
+        # 动态表达/工具提示会在同一请求里继续追加；证据按原生人格身份
+        # 隔离，不能因追加提示而使刚查到的同人格资料永远无法命中。
+        return request_identity(self.plugin, event, include_system_prompt=False)
 
     @staticmethod
     def eligible(name):

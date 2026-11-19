@@ -30,7 +30,7 @@ try:  # 作为插件包加载时走相对导入
     from .input.guard_history_view import HistoryView
     from .reply.guard_reasoning_retry import ReasoningRetry
     from .input.guard_fragments import FragmentWait
-    from .reply.guard_expression import Expression, congling_for, takeover
+    from .reply.guard_expression import Expression, takeover
     from .integrations.guard_livingemotion import availability_reason, is_state_line, state_lines
     from .integrations.guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
     from .gate.guard_classifier_outage import (
@@ -63,7 +63,7 @@ except ImportError:  # 单文件调试兜底
     from input.guard_history_view import HistoryView
     from reply.guard_reasoning_retry import ReasoningRetry
     from input.guard_fragments import FragmentWait
-    from reply.guard_expression import Expression, congling_for, takeover
+    from reply.guard_expression import Expression, takeover
     from integrations.guard_livingemotion import availability_reason, is_state_line, state_lines
     from integrations.guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
     from gate.guard_classifier_outage import (
@@ -91,7 +91,7 @@ NO_REPLY_TOKEN = "[[ASTRBOT_NO_REPLY]]"
 MEANINGFUL_TEXT_RE = re.compile(r"[\w\u4e00-\u9fff]")
 PLUGIN_NAME = "astrbot_plugin_LivingHello"
 BOT_LINE_PREFIX = "[我]: "
-CONGLING_RECOVERY_CONTRACT = "congling.classifier-recovery.v1"
+RECOVERY_CONTRACT = "livinghello.classifier-recovery.v1"
 FACE_COMPONENT_NAMES = frozenset({"face", "mface"})
 # 保留旧文案的标点只用于识别存量默认配置，不作为发送内容。
 # 自定义文案仍按原配置使用。
@@ -272,18 +272,8 @@ class Main(Star):
         return self._policy().check(**source)
 
     def message_policy_companion(self):
-        result = {"active": False, "supported": True, "contract": HISTORY_CONTRACT}
-        getter = getattr(self.context, "get_registered_star", None)
-        if not callable(getter):
-            return result
-        for name in ("astrbot_plugin_congling", "congling"):
-            metadata = getter(name)
-            if metadata is not None and getattr(metadata, "activated", False):
-                instance = getattr(metadata, "star_cls", None)
-                result["active"] = True
-                result["supported"] = getattr(instance, "MESSAGE_POLICY_CONTRACT", "") == HISTORY_CONTRACT
-                break
-        return result
+        """名单在本插件入口及发送前执行，不依赖外部历史过滤声明。"""
+        return {"active": False, "supported": True, "contract": HISTORY_CONTRACT}
 
     def _policy_explicit(self, event):
         if ReplyDelivery.raw(event).get("post_type") == "notice":
@@ -670,11 +660,11 @@ class Main(Star):
             self._classifier_recovery_retry_task = None
 
     def pending_classifier_recovery(self) -> PendingRecoveryWork | None:
-        """Task 5 entrypoint for the frozen outage window and pending sessions."""
+        """读取冻结故障窗口与尚未完成的会话。"""
         return self._outage().pending_recovery()
 
     def register_classifier_recovery_callback(self, callback):
-        """Register a sync/async Task 5 handoff callback and return its remover."""
+        """注册显式恢复回调；返回移除函数，不自动查找其他插件。"""
         if not callable(callback):
             raise TypeError("callback must be callable")
         self._ensure_classifier_probe_runtime()
@@ -690,7 +680,7 @@ class Main(Star):
         return remove
 
     async def resume_classifier_recovery(self) -> bool:
-        """插件重载后由配套插件领取已冻结的同一恢复事件。"""
+        """使用本插件恢复器处理冻结窗口；重载缺原消息时准确标记不可补答。"""
         work = self.pending_classifier_recovery()
         if work is None:
             self._schedule_classifier_recovery_retry()
@@ -723,7 +713,7 @@ class Main(Star):
                     )
                     callback_failed = True
                     continue
-                if self._is_congling_recovery_result(result, current.event_id):
+                if self._is_classifier_recovery_result(result, current.event_id):
                     await self._apply_classifier_recovery_result(current, result)
                     return
             if callback_failed:
@@ -735,31 +725,20 @@ class Main(Star):
                 )
                 return
 
-            registry_supported, handler = self._congling_recovery_entry()
-            if not registry_supported:
-                return
-            if handler is None:
-                await self._apply_classifier_recovery_result(
-                    current,
-                    self._classifier_recovery_fallback(current, "unavailable"),
-                )
-                return
             try:
-                result = handler(current)
-                if inspect.isawaitable(result):
-                    result = await result
+                result = await self._recovery_replay().recover(current)
             except asyncio.CancelledError:
                 self._mark_classifier_recovery_cancelled(current)
                 self._schedule_classifier_recovery_retry()
                 raise
             except Exception:
                 self.logger.warning(
-                    "[LivingHello] 配套插件恢复入口未完成，相关会话已保留待重试。"
+                    "[LivingHello] 原生恢复未完成，相关会话已保留待重试。"
                 )
                 result = self._classifier_recovery_fallback(
                     current, "retry_pending"
                 )
-            if not self._is_congling_recovery_result(result, current.event_id):
+            if not self._is_classifier_recovery_result(result, current.event_id):
                 result = self._classifier_recovery_fallback(
                     current, "retry_pending"
                 )
@@ -790,30 +769,20 @@ class Main(Star):
                     at=now,
                 )
 
-    def _congling_recovery_entry(self):
-        getter = getattr(self.context, "get_registered_star", None)
-        if not callable(getter):
-            return False, None
-        for name in ("astrbot_plugin_congling", "congling"):
+    def _recovery_replay(self):
+        if not hasattr(self, "recovery_replay"):
             try:
-                metadata = getter(name)
-            except Exception:
-                continue
-            if metadata is None:
-                continue
-            instance = getattr(metadata, "star_cls", None)
-            if not getattr(metadata, "activated", False) or instance is None:
-                continue
-            handler = getattr(instance, "recover_classifier_outage", None)
-            if callable(handler):
-                return True, handler
-        return True, None
+                from .gate.guard_recovery_replay import RecoveryReplay
+            except ImportError:
+                from gate.guard_recovery_replay import RecoveryReplay
+            self.recovery_replay = RecoveryReplay(self)
+        return self.recovery_replay
 
     @staticmethod
-    def _is_congling_recovery_result(result, event_id: str) -> bool:
+    def _is_classifier_recovery_result(result, event_id: str) -> bool:
         return (
             isinstance(result, dict)
-            and result.get("contract") == CONGLING_RECOVERY_CONTRACT
+            and result.get("contract") == RECOVERY_CONTRACT
             and str(result.get("event_id") or "") == event_id
             and isinstance(result.get("sessions"), list)
         )
@@ -823,7 +792,7 @@ class Main(Star):
         work: PendingRecoveryWork, status: str
     ) -> dict:
         return {
-            "contract": CONGLING_RECOVERY_CONTRACT,
+            "contract": RECOVERY_CONTRACT,
             "event_id": work.event_id,
             "sessions": [
                 {
@@ -1251,6 +1220,9 @@ class Main(Star):
     async def _close_classifier_probe_task(self) -> None:
         self._ensure_classifier_probe_runtime()
         self._classifier_probe_closed = True
+        replay = getattr(self, "recovery_replay", None)
+        if replay is not None:
+            replay.close()
         tasks = (
             self._classifier_probe_task,
             self._classifier_recovery_retry_task,
@@ -1280,7 +1252,7 @@ class Main(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 10)
     async def parse_reply_input(self, event: AstrMessageEvent):
-        """独立模式完整展开；配套时仅预解析LivingHello自己负责的图片。"""
+        """由LivingHello展开输入，保留文字、引用来源及媒体理解结果。"""
         result = self._event_policy(event)
         if not result["read_allowed"]:
             return
@@ -1315,19 +1287,15 @@ class Main(Star):
                     and event.get_extra("_at_guard_recorded_at") is None):
                 # 收到即登记上下文版本，平台转发拉取不能延后新消息撤销旧回复。
                 self._record_incoming(event, self._group_key(event))
-            congling = congling_for(self.context, event)
             claims_images = self._claims_image_understanding(event)
             if claims_images:
                 event.set_extra("_livinghello_image_owner", "livinghello")
-            if not congling or claims_images:
-                await self._understanding().parse(event)
-            else:
-                emit(event, "input_parse", "uncollected", reason="congling_owns_input")
+            await self._understanding().parse(event)
 
     @filter.on_llm_request(priority=maxsize - 105)
     async def understand_reply_input(self, event: AstrMessageEvent, req: ProviderRequest):
         touch(event, "understanding")
-        # 启用配套插件时，感知与记忆都按其原生钩子处理。
+        # 输入展开由本插件处理，原生请求只接收本轮理解结果。
         if not self._delivery().recalled(event):
             await self._understanding().attach(event, req)
         self.logger.warning("[LH-trace] 感知钩子返回，接下来轮到情绪/记忆/契约")
@@ -1501,6 +1469,8 @@ class Main(Star):
 
     @filter.on_using_llm_tool()
     async def trace_tool_start(self, event, tool, tool_args):
+        if event.get_extra("_livinghello_classifier_recovery"):
+            event.set_extra("_livinghello_recovery_tool_attempted", True)
         # 定时/工具发送走宿主 context.send_message，不经过普通回复分段装饰。
         self._delivery().expression.tool_arguments(tool, tool_args)
         service = self._trace(event)
@@ -1616,6 +1586,8 @@ class Main(Star):
         - 这一轮确实要回（已判定 reply，且没被策略/闸门拦下）
         - 这个群在冷却期内没垫过（默认 10 分钟一句）
         """
+        if event.get_extra("_livinghello_classifier_recovery"):
+            return
         seconds = self._early_ack_seconds()
         if seconds <= 0:
             return
@@ -1954,10 +1926,6 @@ class Main(Star):
 
 
     def _fragment_text(self, event):
-        if congling_for(self.context, event):
-            sources = event.get_extra("_at_guard_fragment_sources", ()) or (event,)
-            return "\n".join(str(getattr(getattr(source, "_congling_msg", None), "text", "")
-                                 or self._text_or_face(source)) for source in sources)
         if takeover(self.config):
             sources = event.get_extra("_at_guard_fragment_sources", ()) or (event,)
             observations = [source.get_extra("_at_guard_understanding") for source in sources]
@@ -2647,6 +2615,9 @@ class Main(Star):
         observation_rules: list[str],
     ) -> bool:
         outage = self._outage()
+        if (outage.state is OutageState.RECOVERING and outage.current_event is not None
+                and event.get_extra("_livinghello_classifier_recovery") == outage.current_event.event_id):
+            return False
         if not outage.blocks_normal_calls:
             return False
         if self._outage_self_heal_ready(outage):
@@ -2664,6 +2635,7 @@ class Main(Star):
         if mode == "enforce":
             try:
                 outage.add_affected_session(str(event.unified_msg_origin), at=time.time())
+                self._recovery_replay().remember(event)
             except (TypeError, ValueError):
                 self.logger.warning(
                     "[LivingHello] 断线恢复未能记录会话标识，已继续静默。"
@@ -2775,6 +2747,7 @@ class Main(Star):
         if mode == "enforce" and outage.current_event is not None:
             try:
                 outage.add_affected_session(str(event.unified_msg_origin), at=time.time())
+                self._recovery_replay().remember(event)
             except (TypeError, ValueError):
                 self.logger.warning(
                     "[LivingHello] 断线恢复未能记录会话标识，已继续静默。"
@@ -3009,7 +2982,7 @@ class Main(Star):
         return image_target(provider)
 
     async def at_guard_score(self, text: str) -> dict | None:
-        """对外打分入口：供其他插件（如 congling 醒后补课）耦合调用。
+        """对外打分入口：供其他插件的补课流程耦合调用。
 
         方法名是已公开的历史接口名，配套插件按它调用，改名会断掉耦合，保留。
 
@@ -3442,12 +3415,9 @@ class Main(Star):
         age = max(0.0, time.monotonic() - float(started)) if started is not None else 0.0
         preparation = 0.0
         try:
-            if (self.config.get("integrate_livingemotion_catchup", True) is True
-                    and self.config.get("gate_congling_prepare_compat", True) is True):
-                # 爬楼已由 livingemotion 提供；旧 congling 字段仅作兼容兜底。
+            if self.config.get("integrate_livingemotion_catchup", True) is True:
+                # 只认 LivingEmotion 本事件上报的实际准备耗时。
                 raw = event.get_extra("livingemotion:wake_prepare_seconds")
-                if raw is None:
-                    raw = event.get_extra("congling:wake_prepare_seconds")
                 if not isinstance(raw, bool):
                     value = float(raw or 0)
                     # 不接受超过事件实际年龄的计时；错误值不能把生成期限无限推后。

@@ -1,6 +1,6 @@
 # 图片回执与原事项结算
 
-适用LH2.9.0 / LE0.6.0，2026-11-19核对。来源：
+适用LH2.9.1 / LE0.6.0，2026-11-19核对。来源：
 [图片服务](../images/guard_image_settings.py)、[LE桥](../integrations/guard_livingemotion.py)与真实门面测试。
 
 ## 生成与发送事实

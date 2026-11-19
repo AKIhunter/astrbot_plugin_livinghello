@@ -201,11 +201,11 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.is_set())
         self.assertEqual(self.event.sent, [])
 
-    async def test_observe_conflict_does_not_fall_back_to_congling(self):
+    async def test_observe_conflict_does_not_use_unrelated_plugin_state(self):
         self.api.caps["mode"] = "observe_only"
-        self.registry["astrbot_plugin_congling"] = SimpleNamespace(
+        self.registry["astrbot_plugin_unrelated"] = SimpleNamespace(
             activated=True, star_cls=SimpleNamespace(enabled_for=lambda _: True))
-        self.req.extra_user_content_parts = [SimpleNamespace(text="<!--congling:state-->legacy")]
+        self.req.extra_user_content_parts = [SimpleNamespace(text="<!--unrelated:state-->legacy")]
         lines = await self.guard._recall_gate_memory(self.event, self.req)
         self.assertEqual(lines, [])
         self.assertEqual(await state_lines(self.guard.context, self.event, self.req), [])

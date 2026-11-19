@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 
 CONTRACT = "livinghello.message-policy.v1"
-HISTORY_CONTRACT = "congling.message-policy.v1"
+HISTORY_CONTRACT = "livinghello.message-policy.v1"
 COLORS = ("black", "gray", "white")
 FIELDS = tuple(f"message_{color}list_{kind}" for kind in ("qq", "groups") for color in COLORS)
 LABELS = {"black": "黑名单", "gray": "灰名单", "white": "白名单"}

@@ -2200,7 +2200,7 @@
     classifier_outage_self_heal_seconds: { desc: "故障持续超过这段时间仍不恢复时，放弃拦截直接放行判定，避免一条上游故障把整个群永久卡死。质量会降级，但不会全静默。", ex: "设 1800 秒：上游挂了半小时还没好，就先恢复对话，不再让所有消息静默。" },
     understand_hard_timeout_seconds: { desc: "解析加理解合计最多等多久；超过就按本次没看懂图片处理，并提醒回复模型不要猜画面。", ex: "设 20 秒：一张图解析加识别合计 20 秒仍未完成，本次按没看懂处理。" },
     reply_typing_chars_per_second: { desc: "模拟打字的换算速度；0=不模拟（默认），正文生成完立即发送。数值越大等待越短，模拟等待会从回复有效期里扣除。", ex: "设 8 字/秒：60 字回复约等 7.5 秒；设 0：完全不等待。" },
-    expression_takeover_enabled: { desc: "本页接管回复的发送方式（引用、@、清理）；关闭则交给配套插件或宿主原生方式，下面几项同时失效。", ex: "开启：可控制引用与@；关闭：完全沿用宿主原有发送行为。" },
+    expression_takeover_enabled: { desc: "LH 管理输入展开与回复方式（引用、@、清理）；关闭后沿用宿主原生处理。", ex: "开启：独立理解消息并控制引用与@；关闭：沿用宿主原有处理。" },
     reply_quote_enabled: { desc: "首条回复引用你这条消息，群里能看清在回谁。", ex: "开启：回复挂在原消息下方；关闭：直接发正文。" },
     reply_mention_enabled: { desc: "在群聊回复开头 @ 当前发送者；私聊不适用。", ex: "开启：群消息显示 @某人；私聊仍直接发正文。" },
     expression_strip_emoji: { desc: "发送前删掉正文里的 Emoji 和颜文字，避免和人格设定冲突。", ex: "开启：「好的😊」变成「好的」；代码块内不改动。" },
@@ -2218,7 +2218,7 @@
         "选「1~2 随机」：每处独立随机，像手打出来的，节奏不整齐。",
       ],
     },
-    integrate_livingemotion_catchup: { desc: "与爬楼插件配合，让它先把上下文备好再判定；未安装该插件时无效果。", ex: "开启且装了配套插件：判定前先拿到爬楼上下文；未装则自动跳过。" },
+    integrate_livingemotion_catchup: { desc: "从回复有效期扣除 LE 在本事件上报的爬楼准备耗时；不控制 LE 是否爬楼。", ex: "总年龄60秒、LE准备45秒，有效年龄15秒；未上报时不扣除。" },
     understand_expand_forward: { desc: "收到合并转发时展开里面的内容再理解，而不是只看到「合并转发」四个字。", ex: "开启：转发里的 10 条消息都会被读到；关闭只按标题判断。" },
     understand_forward_max_nodes: { desc: "展开转发时最多读多少条，防止超大转发把输入撑爆。", ex: "设 50 条：转发里有 300 条也只读前 50 条。" },
     understand_forward_max_depth: { desc: "转发里套转发时最多往下钻几层；0 表示不继续展开嵌套。", ex: "设 2 层：A 转发 B、B 转发 C，读到 C 就停。" },
@@ -2245,15 +2245,15 @@
     gate_upstream_fanout_enabled: {on:"自动路由按优先级逐个短超时尝试上游。",off:"交给所选模型或路由的原生请求流程。",setup:"判定参数 → 参与判断 → 判定小模型、单上游尝试超时；锁定上游时不轮转。"},
     gate_main_fallback_enabled: {on:"判定看图调用异常时，尝试支持图片的会话主模型；正常静默不兜底。",off:"不调用主模型补做看图判定，视觉调用失败时保持静默。",setup:"判定参数 → 图片与主模型兜底，设置视觉模型和兜底超时；主模型在原生配置页选择。"},
     fragment_wait_private: {on:"私聊同一用户的碎片合并后处理，续发重置静默等待。",off:"私聊不等待碎片；群聊按自己的等待设置处理。",setup:"回复行为 → 回复节奏，设置碎片消息等待与批次总等待上限。"},
-    expression_takeover_enabled: {on:"使用 LH 的引用、@、Emoji 清理和模拟打字设置管理回复方式。",off:"回复方式交给宿主或配套插件；撤回与碎片等待仍由独立开关控制。",setup:"回复行为 → 回复方式与回复节奏；多气泡在原生配置 → 原生分段回复设置。"},
+    expression_takeover_enabled: {on:"使用 LH 的独立输入理解、引用、@、Emoji 清理和模拟打字。",off:"输入理解与回复方式交给宿主；撤回与碎片等待仍分别生效。",setup:"回复行为 → 回复方式与内容理解；多气泡在原生配置 → 原生分段回复设置。"},
     expression_private_reuse: {on:"私聊沿用回复方式中的引用与 Emoji 清理设置；@ 仍仅用于群聊。",off:"私聊不自动引用当前消息，并保留正文 Emoji。",setup:"回复行为 → 回复方式，先开启回复方式管理，再选择引用与清理开关。"},
     reply_quote_enabled: {on:"首条可承载头的正文引用当前有效原消息；没有有效消息 ID 不添加。",off:"不添加自动引用，工具明确引用的其他消息仍保留。",setup:"回复行为 → 回复方式；先开启回复方式管理，私聊还需开启私聊复用。"},
     reply_mention_enabled: {on:"群聊首条正文使用平台原生 @ 提醒当前发送者，可与引用同时使用。",off:"不添加自动 @；正文原有对其他人的 @ 保留。",setup:"回复行为 → 回复方式；需先开启回复方式管理，私聊不适用。"},
     expression_strip_emoji: {on:"清理正文 Emoji 和颜文字，不删除原生图片、表情包。",off:"保留模型正文的 Emoji 和颜文字。",setup:"回复行为 → 回复方式；需开启回复方式管理，私聊还需开启复用。"},
     expression_punct_cleanup: {on:"将聊天标点替换为空格间隔，代码、网址、数字和表格保留。",off:"正文标点原样发送。",setup:"回复行为 → 回复方式 → 标点空格数；普通回复与工具发送均适用。"},
-    integrate_livingemotion_catchup: {on:"为 LE 爬楼补答保留独立回复时限，避免过期历史消息被普通时限丢弃。",off:"不预留这段配合时限；LE 自身的爬楼开关和运行仍独立。",setup:"功能耦合 → 接入 LivingEmotion；爬楼开关、窗口和补答参数在 LE 配置页设置。"},
-    understand_expand_forward: {on:"独立模式展开合并转发，保留原作者，并遵守条数与深度预算。",off:"LH 不读取转发内部聊天。",setup:"内容理解 → 转发条数、层数与摘录阈值；会话接入配套插件时由其原生感知处理。"},
-    understand_card_parse: {on:"独立模式本地解析卡片标题、来源与地址，不访问链接正文。",off:"LH 只保留收到卡片的提示。",setup:"内容理解；接入配套插件的会话遵循其原生感知配置。"},
+    integrate_livingemotion_catchup: {on:"从本轮回复有效年龄扣除 LE 上报的实际爬楼准备耗时。",off:"不扣除 LE 准备耗时；LE 自身爬楼功能仍独立。",setup:"功能耦合 → 接入 LivingEmotion；是否爬楼在 LE 配置页设置。"},
+    understand_expand_forward: {on:"LH 展开合并转发，保留原作者，并遵守条数与深度预算。",off:"LH 不读取转发内部聊天。",setup:"内容理解 → 转发条数、层数与摘录阈值。"},
+    understand_card_parse: {on:"LH 本地解析卡片标题、来源与地址，不访问链接正文。",off:"LH 只保留收到卡片的提示。",setup:"内容理解 → 分享卡片解析。"},
     understand_image_enabled: {on:"运行 LH 图片理解，OCR 提供文字证据，视觉模型补充画面。",off:"不运行此理解链路，图片交给宿主或配套插件；判定看图仍独立。",setup:"内容理解 → 图片理解模型；共用视觉模型在判定参数页设置。"},
     understand_gif_enabled: {on:"将 GIF 第一帧转成静图交给模型，无法理解完整动作过程。",off:"GIF 原样透传，是否接受取决于上游模型。",setup:"内容理解 → 图片理解与图片模型；本项只决定动图的处理方式。"},
     understand_video_enabled: {on:"短视频抽帧后交给视觉模型理解，每次会消耗视觉模型额度。",off:"视频只记为收到视频，不描述画面。",setup:"内容理解 → 视频时长、帧数和视频模型；服务器需安装 ffmpeg 与 ffprobe。"},
@@ -2639,7 +2639,7 @@
         setDirty(field.key, input.checked);
         tip.textContent = boolHint();
         syncFieldAvailability();
-        renderConglingCompat();
+        renderUnderstandingMode();
       });
       wrap.appendChild(input);
       wrap.appendChild(tip);
@@ -2696,7 +2696,7 @@
       host.appendChild(details);
     });
     syncFieldAvailability();
-    renderConglingCompat();
+    renderUnderstandingMode();
     renderPolicyFields();
     renderCoupling();
     renderPromptInjection();
@@ -2800,8 +2800,7 @@
     });
   }
 
-  function renderConglingCompat() {
-    // 配套插件已移除；此处仅维护理解模式的静态说明。
+  function renderUnderstandingMode() {
     el("understandingMode").textContent = "当前独立处理转发、引用、卡片、图片、动图、视频和语音。";
   }
 
@@ -2817,7 +2816,7 @@
     reply_failed: ["回复未送达", "主模型或最终发送未形成完整闭环", "off"],
     cooling: ["冷却中", "已暂停普通文字判定调用", "warn"],
     probing: ["探测中", "冷却结束，正在检查文字判定依赖", "warn"],
-    recovering: ["恢复中", "依赖已恢复，正在补读受影响会话", "warn"],
+    recovering: ["恢复中", "判定已恢复，LH 正在复判保留的原消息并补答", "warn"],
     needs_attention: ["需处理", "认证、配置或 Provider 需要管理员处理", "off"],
     error: ["读取失败", "断线恢复状态暂时无法读取", "off"],
   };
@@ -4300,7 +4299,6 @@
       state.data.decisions = data.decisions;
       state.data.budget = data.budget;
       state.data.image_cache = data.image_cache;
-      state.data.congling_compat = data.congling_compat;
       state.data.function_coupling = data.function_coupling;
       renderCoupling();
       state.data.outage_recovery = data.outage_recovery;
@@ -4311,7 +4309,7 @@
       }
       document.querySelectorAll("#promptInjection [data-prompt-stem]").forEach(article => article._syncPrompt?.());
       renderPolicyStatus(data.message_policy);
-      renderConglingCompat();
+      renderUnderstandingMode();
       // 轮询只更新只读状态，不重建开关控件，保留未保存草稿和当前焦点。
       renderOutageRecovery(data.outage_recovery);
       state.data.distribution = data.distribution;

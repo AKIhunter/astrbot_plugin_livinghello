@@ -157,7 +157,7 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
     async def test_memory_tools_do_not_mutate_shared_toolset(self):
         tools = [SimpleNamespace(name=name) for name in
                  ("recall_long_term_memory", "read_memory_evidence", "knowledge_search",
-                  "memorize_long_term_memory", "congling_self_memory", "congling_dream_recall")]
+                  "memorize_long_term_memory", "third_party_search", "third_party_tool")]
         shared = SimpleNamespace(tools=tools)
         self.req.func_tool = shared
         self.req.extra_user_content_parts += [SimpleNamespace(text="<RAG-Faiss-Memory>old")]
@@ -165,7 +165,7 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(self.req.func_tool, shared)
         self.assertEqual(len(shared.tools), 6)
         self.assertEqual([t.name for t in self.req.func_tool.tools],
-                         ["knowledge_search", "memorize_long_term_memory"])
+                         ["knowledge_search", "memorize_long_term_memory", "third_party_search", "third_party_tool"])
         self.assertEqual([p.text for p in self.req.extra_user_content_parts], [STATE])
 
     @unittest.skipUnless((Path(__file__).resolve().parents[2]
@@ -192,10 +192,9 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
         self.registry["astrbot_plugin_at_guard"].activated = False
         self.assertIsNone(module.policy(self.guard.context))
 
-    @unittest.skipUnless(all((Path(__file__).resolve().parents[2] / item).is_file()
-                         for item in ("LivingMemory/core/livinghello_coupling.py",
-                                      "astrbot_plugin_congling/core/livinghello_coupling.py")),
-                         "历史协作验收需要旧 LivingMemory 和从绫源码")
+    @unittest.skipUnless((Path(__file__).resolve().parents[2]
+                         / "astrbot_plugin_livingemotion/livinghello_coupling.py").is_file(),
+                         "显式协作验收需要 LivingEmotion 源码")
     async def test_companion_policies_follow_alias_and_deactivation(self):
         for name in ("astrbot_plugin_LivingHello", "astrbot_plugin_livinghello"):
             with self.subTest(name=name):
@@ -205,9 +204,7 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
         root = Path(__file__).resolve().parents[2]
         self.registry.clear()
         self.registry[name] = SimpleNamespace(activated=True, star_cls=self.guard)
-        for relative in ("astrbot_plugin_livingemotion/livinghello_coupling.py",
-                         "LivingMemory/core/livinghello_coupling.py",
-                         "astrbot_plugin_congling/core/livinghello_coupling.py"):
+        for relative in ("astrbot_plugin_livingemotion/livinghello_coupling.py",):
             spec = importlib.util.spec_from_file_location("_coupling_test", root / relative)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
@@ -225,61 +222,6 @@ class CouplingTests(unittest.IsolatedAsyncioTestCase):
             self.guard.get_function_coupling = original
         self.registry[name].activated = False
         self.assertTrue(module.policy(self.guard.context) is None)
-
-    @unittest.skipUnless((Path(__file__).resolve().parents[2]
-                          / "astrbot_plugin_congling/main.py").is_file(), "从绫源码未安装")
-    async def test_congling_memory_hook_yields_when_managed(self):
-        root = Path(__file__).resolve().parents[2] / "astrbot_plugin_congling"
-        tree = ast.parse((root / "main.py").read_text(encoding="utf-8-sig"))
-        owner = next(node for node in tree.body if isinstance(node, ast.ClassDef))
-        method = next(node for node in owner.body if getattr(node, "name", "") == "memory_hook")
-        method.decorator_list = []
-        namespace = {"AstrMessageEvent": object, "Any": object}
-        exec(compile(ast.Module(body=[method], type_ignores=[]), "memory_hook", "exec"), namespace)
-        cg = SimpleNamespace(function_coupling_managed=lambda:True,
-                             enabled_for=lambda _:True, memory=SimpleNamespace(inject=AsyncMock()))
-        await namespace["memory_hook"](cg, self.event, self.req)
-        cg.memory.inject.assert_not_awaited()
-
-    @unittest.skipUnless((Path(__file__).resolve().parents[2]
-                          / "astrbot_plugin_congling/humanize/persona.py").is_file(), "从绫源码未安装")
-    async def test_congling_dynamic_state_yields_but_scene_and_persona_remain(self):
-        from test_congling_expression_handoff import methods
-        actual = methods("humanize/persona.py", ("inject",))
-        cg = SimpleNamespace(
-            function_coupling_managed=lambda:True,
-            probe=SimpleNamespace(should_yield=lambda _:False),
-            emotion=SimpleNamespace(prompt_line=AsyncMock()))
-        persona = SimpleNamespace(
-            plugin=cg, config=SimpleNamespace(bool=lambda *args:True),
-            resolve=AsyncMock(return_value={"token":"native"}),
-            _replace_framework_persona=AsyncMock(),
-            _relation_line=AsyncMock(), _state_line=AsyncMock(),
-            _scene_line=lambda _:"场景：群聊")
-        req = SimpleNamespace(conversation=None, system_prompt="", parts=[])
-        await actual.inject(persona, self.event, req)
-        persona._relation_line.assert_not_awaited()
-        persona._state_line.assert_not_awaited()
-        cg.emotion.prompt_line.assert_not_awaited()
-        self.assertIn("congling:persona", req.system_prompt)
-        self.assertEqual(req.parts[0][0], "场景：群聊")
-
-    @unittest.skipUnless((Path(__file__).resolve().parents[2]
-                          / "astrbot_plugin_congling/capability/registry.py").is_file(), "从绫源码未安装")
-    async def test_congling_recall_tool_rejects_before_cache_access(self):
-        root = Path(__file__).resolve().parents[2] / "astrbot_plugin_congling"
-        tree = ast.parse((root / "capability/registry.py").read_text(encoding="utf-8-sig"))
-        method = next(node for node in ast.walk(tree)
-                      if isinstance(node, ast.AsyncFunctionDef) and node.name == "invoke")
-        namespace = {"Any":object,"CapabilityResult":SimpleNamespace}
-        exec(compile(ast.Module(body=[method], type_ignores=[]), "invoke", "exec"), namespace)
-        registry = SimpleNamespace(plugin=SimpleNamespace(function_coupling_managed=lambda:True),
-                                   _cache_get=AsyncMock())
-        for name in ("self.memory","dream.recall"):
-            result = await namespace["invoke"](registry,name,event=self.event)
-            self.assertEqual(result.error,"delegated")
-        registry._cache_get.assert_not_awaited()
-
 
 if __name__ == "__main__":
     unittest.main()

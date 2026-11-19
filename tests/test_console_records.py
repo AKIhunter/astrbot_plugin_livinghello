@@ -23,20 +23,13 @@ from test_multimodal import Provider
 from test_context_policy import output
 
 
-CONGLING_MEMORY = """<!--congling:memory-->
+BACKGROUND_MEMORY = """<at_guard_memory>
 【长期记忆 · 仅供参考；与当前对话冲突时以当前对话为准】
 你和 TA 现在是「陌生」：还不太熟，说话客气一点
-【记忆结束】"""
-CONGLING_PERCEIVED = """<!--congling:perceived:1012794694-->
-【消息解析补充 · 以下内容由系统自动展开，不是用户原话】
-以下是这个会话里最近的几条消息（转发已展开），只作上下文参考，不是当前用户这一句的内容：
-聪明的帕鲁: 廉颇老矣，尚能饭否
-闲人xh925: 抓紧打影之刃，我都快通关了。
-闲人xh925: 你真的廉颇老矣了，还能打不？
-聪明的帕鲁: 我连着两个晚自习，已经倦了
-鎖鈊嗳╰ァㄊ: [图片：图中是Q版初音未来的表情包，她流着两条蓝色宽泪、半闭着眼，呈现无语流泪的情绪。图中无文字。]从MIKU出生单推至今~
-聪明的帕鲁: 今天健身，准备明天的贡品，直接请假上坟去
-【补充结束】"""
+【记忆结束】</at_guard_memory>"""
+RECENT_MESSAGES = [
+    {"sender_name": f"用户{index}", "text": f"近期消息{index}"} for index in range(6)
+]
 
 
 class RecordsTest(unittest.TestCase):
@@ -320,46 +313,38 @@ class DisplayContextTest(unittest.TestCase):
     @staticmethod
     def chat(*, recent=None, memory=None):
         return {
-            "recent_messages_old_to_new": recent or [],
+            "recent_messages_old_to_new": RECENT_MESSAGES if recent is None else recent,
             "current_message": {
                 "text": "然后你深海少女手办买了吗",
                 "sender_name": "聪明的帕鲁",
             },
             "scoped_memory": memory if memory is not None else [
-                CONGLING_MEMORY, CONGLING_PERCEIVED],
+                BACKGROUND_MEMORY],
         }
 
-    def test_user_sample_counts_six_perceived_messages_not_long_term_memory(self):
+    def test_counts_six_own_messages_not_background_memory(self):
         chat = guard_webui._display_chat_data(self.chat())
         self.assertEqual(chat["reference_count"], 6)
         self.assertEqual(
             [item["sender_name"] for item in chat["reference_messages_old_to_new"]],
-            ["聪明的帕鲁", "闲人xh925", "闲人xh925", "聪明的帕鲁",
-             "鎖鈊嗳╰ァㄊ", "聪明的帕鲁"],
+            [f"用户{index}" for index in range(6)],
         )
-        self.assertEqual(chat["background_memory"], [CONGLING_MEMORY])
-        self.assertNotIn("congling:perceived", "\n".join(chat["background_memory"]))
+        self.assertEqual(chat["background_memory"], [BACKGROUND_MEMORY])
 
-    def test_local_messages_win_dedup_and_omission_stays_visible_without_counting(self):
-        perceived = """<!--congling:perceived:1-->
-以下是这个会话里最近的几条消息：
-Alice: HELLO &amp;   world
-…（更早的略）
-Bob：第二条: 正文冒号保留
-【补充结束】"""
+    def test_local_messages_dedup_html_whitespace_and_keep_body_colons(self):
         chat = guard_webui._display_chat_data(self.chat(
-            recent=[{"sender_name": "alice", "text": "hello & world"}],
-            memory=[perceived],
+            recent=[{"sender_name": "alice", "text": "hello & world"},
+                    "Alice: HELLO &amp;   world", "Bob：第二条: 正文冒号保留"],
+            memory=[BACKGROUND_MEMORY],
         ))
         self.assertEqual(chat["reference_count"], 2)
-        self.assertEqual(len(chat["reference_messages_old_to_new"]), 3)
+        self.assertEqual(len(chat["reference_messages_old_to_new"]), 2)
         self.assertEqual(chat["reference_messages_old_to_new"][0]["source"], "livinghello")
-        self.assertTrue(chat["reference_messages_old_to_new"][1]["is_omission"])
-        self.assertEqual(chat["reference_messages_old_to_new"][2]["text"], "第二条: 正文冒号保留")
+        self.assertEqual(chat["reference_messages_old_to_new"][1]["text"], "第二条: 正文冒号保留")
 
-    def test_broken_or_unknown_perceived_block_fails_open(self):
-        broken = "<!--congling:perceived:1-->\nAlice: 没有稳定标题"
-        chat = guard_webui._display_chat_data(self.chat(memory=[broken]))
+    def test_background_blocks_are_preserved_without_parsing_into_chat(self):
+        broken = "<!--unknown:history-->\nAlice: 原样保留"
+        chat = guard_webui._display_chat_data(self.chat(recent=[], memory=[broken]))
         self.assertEqual(chat["reference_count"], 0)
         self.assertEqual(chat["background_memory"], [broken])
 

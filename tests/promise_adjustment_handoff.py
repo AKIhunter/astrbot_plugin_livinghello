@@ -13,6 +13,8 @@ class RealAdjustmentHandoffTests(unittest.IsolatedAsyncioTestCase):
     setUp = fixtures.ImageGenerationTests.setUp
 
     async def test_real_handoff_keeps_lh_question_and_le_does_not_repeat(self):
+        # 本例验证立即询问调整；显式关闭自动改词，避免默认重试许可改变场景。
+        self.service.values["prompt_guard_retry_limit"] = 0
         sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
         from astrbot_plugin_livingemotion.tests.integration.test_application import application, Message
         from astrbot_plugin_livingemotion.contracts import Relationship

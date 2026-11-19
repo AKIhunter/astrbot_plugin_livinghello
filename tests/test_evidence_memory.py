@@ -6,10 +6,10 @@ from integrations.guard_evidence import EvidenceMemory
 
 
 class Event:
-    def __init__(self, origin="qq:private:1", sender="1", persona="ling"):
+    def __init__(self, origin="qq:private:1", sender="1", persona="default"):
         self.unified_msg_origin = origin
         self.sender = sender
-        self.extra = {"congling:persona_token": persona}
+        self.extra = {"_trace_persona_id": persona}
         self.message_str = "Python字典怎么排序"
 
     def get_sender_id(self):
@@ -22,7 +22,8 @@ class Event:
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
         self.now = 10
-        self.config = {"provider_settings": {"default_personality": "ling"}}
+        self.config = {"agent_runner": {"runner_type": "local",
+                                       "config": {"persona": {"persona_id": "default"}}}}
         self.cache = EvidenceMemory(SimpleNamespace(context=SimpleNamespace(
             get_config=lambda _: self.config)), clock=lambda: self.now)
         self.tool = SimpleNamespace(name="web_search")
@@ -54,10 +55,10 @@ class EvidenceTests(unittest.TestCase):
         for event in (Event(origin="qq:group:1"), Event(sender="2"), Event(persona="other")):
             self.cache.attach(event, self.req)
             self.assertEqual(self.req.extra_user_content_parts, [])
-        self.config["provider_settings"]["default_personality"] = "new"
+        self.config["agent_runner"]["config"]["persona"]["persona_id"] = "new"
         self.cache.attach(self.event, self.req)
         self.assertEqual(self.req.extra_user_content_parts, [])
-        self.config["provider_settings"]["default_personality"] = "ling"
+        self.config["agent_runner"]["config"]["persona"]["persona_id"] = "default"
         self.req.func_tool.tools = []
         self.cache.attach(self.event, self.req)
         self.assertEqual(self.req.extra_user_content_parts, [])
@@ -81,3 +82,37 @@ class EvidenceTests(unittest.TestCase):
         for index in range(300):
             self.cache.remember(self.event, self.tool, {"query": str(index)}, "资料")
         self.assertEqual(len(self.cache.rows), 256)
+
+    def test_same_persona_id_changed_prompt_and_conversation_do_not_reuse(self):
+        context = self.cache.plugin.context
+        context.persona_manager = SimpleNamespace(personas_v3=[{"name": "default", "prompt": "原人格"}])
+        request = SimpleNamespace(conversation=SimpleNamespace(cid="c1", persona_id="default"),
+                                  system_prompt="原人格")
+        self.event.extra["_livinghello_provider_request"] = request
+        self.remember()
+        self.cache.attach(self.event, self.req)
+        self.assertEqual(len(self.req.extra_user_content_parts), 1)
+        context.persona_manager.personas_v3[0]["prompt"] = "新人格"
+        self.cache.attach(self.event, self.req)
+        self.assertEqual(self.req.extra_user_content_parts, [])
+        context.persona_manager.personas_v3[0]["prompt"] = "原人格"
+        request.conversation.cid = "c2"
+        self.cache.attach(self.event, self.req)
+        self.assertEqual(self.req.extra_user_content_parts, [])
+
+    def test_missing_native_config_fails_closed(self):
+        self.cache.plugin.context.get_config = lambda _: None
+        self.remember()
+        self.assertEqual(self.cache.rows, {})
+
+    def test_native_config_io_failure_closes_cached_evidence_reuse(self):
+        self.remember()
+        self.cache.attach(self.event, self.req)
+        self.assertEqual(len(self.req.extra_user_content_parts), 1)
+
+        def broken(_):
+            raise OSError("离线配置不可读")
+
+        self.cache.plugin.context.get_config = broken
+        self.cache.attach(self.event, self.req)
+        self.assertEqual(self.req.extra_user_content_parts, [])

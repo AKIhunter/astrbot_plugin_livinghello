@@ -204,21 +204,6 @@ def takeover(config):
     return config.get("expression_takeover_enabled", True) is True
 
 
-def congling_for(context, event):
-    """每次解析已激活实例及会话开关，避免重载后缓存旧实例。"""
-    for name in ("astrbot_plugin_congling", "congling"):
-        try:
-            metadata = context.get_registered_star(name)
-            plugin = getattr(metadata, "star_cls", None)
-            if (getattr(metadata, "activated", False) and plugin is not None
-                    and callable(getattr(plugin, "enabled_for", None))
-                    and plugin.enabled_for(event)):
-                return plugin
-        except Exception:
-            continue
-    return None
-
-
 class Expression:
     def __init__(self, plugin):
         self.plugin = plugin

@@ -94,7 +94,7 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
         for word in ("secret-", "key.invalid", "token", "NaN"):
             self.assertNotIn(word, row)
 
-    async def test_livinghello_quote_vision_replaces_congling_uncollected_without_url(self):
+    async def test_independent_quote_vision_records_source_without_url(self):
         native = SimpleNamespace(enabled_for=lambda event: True)
         provider = SimpleNamespace(
             get_model=lambda: "qwen3-vl",
@@ -119,7 +119,7 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
         ]
         event.set_extra("_livinghello_image_owner", "livinghello")
         rid = self.service.begin(event)
-        emit(event, "input_parse", "uncollected", reason="congling_owns_input")
+        emit(event, "input_parse", "uncollected", reason="parse_not_started")
 
         # 本用例只测trace来源与URL隐藏，图片准备使用无网络替身。
         with patch("images.guard_image_evidence.prepare_image",

@@ -61,17 +61,11 @@ def clean_request(req, *, emotion, memory):
                      "<at_guard_memory"]
         if emotion:
             prefixes += ["<!--livingemotion:memory:v2-->"]
-    # 配套插件的动态层由协作入口让位；清理旧请求残留，固定人设和感知仍保留。
-    prefixes += ["<!--congling:state-->", "<!--congling:memory-->",
-                 "<!--congling:crawled_history-->", "<!--congling:wake_reply-->",
-                 "<!--congling:night-->"]
     parts = getattr(req, "extra_user_content_parts", None)
     if isinstance(parts, list):
         parts[:] = [p for p in parts if not getattr(p, "text", "").startswith(tuple(prefixes))]
     tools = getattr(req, "func_tool", None)
-    blocked_tools = {"congling_self_memory", "congling_dream_recall"}
-    if not memory:
-        blocked_tools |= MEMORY_TOOLS
+    blocked_tools = set() if memory else MEMORY_TOOLS
     if isinstance(getattr(tools, "tools", None), list):
         req.func_tool = copy.copy(tools)
         req.func_tool.tools = [tool for tool in tools.tools

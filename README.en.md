@@ -2,13 +2,16 @@
 
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
-[![Version](https://img.shields.io/badge/version-2.9.0-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.1-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
 Understand the topic before joining a conversation. LivingHello combines local rules,
 text and visual participation decisions, then delegates replies to AstrBot's native model and persona.
 It supports message fragments, image evidence, reply segments, quoting, TTS and separate image generation.
+
+Input understanding, persona isolation and outage replay are implemented within LivingHello.
+See the [independent runtime guide](docs/independent-runtime.md) for freshness and delivery boundaries.
 
 Install on AstrBot 4.29.1 or later and open `guard`. Select a classifier, keep `enforce` and threshold 65,
 then choose the native reply model and persona and save. AstrBot still decides which configuration a conversation uses.

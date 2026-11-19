@@ -1,13 +1,11 @@
-"""从绫准备耗时与发送保护回归；不用真实模型或群消息。"""
+"""LivingEmotion 准备耗时与 LH 发送保护；不用真实模型或群消息。"""
 import asyncio
-import sys
-import types
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from astrbot.api.message_components import Plain
-from console.guard_webui import EDITABLE, _coerce, _congling_compat, _load_schema_subset, _state
+from console.guard_webui import EDITABLE, _coerce, _load_schema_subset, _state
 from test_gate import GateEvent, gate_config, plugin
 
 
@@ -25,43 +23,43 @@ class PreparationTest(unittest.TestCase):
             return self.guard._stale_reason(self.event, "1001")
 
     def test_preparation_allows_reply_but_later_generation_expires(self):
-        self.event.set_extra("congling:wake_prepare_seconds", 45)
+        self.event.set_extra("livingemotion:wake_prepare_seconds", 45)
         self.assertEqual(self.reason(60), "")
         self.assertEqual(self.reason(80), "message_expired")
 
     def test_exact_deadline_and_submillisecond_overrun(self):
-        self.event.set_extra("congling:wake_prepare_seconds", 45)
+        self.event.set_extra("livingemotion:wake_prepare_seconds", 45)
         self.assertEqual(self.reason(75), "")
         self.assertEqual(self.reason(75.00001), "message_expired")
 
-    def test_disabling_compat_uses_original_age(self):
-        self.guard.config["gate_congling_prepare_compat"] = False
-        self.event.set_extra("congling:wake_prepare_seconds", 45)
+    def test_disabling_catchup_accounting_uses_original_age(self):
+        self.guard.config["integrate_livingemotion_catchup"] = False
+        self.event.set_extra("livingemotion:wake_prepare_seconds", 45)
         self.assertEqual(self.reason(), "message_expired")
 
     def test_invalid_preparation_never_extends_deadline(self):
         for value in (None, "", 0, -1, True, False, "bad", [], {},
                       float("nan"), float("inf"), -float("inf"), 61, 10 ** 1000):
             with self.subTest(value=repr(value)[:30]):
-                self.event.set_extra("congling:wake_prepare_seconds", value)
+                self.event.set_extra("livingemotion:wake_prepare_seconds", value)
                 self.assertEqual(self.reason(), "message_expired")
 
     def test_missing_preparation_preserves_original_rule(self):
         self.assertEqual(self.reason(), "message_expired")
 
     def test_numeric_string_is_accepted(self):
-        self.event.set_extra("congling:wake_prepare_seconds", "45.0")
+        self.event.set_extra("livingemotion:wake_prepare_seconds", "45.0")
         self.assertEqual(self.reason(), "")
 
     def test_preparation_is_isolated_per_event(self):
-        self.event.set_extra("congling:wake_prepare_seconds", 45)
+        self.event.set_extra("livingemotion:wake_prepare_seconds", 45)
         self.assertEqual(self.reason(), "")
-        self.event.extra.pop("congling:wake_prepare_seconds")
+        self.event.extra.pop("livingemotion:wake_prepare_seconds")
         self.assertEqual(self.reason(), "message_expired")
 
     def test_missing_recorded_timestamp_does_not_create_timeout(self):
         self.event.extra.pop("_at_guard_recorded_at")
-        self.event.set_extra("congling:wake_prepare_seconds", 45)
+        self.event.set_extra("livingemotion:wake_prepare_seconds", 45)
         self.assertEqual(self.reason(), "")
         self.guard.context_revision["1001"] = 1
         # 新设计：判定后群友继续说话只刷新上下文，不撤销已生成的回复。
@@ -69,13 +67,13 @@ class PreparationTest(unittest.TestCase):
         self.assertTrue(self.guard._context_advanced(self.event, "1001"))
 
     def test_new_message_marks_context_advanced_without_revoking_prepared_reply(self):
-        self.event.set_extra("congling:wake_prepare_seconds", 45)
+        self.event.set_extra("livingemotion:wake_prepare_seconds", 45)
         self.guard.context_revision["1001"] = 1
         self.assertEqual(self.reason(), "")
         self.assertTrue(self.guard._context_advanced(self.event, "1001"))
 
     def test_generation_hook_keeps_generated_group_reply_but_blocks_expiry(self):
-        self.event.set_extra("congling:wake_prepare_seconds", 45)
+        self.event.set_extra("livingemotion:wake_prepare_seconds", 45)
         for age, revision, expected in ((80, 0, "message_expired"), (60, 1, None)):
             with self.subTest(expected=expected):
                 self.event.extra.pop("_at_guard_delivery_blocked", None)
@@ -88,7 +86,7 @@ class PreparationTest(unittest.TestCase):
                 self.assertEqual(self.event.get_extra("_at_guard_delivery_blocked"), expected)
 
     def test_final_send_recheck_keeps_prepared_reply_when_new_context_arrives(self):
-        self.event.set_extra("congling:wake_prepare_seconds", 45)
+        self.event.set_extra("livingemotion:wake_prepare_seconds", 45)
         result = SimpleNamespace(chain=[Plain("当前答复")])
         self.event.get_result = lambda: result
         with patch("main.time.monotonic", return_value=160):
@@ -102,46 +100,9 @@ class PreparationTest(unittest.TestCase):
         self.assertTrue(self.event.get_extra("_at_guard_context_advanced"))
 
 
-class ConsoleCompatTest(unittest.TestCase):
+class PreparationSettingsTest(unittest.TestCase):
     def setUp(self):
         self.guard = plugin(gate_config())
-
-    def status(self, priority=9000, active=True, config=True, alias=False):
-        module = types.ModuleType("_at_guard_test_congling")
-        module.PRIO_PERSONA = priority
-        instance = type("Congling", (), {"__module__": module.__name__})()
-        metadata = SimpleNamespace(activated=active, version="1.1.0", star_cls=instance)
-        self.guard.context = SimpleNamespace(get_registered_star=lambda name:
-            metadata if name == ("congling" if alias else "astrbot_plugin_congling") else None)
-        self.guard.config["gate_congling_prepare_compat"] = config
-        with patch.dict(sys.modules, {module.__name__: module}):
-            return _congling_compat(self.guard)
-
-    def test_disabled_or_absent_plugin_is_optional(self):
-        self.guard.context = SimpleNamespace(get_registered_star=lambda _: None)
-        self.assertEqual(_congling_compat(self.guard), {
-            "detected": False, "active": False, "order": "unknown"})
-        self.assertFalse(self.status(active=False)["active"])
-
-    def test_priority_is_checked_from_loaded_module(self):
-        self.assertEqual(self.status()["order"], "after_guard")
-        self.assertEqual(self.status(priority=12000)["order"], "before_or_equal_guard")
-        self.assertEqual(self.status(priority=10000)["order"], "before_or_equal_guard")
-
-    def test_unknown_priority_does_not_claim_compatibility(self):
-        for priority in (None, "9000", True):
-            with self.subTest(priority=priority):
-                self.assertEqual(self.status(priority=priority)["order"], "unknown")
-
-    def test_alias_lookup_and_disabled_accounting(self):
-        self.assertTrue(self.status(alias=True)["detected"])
-        self.assertNotIn("prepare_accounting", self.status(config=False))
-
-    def test_registry_failure_does_not_break_console(self):
-        def unavailable(_):
-            raise RuntimeError("未提供注册表")
-        self.guard.context = SimpleNamespace(get_registered_star=unavailable)
-        self.assertFalse(_congling_compat(self.guard)["detected"])
 
     def test_schema_and_editable_fields_include_switch(self):
         key = "integrate_livingemotion_catchup"
@@ -151,14 +112,12 @@ class ConsoleCompatTest(unittest.TestCase):
         self.assertIs(_coerce(key, False), False)
         self.assertIs(_coerce(key, "true"), True)
 
-    def test_console_state_exposes_metadata_and_saved_switch(self):
+    def test_console_state_exposes_saved_switch(self):
         self.guard.context = SimpleNamespace(get_registered_star=lambda _: None,
                                              get_all_providers=lambda: [])
-        self.guard.config["gate_congling_prepare_compat"] = False
+        self.guard.config["integrate_livingemotion_catchup"] = False
         state = asyncio.run(_state(self.guard))
-        self.assertNotIn("gate_congling_prepare_compat", state["config"])
-        self.assertNotIn("prepare_accounting", state["congling_compat"])
-        self.assertFalse(state["congling_compat"]["detected"])
+        self.assertFalse(state["config"]["integrate_livingemotion_catchup"])
 
 
 if __name__ == "__main__":

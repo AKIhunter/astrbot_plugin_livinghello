@@ -241,7 +241,7 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         if event.get_group_id():
             results = [item async for item in self.guard.apply_hard_group_rules(event)]
             self.assertEqual(results, [])
-        # 模拟从绫：在淘汰旧触发前逐条记录原始消息，而非合并后的复制文本。
+        # 在淘汰旧触发前逐条记录原始消息，保留每条来源的作者与时间。
         self.archived.append((event.message_str, list(event.get_messages())))
         return event
 

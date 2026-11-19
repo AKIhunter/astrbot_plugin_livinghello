@@ -117,19 +117,6 @@ class ProviderMapContext(NotificationContext):
         return self.providers.get(provider_id)
 
 
-class CrossPluginContext(NotificationContext):
-    def __init__(self, provider, congling, admins=None):
-        super().__init__(provider, admins)
-        self.congling = congling
-
-    def get_registered_star(self, name):
-        if name not in {"astrbot_plugin_congling", "congling"}:
-            return None
-        if self.congling is None:
-            return None
-        return SimpleNamespace(activated=True, star_cls=self.congling)
-
-
 async def wait_until(predicate, timeout=1.0):
     deadline = asyncio.get_running_loop().time() + timeout
     while not predicate():
@@ -392,7 +379,7 @@ class ClassifierProbeLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(guard.request_classifier_outage_probe(reason="test_due"))
         await wait_until(
-            lambda: guard._outage().state is OutageState.RECOVERING
+            lambda: guard._outage().state is OutageState.HEALTHY and provider.calls == 1
         )
 
         self.assertEqual(provider.calls, 1)
@@ -406,7 +393,7 @@ class ClassifierProbeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request["session_id"], "at_guard_classifier_health_probe")
         self.assertEqual(request["contexts"], [])
         self.assertNotIn("private-scope", payload)
-        work = guard.pending_classifier_recovery()
+        work = callbacks[0]
         self.assertEqual(work.event_id, event.event_id)
         self.assertEqual(work.window_end, event.recovery_window_end)
         self.assertEqual(callbacks, [work])
@@ -473,7 +460,7 @@ class ClassifierProbeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             guard._outage().clock = lambda: now[0]
             await guard.guard_llm_request(event, request)
             await wait_until(
-                lambda: guard._outage().state is OutageState.RECOVERING
+                lambda: guard._outage().state is OutageState.HEALTHY and provider.calls == 2
             )
 
         self.assertEqual(provider.calls, 2)
@@ -520,12 +507,12 @@ class ClassifierProbeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             immediate=True, reason="config_saved"
         )
         await wait_until(
-            lambda: guard._outage().state is OutageState.RECOVERING
+            lambda: guard._outage().state is OutageState.HEALTHY and provider.calls == 1
         )
 
         self.assertEqual(provider.calls, 1)
         self.assertEqual(
-            guard.pending_classifier_recovery().provider_id, "provider-a"
+            guard._outage().store.load_latest().provider_id, "provider-a"
         )
         await guard.terminate()
 
@@ -557,16 +544,16 @@ class ClassifierProbeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             with patch("console.guard_webui.register_webui", lambda *_: None):
                 await guard.initialize()
             await wait_until(
-                lambda: guard._outage().state is OutageState.RECOVERING
+                lambda: guard._outage().state is OutageState.HEALTHY and provider.calls == 1
             )
 
             self.assertEqual(provider.calls, 1)
             self.assertEqual(
-                guard.pending_classifier_recovery().event_id, event.event_id
+                guard._outage().store.load_latest().event_id, event.event_id
             )
             self.assertEqual(guard.context.sent, [])
             self.assertEqual(
-                len(guard._outage().current_event.notifications), 1
+                len(guard._outage().store.load_latest().notifications), 1
             )
             await guard.terminate()
 
@@ -623,27 +610,29 @@ class ClassifierProbeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(guard._classifier_probe_task, task)
         old_provider.release.set()
         await wait_until(
-            lambda: guard._outage().state is OutageState.RECOVERING
+            lambda: guard._outage().state is OutageState.HEALTHY and new_provider.calls == 1
         )
 
         self.assertEqual(old_provider.calls, 1)
         self.assertEqual(new_provider.calls, 1)
         self.assertEqual(
-            guard.pending_classifier_recovery().provider_id, "provider-b"
+            guard._outage().store.load_latest().provider_id, "provider-b"
         )
         await guard.terminate()
 
 
-class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
-    def ready(self, congling, *, admins=None, sessions=("1001", "1002")):
+class ClassifierRecoveryCallbackTests(unittest.IsolatedAsyncioTestCase):
+    def ready(self, handler=None, *, admins=None, sessions=("1001", "1002")):
         provider = CapturingProvider(VALID_PROBE_RESPONSE)
         guard = plugin(gate_config(
             classifier_outage_recovery_enabled=True,
             classifier_provider_id="provider-a",
         ), provider)
-        guard.context = CrossPluginContext(provider, congling, admins)
+        guard.context = NotificationContext(provider, admins)
         persistent_guard(self, guard)
         guard._ensure_classifier_probe_runtime()
+        if handler is not None:
+            guard.register_classifier_recovery_callback(handler)
         guard._classifier_probe_platform_id = "qq-bot"
         outage = guard._outage()
         event = outage.create_event(
@@ -657,14 +646,13 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
         work = outage.complete_probe_success(event.event_id)
         return guard, event, work
 
-    async def test_livinghello_calls_congling_and_closes_completed_batch(self):
-        congling = SimpleNamespace()
-        congling.recover_classifier_outage = AsyncMock()
-        guard, event, work = self.ready(congling, admins=["9001"])
+    async def test_explicit_callback_closes_completed_batch(self):
+        handler = AsyncMock()
+        guard, event, work = self.ready(handler, admins=["9001"])
         observed = []
         guard.register_classifier_recovery_callback(observed.append)
-        congling.recover_classifier_outage.return_value = {
-            "contract": "congling.classifier-recovery.v1",
+        handler.return_value = {
+            "contract": "livinghello.classifier-recovery.v1",
             "event_id": work.event_id,
             "sessions": [
                 {
@@ -682,8 +670,8 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await guard.resume_classifier_recovery())
 
-        congling.recover_classifier_outage.assert_awaited_once_with(work)
-        self.assertEqual(observed, [work])
+        handler.assert_awaited_once_with(work)
+        self.assertEqual(observed, [])
         self.assertEqual(
             event.affected_sessions[work.sessions[0].session_id].backfill_status,
             BackfillStatus.COMPLETED,
@@ -696,7 +684,7 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(guard._outage().current_event)
         self.assertEqual(guard.context.sent, [])
 
-    async def test_congling_unavailable_only_notifies_admin(self):
+    async def test_missing_original_message_marks_unavailable(self):
         guard, event, work = self.ready(None, admins=["9001"])
 
         await guard._publish_classifier_recovery(work)
@@ -710,13 +698,12 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(guard._outage().store.load_latest().state, OutageState.HEALTHY)
 
     async def test_retry_and_unknown_results_keep_event_recovering(self):
-        congling = SimpleNamespace()
-        congling.recover_classifier_outage = AsyncMock()
+        handler = AsyncMock()
         guard, event, work = self.ready(
-            congling, admins=["9001"], sessions=("1001",)
+            handler, admins=["9001"], sessions=("1001",)
         )
-        congling.recover_classifier_outage.return_value = {
-            "contract": "congling.classifier-recovery.v1",
+        handler.return_value = {
+            "contract": "livinghello.classifier-recovery.v1",
             "event_id": work.event_id,
             "sessions": [{
                 "session_id": work.sessions[0].session_id,
@@ -736,14 +723,13 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(guard.context.sent, [])
 
     async def test_retry_waits_ten_minutes_and_reuses_admin_throttle(self):
-        congling = SimpleNamespace()
         attempts = 0
 
         async def recover(current):
             nonlocal attempts
             attempts += 1
             return {
-                "contract": "congling.classifier-recovery.v1",
+                "contract": "livinghello.classifier-recovery.v1",
                 "event_id": current.event_id,
                 "sessions": [{
                     "session_id": current.sessions[0].session_id,
@@ -754,9 +740,9 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
                 }],
             }
 
-        congling.recover_classifier_outage = AsyncMock(side_effect=recover)
+        handler = AsyncMock(side_effect=recover)
         guard, event, work = self.ready(
-            congling, admins=["9001"], sessions=("1001",)
+            handler, admins=["9001"], sessions=("1001",)
         )
         now = [time.time()]
         guard._outage().clock = lambda: now[0]
@@ -790,12 +776,11 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
         await guard.terminate()
 
     async def test_cancelled_handoff_persists_retry_cooldown(self):
-        congling = SimpleNamespace()
-        congling.recover_classifier_outage = AsyncMock(
+        handler = AsyncMock(
             side_effect=asyncio.CancelledError()
         )
         guard, event, work = self.ready(
-            congling, sessions=("1001",)
+            handler, sessions=("1001",)
         )
         now = [time.time()]
         guard._outage().clock = lambda: now[0]
@@ -809,16 +794,14 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
             session.retry_not_before, now[0] + COOLDOWN_SECONDS
         )
         self.assertFalse(await guard.resume_classifier_recovery())
-        congling.recover_classifier_outage.assert_awaited_once()
+        handler.assert_awaited_once()
         await guard.terminate()
 
-    async def test_concurrent_duplicate_handoff_calls_congling_once(self):
-        congling = SimpleNamespace()
-
+    async def test_concurrent_duplicate_recovery_calls_callback_once(self):
         async def recover(current):
             await asyncio.sleep(0.02)
             return {
-                "contract": "congling.classifier-recovery.v1",
+                "contract": "livinghello.classifier-recovery.v1",
                 "event_id": current.event_id,
                 "sessions": [{
                     "session_id": current.sessions[0].session_id,
@@ -827,8 +810,8 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
                 }],
             }
 
-        congling.recover_classifier_outage = AsyncMock(side_effect=recover)
-        guard, _, _ = self.ready(congling, sessions=("1001",))
+        handler = AsyncMock(side_effect=recover)
+        guard, _, _ = self.ready(handler, sessions=("1001",))
 
         results = await asyncio.gather(
             guard.resume_classifier_recovery(),
@@ -836,7 +819,7 @@ class ClassifierRecoveryHandoffTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(results, [True, True])
-        congling.recover_classifier_outage.assert_awaited_once()
+        handler.assert_awaited_once()
         self.assertEqual(guard._outage().state, OutageState.HEALTHY)
 
 

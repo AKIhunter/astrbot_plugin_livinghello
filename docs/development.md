@@ -47,7 +47,6 @@ python3 -B run_offline_tests.py
 
 ```bash
 ASTRBOT_NATIVE_SOURCE=/path/to/astrbot \
-CONGLING_HANDOFF_SOURCE=/path/to/astrbot_plugin_congling \
 LIVINGMEMORY_TIMING_SOURCE=/path/to/LivingMemory/core/retrieval/request_timing.py \
 python3 -B run_offline_tests.py
 ```
@@ -130,11 +129,13 @@ git archive --format=zip HEAD -o /tmp/livinghello-release.zip
 
 | 字段 | 含义 |
 | --- | --- |
-| `reference_messages_old_to_new` | 本地流水优先，再追加配套插件感知块中未重复的近期消息 |
+| `reference_messages_old_to_new` | LH自身结构化流水，按作者与正文去重后展示 |
 | `reference_count` | 排除省略提示后的去重消息总数 |
 | `background_memory` | 长期事实、关系状态及无法安全解析的原块 |
 
-增强不修改原 `recent_messages_old_to_new`、`scoped_memory` 或持久日志。解析器只接受明确 `congling:perceived` marker 与稳定标题，未知格式 fail-open。回归测试至少覆盖用户样例6条、长期记忆不计数、HTML/空白与大小写去重、正文冒号、省略提示、损坏块、30条上限，以及状态/搜索接口一致。
+展示不修改原 `recent_messages_old_to_new`、`scoped_memory` 或持久日志。
+背景块原样保留，不按第三方私有文本标记解析成聊天。回归覆盖流水计数、背景不计数、
+HTML/空白与大小写去重、正文冒号、30条上限，以及状态/搜索接口一致。
 
 能力指标的每项包含 `ms`、`calls`、`status`：
 

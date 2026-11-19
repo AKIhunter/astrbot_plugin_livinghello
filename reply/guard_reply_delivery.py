@@ -24,8 +24,8 @@ try:
 except ImportError:
     from reply.guard_thinking_filter import strip_thinking_chain
 
-# 兼容用的历史标识：congling/core/rhythm.py 仍按这个键名和 "at_guard" 值判断
-# 回复归属，改名会让配套插件把 LivingHello 的回复当成自己的。不要改。
+# 兼容用的历史标识：已有事件、发送保护和本插件回归按此键名判断
+# 回复归属；这是本插件的存量技术标识，保留以兼容已有链路。
 OWNER_KEY = "_at_guard_reply_owner"
 RECALLED_KEY = "_at_guard_source_recalled"
 

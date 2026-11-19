@@ -1,6 +1,6 @@
 # LivingHello 当前文档
 
-适用2.9.0，2026-11-19核对。README只介绍当前产品；历史变更统一见[更新日志](../CHANGELOG.md)。
+适用2.9.1，2026-11-19核对。README只介绍当前产品；历史变更统一见[更新日志](../CHANGELOG.md)。
 源码变化时同步权威文档，每次提交检查链接、默认值、版本、资产和离线回归。
 
 | 用途 | 权威入口 | 依据 |
@@ -16,6 +16,7 @@
 | 失败通知和需用户调整 | [通知](image-failure-notice.md)、[失败交接](image-failure-followup.md) | 失败类别、唯一通知与恢复 |
 | 主模型失败与慢回复 | [兜底](reply_fallback.md)、[垫场](early-ack.md) | 有界重试与取消守卫 |
 | 开发、接口与测试 | [开发维护](development.md) | tests、scripts、CI |
+| 独立输入、人设隔离与故障补答 | [独立实现](independent-runtime.md) | 原生身份、RecoveryReplay |
 
 维护责任由对应功能修改者承担。文档核对的是仓库实现；生产部署、真实费用与模型效果另需证据。
 超90天未复核，或接口/行为变化未更新时标记stale，不把历史报告当作当前验收。

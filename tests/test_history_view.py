@@ -101,6 +101,9 @@ def native_runner_class():
 class HistoryViewTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.guard = plugin(gate_config())
+        self.native_config = {"agent_runner": {"runner_type": "local",
+                                              "config": {"persona": {"persona_id": "default"}}}}
+        self.guard.context.get_config = lambda *_: self.native_config
         self.guard._policy_send_reason = lambda _: ""
         self.event = Event(group="")
         self.request = SimpleNamespace(contexts=history(), conversation=SimpleNamespace(cid="c1"))
@@ -136,7 +139,8 @@ class HistoryViewTests(unittest.IsolatedAsyncioTestCase):
     def test_policy_sender_persona_and_conversation_changes_expire_scope(self):
         mutations = [
             lambda: setattr(self.event, "get_sender_id", lambda: "another"),
-            lambda: self.event.set_extra("congling:persona_token", "new"),
+            lambda: self.event.set_extra("_trace_persona_id", "new"),
+            lambda: self.native_config["agent_runner"]["config"]["persona"].update(persona_id="other"),
             lambda: setattr(self.request.conversation, "cid", "other"),
             lambda: setattr(self.guard, "_policy_send_reason", lambda _: "blocked"),
         ]

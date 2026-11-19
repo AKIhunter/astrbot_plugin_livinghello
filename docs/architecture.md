@@ -1,6 +1,6 @@
 # 流程与集成说明
 
-面向希望理解执行链路的使用者和配套开发者。当前实现依据 [main.py](../main.py)、[gate/guard_engine.py](../gate/guard_engine.py) 及各 `guard_*` 模块，已核对源码：2026-11-19（2.9.0）。完整白话分支见 [HTML 图解](flow/index.html)，四种接入组合见 [集成说明](integrations-and-flow.md)，历史反例见 [更新日志](../CHANGELOG.md)。钩子、缓存、超时或配套约定改变时更新；以下图不能代替部署状态验证。
+面向希望理解执行链路的使用者和配套开发者。当前实现依据 [main.py](../main.py)、[gate/guard_engine.py](../gate/guard_engine.py) 及各 `guard_*` 模块，已核对源码：2026-11-19（2.9.1）。完整白话分支见 [HTML 图解](flow/index.html)，四种接入组合见 [集成说明](integrations-and-flow.md)，历史反例见 [更新日志](../CHANGELOG.md)。钩子、缓存、超时或配套约定改变时更新；以下图不能代替部署状态验证。
 
 图片入口先刷新平台链接，并行获取OCR与有界下载，下载内容通过像素准入后才交视觉模型。
 OCR只提供文字证据，下载失败不猜画面。解码槽位随实际线程释放，达到两份并发时立即省略。
@@ -71,7 +71,7 @@ flowchart TD
 
 `guard_image_failure` 提供受控类别，`guard_livingemotion.image_followup` 通过版本契约交接。
 `guard_image_prompt` 在扣额度前执行映射与长度校验，成功返回图片后记录局部词对。
-LH 2.9.0 / LE 0.6.0 通过 `livinghello.image-prompt-mapping.v1` 和
+LH 2.9.1 / LE 0.6.0 通过 `livinghello.image-prompt-mapping.v1` 和
 `livingemotion.image-prompt-retry.v1` 核对实际模型范围与接手许可；LE 使用自身收尾模型，
 同一图片承诺最多自动调整两次。准备候选可恢复，生成或发送未知不重发。
 未接手或调整耗尽时，内容拒绝的说明与调整问句共用一次发送；已问回执持久交给 LE。
@@ -134,24 +134,28 @@ LivingHello 在 `listen_livingemotion`（优先级 10500，位于 LivingEmotion 
 
 ## 配套插件联用
 
-当前事件是否启用配套插件由其已激活实例 `enabled_for(event)` 决定。LivingHello 管理参与判定和发送格式，保留配套插件感知与固定人格兼容；动态情绪、关系和记忆由 LivingEmotion / LivingMemory 功能耦合控制，不再宣称配套插件旧动态模块全部继续运行。本地合并和理解已有独立实现；表达兼容启用且配套插件在本会话生效时复用文字解析，Hello 拥有的图片仍走本地理解。
+LivingHello独立管理输入展开、参与判定和发送格式；人格使用AstrBot原生配置与选择器。
+动态情绪、关系和记忆通过LivingEmotion / LivingMemory公开接口按开关接入。
+转发、引用、卡片、图片、视频和语音不会因检测到第三方插件而跳过LH处理。
 
 AstrBot 请求钩子按优先级从高到低执行：
 
 ```text
-逐条记录原文与未读历史
-  → LivingHello guard_llm_request（10000）
-  → enforce 静默：停止请求，不爬楼，不消费这批未读
-  → 放行：配套插件人格准备（配套实现须低于 10000，如 9000）
-      → 按自身开关爬楼 / 读取历史 / 补答
-      → 本次请求注入背景和人格
+LH收到消息并登记原文
+  → LH独立展开引用、转发、卡片及媒体
+  → AstrBot构建原生人格与会话请求
+  → 可选LE/Memory钩子按各自开关提供背景
+  → LivingHello guard_llm_request（10000）复核名单并判定
+  → enforce 静默：停止主模型请求
   → 主回复生成
   → LivingHello 在模型返回与发送前复查
 ```
 
-相同优先级不保证上述顺序。需同步配套版本，只有 LivingHello 更新不会自动补齐配套插件钩子、准备计时或固定人格兼容。
+请求内的工具证据和历史补读使用LH自有人设指纹：原生配置、最终人格ID与正文、
+会话ID、发送者和系统提示。任一项变化立即停止旧资料复用，身份无法取得时保守关闭补读。
 
-配套插件在本事件用 `set_extra("congling:wake_prepare_seconds", seconds)` 上报实际爬楼/补课准备秒数，宜用 `time.monotonic()` 在准备阶段 `finally` 中记录，不能包含正文生成。`gate_congling_prepare_compat` 开启时：
+LE在本事件用 `set_extra("livingemotion:wake_prepare_seconds", seconds)` 上报实际爬楼准备秒数。
+`integrate_livingemotion_catchup` 开启时扣除这段准备时间，正文生成仍受有效期限制：
 
 ```text
 有效已用时间 = 收消息后的总时间 - 当前事件有效准备时间
@@ -160,7 +164,7 @@ AstrBot 请求钩子按优先级从高到低执行：
 
 计时须为 0 到实际事件年龄之间的有限数，布尔、负数、NaN、无穷、不可解析或超过总年龄均不扣除。无配套插件、旧版未上报或缓存摘要无本次准备耗时，不凭空延长期限。计时不跨事件复用。
 
-代码默认机会有效期 30 秒时（使用者可配置为 300 秒）：
+以回复有效期30秒为例（实际默认值以配置参考为准）：
 
 | 总年龄 | 当前准备 | 有效年龄 | 没有新消息时 |
 | --- | --- | --- | --- |
@@ -170,9 +174,8 @@ AstrBot 请求钩子按优先级从高到低执行：
 
 普通群消息默认不启用水位顶替；`watermark_scope=all` 时按窗口使待发旧答失效。私聊默认窗口为 15 秒，窗口内顶替，窗口外保留；旧任务不保证立即停止。原生固定人格通过 `get_fixed_native_persona_id(umo)` 供兼容配套插件优先读取，避免旧会话选择覆盖。
 
-配套插件独立设置：`night.crawl_enabled` 控制爬楼，`night.rollup.enabled` 控制醒后补课，`compat.at_guard_coupled` 控制补课评分耦合；这些均不控制钩子顺序或计时上报。冻结历史上界、读取成功后标记已读、发送结果未知时防重复，由配套插件维护。
-
-关闭 `gate_congling_prepare_compat` 可恢复原年龄算法，不改数据库和已读状态。不要为绕过失败而自动重发；排查 `context_changed`、`message_expired`、`_at_guard_delivery_blocked` 及配套插件异常。
+关闭 `integrate_livingemotion_catchup` 不再扣除LE准备耗时，不改变LE自身的爬楼配置。
+LH故障补答由自有恢复器执行，具体边界见[独立实现](independent-runtime.md)。
 
 ## 原生模型与固定人格
 
