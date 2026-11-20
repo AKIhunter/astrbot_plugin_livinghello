@@ -75,7 +75,8 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.guard.context.get_config = lambda: {"admins_id": ["9001"]}
         self.guard.context.send_message = AsyncMock(return_value=True)
         self.health = self.guard.reply_health = ReplyHealth(self.guard)
-        self.now, self.waits = [time.monotonic()], []
+        # 虚拟时钟从整秒开始，避免机器起点的小数尾差改变预算断言和超时边界。
+        self.now, self.waits = [float(int(time.monotonic()))], []
 
         async def sleep(seconds):
             self.waits.append(seconds)
