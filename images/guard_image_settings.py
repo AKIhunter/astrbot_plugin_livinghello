@@ -9,7 +9,6 @@ from contextvars import ContextVar
 from datetime import datetime, timedelta
 import hashlib
 import json
-import logging
 import os
 from pathlib import Path
 import re
@@ -19,6 +18,8 @@ import tempfile
 import time
 from urllib.parse import urlsplit
 from types import SimpleNamespace
+
+from astrbot.api import logger
 
 try:
     from ..reply.guard_native_reply import NativeReplyError, revision
@@ -99,7 +100,7 @@ class ImageSettings:
         self.prompt_mapping = ImagePromptMapping(
             self.directory, prompt_overhead=lambda values:
             len(self.timed_prompt("", values.get("follow_server_time", False))),
-            logger=getattr(plugin, "logger", None))
+            logger=logger)
 
     @staticmethod
     def _mtime(path):

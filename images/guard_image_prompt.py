@@ -4,11 +4,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import logging
 from pathlib import Path
 import re
 import sqlite3
 import time
+
+from astrbot.api import logger
 
 try:
     from ..reply.guard_native_reply import NativeReplyError
@@ -132,14 +133,14 @@ def substitutions(prompt, pairs):
 
 
 class ImagePromptMapping:
-    def __init__(self, directory, prompt_overhead=None, logger=None):
+    def __init__(self, directory, prompt_overhead=None, logger=logger):
         self.directory = directory
         self.prompt_overhead = prompt_overhead
         self.ledger = directory / "image_prompt_mappings.sqlite3" if directory else None
         self._stamp = None
         self._rules = copy.deepcopy(BUILTIN)
         self.warning = ""
-        self.logger = logger or logging.getLogger(__name__)
+        self.logger = logger
         self.rules_source = "builtin"
         self.load_status = "missing"
         self.rules_file = "image_prompt_rules.json"
