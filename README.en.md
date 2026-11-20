@@ -2,7 +2,7 @@
 
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
-[![Version](https://img.shields.io/badge/version-2.9.3-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.4-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -36,6 +36,7 @@ Private image prompts, mapping files and learned data remain local.
 | [Usage](docs/usage.md) | Console operations, native models, segments and diagnostics |
 | [Configuration](docs/configuration.md) | Every field, default, location and effect |
 | [Architecture](docs/architecture.md) | Message, decision and delivery flows |
+| [History context](docs/history-context.md#主回复模型的lh短流水) | Independent history limits and compact reply context |
 | [Prompt mapping](docs/image-prompt-mapping.md) | Bounded repairs and learned substitutions |
 | [Image receipts](docs/image-delivery-receipts.md) | Persistent facts and original promise settlement |
 | [Development](docs/development.md) | Modules, interfaces and offline tests |
@@ -45,5 +46,5 @@ Private image prompts, mapping files and learned data remain local.
 Classifier, vision, TTS and image requests can incur provider charges.
 Developer: [AKIhunter](https://github.com/AKIhunter). Feedback QQ group: 991350637.
 
-Version **2.9.3** aligns prompt validation and adds loading diagnostics and automatic status updates.
+Version **2.9.4** makes classifier and reply history limits independent and compacts reply context while preserving authors, references and body sources.
 See the [changelog](CHANGELOG.md).

@@ -3,7 +3,7 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.9.3-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.4-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -76,6 +76,7 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 | 控制台操作、模型人格、分段、试跑和排障 | [使用指南](docs/usage.md) |
 | 每个配置项、默认值、保存位置和作用 | [配置参考](docs/configuration.md) |
 | 技术原理与功能判断流程 | [流程说明](docs/architecture.md)与[判断逻辑](docs/decision-logic.md) |
+| 判定与回复历史条数、短流水格式 | [历史说明](docs/history-context.md#主回复模型的lh短流水) |
 | 图片映射、重试和成功用词 | [映射说明](docs/image-prompt-mapping.md) |
 | 图片回执与原事项结算 | [回执契约](docs/image-delivery-receipts.md) |
 | 开发、测试与接口 | [开发维护](docs/development.md) |
@@ -101,4 +102,4 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 判定、图片理解、文字试跑、TTS和生图可能产生所选Provider费用。
 离线测试使用假模型和假发送，不代表真实模型效果或平台最终送达。
 
-当前版本 **2.9.3** 修复映射校验口径并补齐加载诊断与自动状态读回；详见[更新日志](CHANGELOG.md)。
+当前版本 **2.9.4** 修复判定与回复历史条数的独立生效范围，精简主回复流水并保留来源与引用；详见[更新日志](CHANGELOG.md)。

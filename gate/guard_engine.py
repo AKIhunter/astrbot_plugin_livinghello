@@ -635,6 +635,10 @@ class GateEngine:
         """送给小模型的流水条数（与送给主模型的条数分开配置，避免多花 token）。"""
         return self._int("gate_context_messages", 8, 0, 30)
 
+    def reply_context_messages(self) -> int:
+        """仅控制闸门路径给主回复模型补充的会话流水。"""
+        return self._int("participation_context_messages", 12, 2, 30)
+
     def context_max_age(self) -> float:
         # 0 明确关闭时间过滤；正数继续兼容原有的 30~3600 秒范围。
         value = self._float("gate_context_max_age_seconds", 300, 0, 3600)
