@@ -1,0 +1,80 @@
+// 真实配置页面；同一配置revision下热更新映射状态，保留编辑DOM与草稿。
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { startServer } from "./server.mjs";
+
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || fileURLToPath(
+  new URL("../../../astrbot_plugin_livingemotion/tests/ui/node_modules/playwright", import.meta.url)));
+const { server, url } = await startServer();
+const browser = await chromium.launch({ headless: true,
+  ...(process.env.CHROME_EXECUTABLE ? { executablePath: process.env.CHROME_EXECUTABLE } : {}) });
+const errors = [], external = [];
+try {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  page.on("pageerror", error => errors.push(error.message));
+  await page.route("**/*", route => {
+    if (new URL(route.request().url()).origin === new URL(url).origin) return route.continue();
+    external.push(route.request().url());
+    return route.abort();
+  });
+  await page.clock.install();
+  await page.addInitScript(() => {
+    window.__mappingFixture = {
+      contract: "livinghello.image-prompt-mapping.v1", enabled: true,
+      rule_count: 2, rules_source: "file", load_status: "loaded", learned_count: 0, warning: "",
+    };
+    let bridge;
+    Object.defineProperty(window, "AstrBotPluginView", {
+      get: () => bridge,
+      set(value) {
+        const get = value.apiGet.bind(value);
+        bridge = { ...value, async apiGet(path, params) {
+          if (path !== "console/image-settings") return get(path, params);
+          return { status: "ok", data: {
+            available: true, scope: "离线映射夹具", revision: "fixed-revision",
+            usage: { used: 0, limit: 20 }, providers: [],
+            fields: [{ key: "style_prompt", title: "画面风格", kind: "text", help: "离线草稿" }],
+            values: { style_prompt: "" }, prompt_mapping: structuredClone(window.__mappingFixture),
+          }};
+        }};
+      },
+    });
+  });
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.getElementById("imageSettingsStatus").textContent.includes("生效规则 2 条"));
+  const status = page.locator("#imageSettingsStatus");
+  assert.match(await status.textContent(), /当前映射表/);
+  await page.evaluate(() => Object.assign(window.__mappingFixture, {
+    rules_source: "previous", load_status: "invalid", warning: "第1条规则：正则不支持分组；使用上一份有效规则。",
+  }));
+  await page.clock.runFor(15100);
+  assert.match(await status.textContent(), /上一份有效表/);
+  assert.match(await status.textContent(), /第1条规则/);
+
+  await page.locator('.page-tabs [data-page="reply"]').click();
+  const tab = page.locator('#replySubTabs [data-sub="native"]');
+  if (await tab.count()) await tab.click();
+  const input = page.locator("#image-style_prompt");
+  if (!await input.isVisible()) await page.locator("#imageSettings summary").click();
+  await input.fill("本地未保存草稿");
+  const editor = await input.elementHandle();
+  await page.evaluate(() => Object.assign(window.__mappingFixture, {
+    rules_source: "builtin", rule_count: 1, warning: "映射表无效；使用内置规则。",
+  }));
+  await page.clock.runFor(15100);
+  assert.match(await status.textContent(), /生效规则 1 条（内置规则）/);
+  assert.equal(await input.inputValue(), "本地未保存草稿");
+  assert.equal(await page.evaluate(node => node === document.getElementById("image-style_prompt"), editor), true);
+  await page.evaluate(() => Object.assign(window.__mappingFixture, { enabled: false, rule_count: 0 }));
+  await page.clock.runFor(15100);
+  assert.match(await status.textContent(), /映射已关闭，生效规则 0 条/);
+  assert.equal(await input.inputValue(), "本地未保存草稿");
+  assert.deepEqual(errors, []);
+  assert.deepEqual(external, []);
+  console.log("PASS：映射表状态独立热更新；失败来源/规则数准确；编辑DOM和草稿保留；关闭显示0；无外部请求。");
+} finally {
+  await browser.close();
+  await new Promise(resolve => server.close(resolve));
+}

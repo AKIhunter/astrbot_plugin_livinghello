@@ -2,7 +2,7 @@
 
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
-[![Version](https://img.shields.io/badge/version-2.9.2-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.3-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -22,6 +22,10 @@ the actual provider, model and protocol; unknown generation or delivery is not b
 `sent` records sending-interface acceptance, not user read confirmation.
 Prompt adjustments allow 0–10 attempts, constrained by LE's remaining retry budget.
 LE can close or cancel suspended tasks without repeating unknown image requests.
+The console automatically shows active rule counts, their source and validation failures.
+Manual rules, LE proposals and historical substitutions share the same scene checks.
+See the [logic diagrams](docs/image-prompt-mapping.md#加载与校验逻辑) and
+[interactive example](https://akihunter.github.io/astrbot_plugin_livinghello/image-mapping-flow/).
 
 The editable general and segmentation presets now suggest 8–100 characters per chat paragraph.
 Unedited shipped text follows the updated preset; custom text is preserved.
@@ -40,3 +44,6 @@ Private image prompts, mapping files and learned data remain local.
 
 Classifier, vision, TTS and image requests can incur provider charges.
 Developer: [AKIhunter](https://github.com/AKIhunter). Feedback QQ group: 991350637.
+
+Version **2.9.3** aligns prompt validation and adds loading diagnostics and automatic status updates.
+See the [changelog](CHANGELOG.md).

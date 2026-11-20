@@ -3,7 +3,7 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.9.2-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.3-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -58,6 +58,8 @@
 `sent`记录发送接口受理，不表示用户已读。
 
 映射开关、JSON规则和学习开关在同页设置；局部成功词对按实际连接、模型与协议复用。
+页面自动显示生效规则数、规则来源与加载失败原因；手工规则、LE修复与历史词对共用画面要点校验。
+查看[加载与校验逻辑图](docs/image-prompt-mapping.md#加载与校验逻辑)或打开[在线交互示例](https://akihunter.github.io/astrbot_plugin_livinghello/image-mapping-flow/)。
 LE可以对明确拒绝或超长描述有限调整等义词，改变场景须用户确认；未知请求不重复收费。
 与LivingEmotion0.6.1配合时可按原promise_id结算，成功后后续轮次读取发送事实。
 LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起任务可在LE页面取消。
@@ -80,5 +82,23 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 | 全部当前文档 | [文档索引](docs/README.md) |
 | 历史变更 | [更新日志](CHANGELOG.md) |
 
+## 常见问题
+
+- 映射表写坏后，查看AI生图状态栏的具体原因；修复JSON即可热恢复。同一路径优先保留本实例的有效旧表，首次无效或缺失时用内置规则。
+- 生图超时或结果未知时不会自动补发；核对请求与发送回执后再决定下一步。
+- 模型保存后会话未变化时，在AstrBot核对该会话的配置分配。更多排查见[使用指南](docs/usage.md#根据记录排查)。
+
+## 兼容性
+
+需要AstrBot≥4.29.1；LivingEmotion、LivingMemory均为可选接入。生图承诺修复配套LE≥0.6.1。
+升级保留已有配置和成功词对；2.9.3会重新检查旧词对，明显改变画面要点的记录不再复用。
+
+## 使用指令
+
+主要入口为插件页面 `guard`。管理命令、调用权限和公开接口见[开发维护](docs/development.md)；
+原生人格与模型设置在「回复与私聊 → AstrBot配置人格」。
+
 判定、图片理解、文字试跑、TTS和生图可能产生所选Provider费用。
 离线测试使用假模型和假发送，不代表真实模型效果或平台最终送达。
+
+当前版本 **2.9.3** 修复映射校验口径并补齐加载诊断与自动状态读回；详见[更新日志](CHANGELOG.md)。

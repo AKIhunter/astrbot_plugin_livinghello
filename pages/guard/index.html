@@ -1496,6 +1496,22 @@
     });
     row.append(title,cell); return row;
   }
+  function renderImageSettingsStatus(images = imageData) {
+    if (!images) return;
+    el("imageSettingsStatus").textContent=images.available
+      ? images.scope + "。今日已用 " + images.usage.used + " / " + images.usage.limit
+        + " 次。主模型按需调用，图生图使用本次输入图片。"
+      : images.reason;
+    if (images.prompt_mapping?.contract) {
+      const mapping=images.prompt_mapping;
+      const source={file:"当前映射表",previous:"上一份有效表",builtin:"内置规则"}[mapping.rules_source];
+      el("imageSettingsStatus").textContent += mapping.enabled
+        ? " 生效规则 " + (mapping.rule_count ?? "—") + " 条"
+          + (source ? "（" + source + "）" : "") + "；当前模型成功用词 " + mapping.learned_count + " 条。"
+        : " 提示词映射已关闭，生效规则 0 条。";
+      el("imageSettingsStatus").textContent += mapping.warning || "";
+    }
+  }
   function renderNativeSettings() {
     if (settingsData) {
       const host = el("nativeSettingsFields");
@@ -1526,15 +1542,7 @@
     }
     if (imageData) {
       el("imageSettingsFields").replaceChildren();
-      el("imageSettingsStatus").textContent=imageData.available
-        ? imageData.scope + "。今日已用 " + imageData.usage.used + " / " + imageData.usage.limit
-          + " 次。主模型按需调用，图生图使用本次输入图片。"
-        : imageData.reason;
-      if (imageData.prompt_mapping?.contract) {
-        const mapping=imageData.prompt_mapping;
-        el("imageSettingsStatus").textContent += " 当前模型成功用词 " + mapping.learned_count
-          + " 条。" + (mapping.warning || "");
-      }
+      renderImageSettingsStatus();
       if (imageData.available) imageData.fields.forEach(f=>
         el("imageSettingsFields").append(settingsControl(f,imageData,imageDraft,"image-")));
     }
@@ -1759,10 +1767,16 @@
       ]);
       if (nativeLoading || nativeSaving || state.saving || nativeData.config_id !== configId || versions() !== startedVersions ||
           document.querySelector(".modal-mask.show")) return;
+      const mappingChanged = JSON.stringify(images.prompt_mapping) !== JSON.stringify(imageData?.prompt_mapping);
       const changed = segments.revision !== nativeData.revision || settings.revision !== settingsData?.revision ||
-        images.revision !== imageData?.revision || JSON.stringify(images.usage) !== JSON.stringify(imageData?.usage);
+        images.revision !== imageData?.revision || JSON.stringify(images.usage) !== JSON.stringify(imageData?.usage)
+        || mappingChanged;
       // 自动读回不替换编辑中的 DOM，也不推进草稿的保存版本；外部冲突仍由后端拦截。
       if (nativeDirty() || el("nativeSegments").contains(document.activeElement)) {
+        // 映射表热更新不改变配置revision；只更新状态文字，保留编辑DOM和原保存版本。
+        if (mappingChanged || JSON.stringify(images.usage) !== JSON.stringify(imageData?.usage)) {
+          renderImageSettingsStatus(images);
+        }
         if (changed) el("nativeStatus").textContent = "检测到原生配置更新，保留你的编辑；保存时会核验版本。";
         return;
       }

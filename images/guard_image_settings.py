@@ -98,7 +98,8 @@ class ImageSettings:
         self._inflight_images = set()
         self.prompt_mapping = ImagePromptMapping(
             self.directory, prompt_overhead=lambda values:
-            len(self.timed_prompt("", values.get("follow_server_time", False))))
+            len(self.timed_prompt("", values.get("follow_server_time", False))),
+            logger=getattr(plugin, "logger", None))
 
     @staticmethod
     def _mtime(path):

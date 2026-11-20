@@ -157,6 +157,119 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(substitutions("cat kitty", [{"from": "cat", "to": "kitty"},
                                                      {"from": "kitty", "to": "feline"}]), "kitty feline")
 
+    def test_manual_and_repair_use_the_same_scene_decision(self):
+        cases = [
+            ("lying on her back", "lying face up", True),
+            ("nude", "beige", True, "a nude color dress"),
+            ("sad", "unhappy", True),
+            ("smiling", "smile", True),
+            ("kneeling", "reclining", False),
+            ("kneel", "recline", False),
+            ("lying on her back", "lying face down", False),
+            ("standing", "sitting", False),
+            ("18", "19", False, "an 18 year old adult"),
+            ("abdomen", "navel", False),
+            ("nude", "beige", False, "a nude figure"),
+        ]
+        for case in cases:
+            source, target, allowed, *context = case
+            prompt = context[0] if context else source
+            with self.subTest(source=source, target=target, prompt=prompt):
+                self.table([{"id": "test", "type": "token", "from": source, "to": target}])
+                if allowed:
+                    self.assertEqual(self.apply(prompt)["prompt"], prompt.replace(source, target))
+                else:
+                    with self.assertRaises(PromptReviewError):
+                        self.apply(prompt)
+                repair = self.repair(source, target, prompt)
+                self.assertEqual(repair["status"], "ready" if allowed else "review")
+                if allowed:
+                    self.assertEqual(self.apply(prompt, repair=repair)["prompt"], prompt.replace(source, target))
+
+    def test_shortening_cannot_drop_protected_scene_details(self):
+        for detail in ("standing", "kneeling", "18 year old", "not nude"):
+            with self.subTest(detail=detail):
+                prompt = detail + " 猫" * 260
+                repair = self.mapping.prepare_repair(self.values, self.connection, prompt,
+                    {"changes_scene": False, "shortened_prompt": "cat"})
+                self.assertEqual(repair["status"], "review")
+
+    def test_legacy_learned_pose_change_is_not_reused_or_deleted(self):
+        scope = self.mapping.scope(self.values, self.connection)
+        # 模拟升级前已经写入的成功词对，检查升级后真实 SQLite 复用路径。
+        db = self.mapping.connect()
+        with db:
+            db.execute("INSERT INTO mappings VALUES (?,?,?,?,?,?)",
+                       (scope["key"], "kneeling", "reclining", 1, 0, 1))
+        db.close()
+        self.assertEqual(self.apply("kneeling")["prompt"], "kneeling")
+        self.assertEqual(len(self.mapping.learned(scope)), 1)
+
+    def test_injection_cannot_add_a_pose_without_confirmation(self):
+        self.table([{"id": "pose", "type": "inject_if_missing", "pattern": "standing", "to": "standing"}])
+        with self.assertRaises(PromptReviewError):
+            self.apply("cat")
+
+    def test_load_status_reports_real_source_and_effective_count(self):
+        self.table([{"id": "one", "type": "token", "from": "cat", "to": "kitty"},
+                    {"id": "two", "type": "token", "from": "blouse", "to": "shirt"}])
+        with self.assertLogs(self.mapping.logger, level="INFO") as logs:
+            policy = self.mapping.policy(self.values, self.connection)
+            self.mapping.policy(self.values, self.connection)
+        self.assertEqual(len(logs.output), 1)
+        self.assertEqual((policy["load_status"], policy["rules_source"], policy["rule_count"]),
+                         ("loaded", "file", 2))
+        self.assertEqual(policy["rules_file"], "image_prompt_rules.json")
+        (self.root / "image_prompt_rules.json").write_text("{broken")
+        with self.assertLogs(self.mapping.logger, level="WARNING") as logs:
+            policy = self.mapping.policy(self.values, self.connection)
+            self.mapping.policy(self.values, self.connection)
+        self.assertEqual(len(logs.output), 1)
+        self.assertEqual((policy["load_status"], policy["rules_source"], policy["rule_count"]),
+                         ("invalid", "previous", 2))
+        self.assertIn("JSON语法错误", policy["warning"])
+        self.values["prompt_guard_enabled"] = False
+        self.assertEqual(self.mapping.policy(self.values, self.connection)["rule_count"], 0)
+
+    def test_invalid_first_table_falls_back_with_safe_rule_diagnostic(self):
+        private = "sk-fixture-do-not-display"
+        self.table([{"id": "bad", "type": "regex", "pattern": "(" + private + ")", "to": "cat"}])
+        with self.assertLogs(self.mapping.logger, level="WARNING") as logs:
+            policy = self.mapping.policy(self.values, self.connection)
+        self.assertEqual((policy["rules_source"], policy["rule_count"]), ("builtin", 1))
+        self.assertIn("第1条规则", policy["warning"])
+        self.assertNotIn(private, policy["warning"])
+        self.assertNotIn(private, "".join(logs.output))
+
+    def test_malformed_limits_and_encoding_do_not_break_reload(self):
+        for limits in (None, [], "wrong", True):
+            with self.subTest(limits=limits):
+                self.table([], limits=limits)
+                self.assertEqual(self.mapping.policy(self.values, self.connection)["load_status"], "invalid")
+        for kind in ([], {}, None):
+            with self.subTest(kind=kind):
+                self.table([{"id": "bad", "type": kind}])
+                policy = self.mapping.policy(self.values, self.connection)
+                self.assertEqual(policy["load_status"], "invalid")
+                self.assertIn("第1条规则", policy["warning"])
+        (self.root / "image_prompt_rules.json").write_bytes(b"\xff\xfe")
+        policy = self.mapping.policy(self.values, self.connection)
+        self.assertEqual(policy["load_status"], "invalid")
+        self.assertIn("UTF-8", policy["warning"])
+
+    def test_missing_file_warns_once_and_recovery_switches_to_current_table(self):
+        with self.assertLogs(self.mapping.logger, level="WARNING") as logs:
+            self.mapping.policy(self.values, self.connection)
+            policy = self.mapping.policy(self.values, self.connection)
+        self.assertEqual(len(logs.output), 1)
+        self.assertEqual((policy["load_status"], policy["rules_source"], policy["rule_count"]),
+                         ("missing", "builtin", 1))
+        self.table([])
+        policy = self.mapping.policy(self.values, self.connection)
+        self.assertEqual((policy["load_status"], policy["rules_source"], policy["rule_count"]),
+                         ("loaded", "file", 0))
+        self.assertEqual(policy["warning"], "")
+
 
 class MappingGenerationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

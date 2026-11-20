@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 from pathlib import Path
 import re
 import sqlite3
@@ -19,13 +20,77 @@ LIMITS = {"desc_soft": 400, "desc_hard": 500, "total_hard": 900}
 BUILTIN = {"version": 1, "limits": LIMITS, "blocklist": [], "rules": [
     {"id": "collar", "type": "token", "from": "neckline", "to": "collar"},
 ]}
-# 自动学习只接受局部等义用词。姿势、表情、年龄、衣着覆盖度等不能借“等义”改掉。
+# 三种来源使用同一校验；词表只能识别明显变化，不能证明任意文本语义等价。
 SCENE_WORDS = re.compile(
-    r"symmetr|asymmetr|pose|standing|sitting|lying|nude|naked|undress|child|minor|"
-    r"cleavage|midriff|navel|waist|smil|frown|sad|happy|teen|adult|boy|girl|\d|"
+    r"\b(?:symmetr\w*|asymmetr\w*|poses?|standing|sitting|lying|kneel(?:ing)?|reclin(?:e|ing)|"
+    r"nude|naked|undress\w*|topless|child\w*|minor\w*|"
+    r"cleavage|midriff|navel|waist|smil\w*|frown\w*|sad|unhappy|happy|teen\w*|adult\w*|boys?|girls?)\b|\d|"
     r"\bnot\b|\bno\b|without|不|没有|无|"
     r"对称|不对称|站|坐|躺|跪|姿势|表情|微笑|大笑|皱眉|裸|脱衣|"
     r"儿童|未成年|岁|露胸|露腰|肚脐|腰部", re.I)
+# 颜色只在明确语境内豁免；单独的 nude / 裸仍保留检查。
+COLOR_CONTEXT = re.compile(
+    r"\bnude\s+(?:color|colour|beige|shade|pink|brown|lipstick|makeup|nail)\b|裸色|裸粉|裸妆", re.I)
+LYING_DIRECTION = re.compile(
+    r"\blying\s+(?:on\s+(?:(?:her|his|their|the)\s+)?(?P<body>back|stomach)"
+    r"|face\s+(?P<face>up|down))\b", re.I)
+REVIEW_NOTICE = "用词调整可能改变姿势、表情、年龄或衣着覆盖度，需要你确认。"
+
+
+def scene_signature(text):
+    """在完整上下文里比较受保护要点，允许已知的同义朝向与颜色措辞。"""
+    text = COLOR_CONTEXT.sub("", text)
+    directions = []
+
+    def direction(match):
+        upward = (match.group("body") or "").lower() == "back" or (
+            match.group("face") or "").lower() == "up"
+        directions.append("lying:up" if upward else "lying:down")
+        return ""
+
+    text = LYING_DIRECTION.sub(direction, text)
+    def canonical(word):
+        word = word.casefold()
+        if word == "unhappy":
+            return "sad"
+        if word == "poses":
+            return "pose"
+        for stem in ("asymmetr", "symmetr", "kneel", "reclin", "undress", "child",
+                     "minor", "smil", "frown", "teen", "adult", "boy", "girl"):
+            if word.startswith(stem):
+                return stem
+        return word
+
+    return sorted(directions + [
+        canonical(word)
+        for word in SCENE_WORDS.findall(text)])
+
+
+def equivalent_scene(before, after):
+    return scene_signature(before) == scene_signature(after)
+
+
+class TableValidationError(ValueError):
+    """只保留固定原因和规则序号，不将文件内容带入日志或页面。"""
+    def __init__(self, reason, rule_index=None):
+        super().__init__(reason)
+        self.reason, self.rule_index = reason, rule_index
+
+
+TABLE_ERRORS = {
+    "table": "版本或规则列表格式不正确",
+    "limits": "长度限制格式或范围不正确",
+    "blocklist": "阻断词列表格式不正确",
+    "rule": "规则ID、类型或唯一性不正确",
+    "token": "来源词必须是1～100字的字符串",
+    "regex_unsafe": "正则不支持分组、反向引用或复杂重复",
+    "regex_invalid": "正则语法不正确",
+    "replacement": "替换内容必须是1～200字的字符串",
+    "notice": "确认规则缺少1～200字的说明",
+    "too_large": "文件超过256 KiB",
+    "encoding": "文件不是有效的UTF-8文本",
+    "read": "文件无法读取",
+}
 
 
 class PromptReviewError(NativeReplyError):
@@ -67,13 +132,28 @@ def substitutions(prompt, pairs):
 
 
 class ImagePromptMapping:
-    def __init__(self, directory, prompt_overhead=None):
+    def __init__(self, directory, prompt_overhead=None, logger=None):
         self.directory = directory
         self.prompt_overhead = prompt_overhead
         self.ledger = directory / "image_prompt_mappings.sqlite3" if directory else None
         self._stamp = None
         self._rules = copy.deepcopy(BUILTIN)
         self.warning = ""
+        self.logger = logger or logging.getLogger(__name__)
+        self.rules_source = "builtin"
+        self.load_status = "missing"
+        self.rules_file = "image_prompt_rules.json"
+
+    def _load_result(self, path, status, source, warning=""):
+        self.load_status, self.rules_source, self.warning = status, source, warning
+        # 只展示文件名；异常正文、完整路径与规则内容都不进入日志。
+        name = path.name
+        self.rules_file = (name if re.fullmatch(r"[\w.-]{1,100}", name)
+                           and not name.lower().startswith(("sk-", "sk_")) else "自定义映射表")
+        log = self.logger.info if status == "loaded" else self.logger.warning
+        log("[LH-img] 映射表 file=%s mtime=%s state=%s source=%s rules=%d%s",
+            self.rules_file, self._stamp[1], status, source, len(self._rules["rules"]),
+            " reason=" + warning if warning else "")
 
     def rules(self, values):
         relative = values.get("prompt_guard_rules_path") or "image_prompt_rules.json"
@@ -84,62 +164,81 @@ class ImagePromptMapping:
             stat = path.stat()
             stamp = (str(path), stat.st_mtime_ns, stat.st_size)
         except OSError:
-            self._stamp = (str(path), None, None)
+            stamp = (str(path), None, None)
+            if stamp == self._stamp:
+                return self._rules
+            self._stamp = stamp
             self._rules = copy.deepcopy(BUILTIN)
-            self.warning = "映射表不存在，使用内置规则。"
+            self._load_result(path, "missing", "builtin", "映射表不存在或无法访问，使用内置规则。")
             return self._rules
         if stamp == self._stamp:
             return self._rules
         previous_path = self._stamp[0] if self._stamp else None
+        keep_previous = previous_path == str(path) and self.rules_source in {"file", "previous"}
         self._stamp = stamp
         try:
             if stat.st_size > 256 * 1024:
-                raise ValueError("rules too large")
+                raise TableValidationError("too_large")
             data = json.loads(path.read_text(encoding="utf-8-sig"))
             self.validate_table(data)
             self._rules = data
-            self.warning = ""
-        except (ValueError, OSError, TypeError, re.error):
-            if previous_path != str(path):
+            self._load_result(path, "loaded", "file")
+        except (ValueError, OSError, UnicodeError) as exc:
+            if not keep_previous:
                 self._rules = copy.deepcopy(BUILTIN)
-            self.warning = "映射表无效，继续使用上一份有效规则或内置规则。"
+            if isinstance(exc, json.JSONDecodeError):
+                reason = f"JSON语法错误（第{exc.lineno}行，第{exc.colno}列）"
+            elif isinstance(exc, TableValidationError):
+                prefix = f"第{exc.rule_index}条规则：" if exc.rule_index is not None else ""
+                reason = prefix + TABLE_ERRORS[exc.reason]
+            else:
+                reason = TABLE_ERRORS["encoding" if isinstance(exc, UnicodeError) else "read"]
+            fallback = "上一份有效规则" if keep_previous else "内置规则"
+            self._load_result(path, "invalid", "previous" if keep_previous else "builtin",
+                              f"映射表无效：{reason}；使用{fallback}。")
         return self._rules
 
     @staticmethod
     def validate_table(data):
         if (not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1
                 or not isinstance(data.get("rules"), list) or len(data["rules"]) > 200):
-            raise ValueError("invalid table")
+            raise TableValidationError("table")
         limits = data.setdefault("limits", copy.deepcopy(LIMITS))
-        if (set(limits) != set(LIMITS)
+        if (not isinstance(limits, dict) or set(limits) != set(LIMITS)
                 or any(type(v) is not int or not 1 <= v <= 4000 for v in limits.values())
                 or not limits["desc_soft"] <= limits["desc_hard"] <= limits["total_hard"]):
-            raise ValueError("invalid limits")
+            raise TableValidationError("limits")
         blocks = data.setdefault("blocklist", [])
         if (not isinstance(blocks, list) or len(blocks) > 100
                 or any(not isinstance(s, str) or not 1 <= len(s) <= 100 for s in blocks)):
-            raise ValueError("invalid blocklist")
+            raise TableValidationError("blocklist")
         ids = set()
-        for rule in data["rules"]:
+        for index, rule in enumerate(data["rules"], 1):
             if (not isinstance(rule, dict) or not isinstance(rule.get("id"), str)
                     or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,60}", rule["id"])
                     or rule["id"] in ids
+                    or not isinstance(rule.get("type"), str)
                     or rule.get("type") not in {"token", "regex", "inject_if_missing", "advisory"}):
-                raise ValueError("invalid rule")
+                raise TableValidationError("rule", index)
             ids.add(rule["id"])
             kind = rule["type"]
             source = rule.get("from") if kind == "token" else rule.get("pattern")
             if kind == "token":
                 if not isinstance(source, str) or not 1 <= len(source) <= 100:
-                    raise ValueError("invalid token")
+                    raise TableValidationError("token", index)
             else:
-                simple_pattern(source)
+                try:
+                    simple_pattern(source)
+                except re.error:
+                    raise TableValidationError("regex_invalid", index) from None
+                except ValueError:
+                    raise TableValidationError("regex_unsafe", index) from None
             if kind != "advisory" and (
                     not isinstance(rule.get("to"), str) or not 1 <= len(rule["to"]) <= 200):
-                raise ValueError("invalid replacement")
+                raise TableValidationError("replacement", index)
             if kind == "advisory" or rule.get("requires_confirmation"):
                 if not isinstance(rule.get("notice"), str) or not 1 <= len(rule["notice"]) <= 200:
-                    raise ValueError("missing notice")
+                    raise TableValidationError("notice", index)
 
     @staticmethod
     def scope(values, connection):
@@ -189,7 +288,10 @@ class ImagePromptMapping:
                 "retry_limit": max(0, min(10, int(values.get("prompt_guard_retry_limit", 2)))),
                 "learn_enabled": values.get("prompt_guard_learn_enabled", True),
                 "limits": self.limits(values, rules), "scope": scope,
-                "learned_count": count, "warning": self.warning}
+                "learned_count": count, "warning": self.warning,
+                "rule_count": len(rules["rules"]) if values.get("prompt_guard_enabled", True) else 0,
+                "rules_source": self.rules_source, "load_status": self.load_status,
+                "rules_file": self.rules_file, "rules_mtime_ns": self._stamp[1]}
 
     def apply(self, values, connection, original, repair=None):
         scope = self.scope(values, connection)
@@ -215,27 +317,29 @@ class ImagePromptMapping:
             kind = rule["type"]
             pattern = token_pattern(rule["from"]) if kind == "token" else simple_pattern(rule["pattern"])
             found = pattern.search(prompt)
-            if kind in {"token", "regex"} and found:
-                before = sorted(word.casefold() for word in SCENE_WORDS.findall(found.group()))
-                after = sorted(word.casefold() for word in SCENE_WORDS.findall(rule["to"]))
-                if before != after:
-                    raise PromptReviewError("prompt_adjustment_required",
-                        rule.get("notice") or "这条用词替换会改变画面，需要你确认后再试。")
             if (kind == "advisory" or rule.get("requires_confirmation")) and found:
                 raise PromptReviewError("prompt_adjustment_required", rule["notice"])
+            candidate = prompt
             if kind == "inject_if_missing":
                 if not found and rule["to"].casefold() not in prompt.casefold():
-                    prompt += "\n" + rule["to"]
-                    result["hits"].append(rule["id"])
+                    candidate += "\n" + rule["to"]
             elif kind in {"token", "regex"} and found:
-                prompt = pattern.sub(lambda _: rule["to"], prompt)
+                candidate = pattern.sub(lambda _: rule["to"], prompt)
+            if candidate != prompt:
+                if rule.get("requires_confirmation") or not equivalent_scene(prompt, candidate):
+                    raise PromptReviewError("prompt_adjustment_required", rule.get("notice") or REVIEW_NOTICE)
+                prompt = candidate
                 result["hits"].append(rule["id"])
         if values.get("prompt_guard_learn_enabled", True):
             try:
                 learned = self.learned(scope)
             except sqlite3.Error:
                 learned = []
-            used = [p for p in learned if token_pattern(p["from"]).search(prompt)]
+            # 升级前的成功记录也重新校验，不让旧漏判绕过当前规则；不删除旧数据。
+            used = [p for p in learned if token_pattern(p["from"]).search(prompt)
+                    and equivalent_scene(prompt, substitutions(prompt, [p]))]
+            if not equivalent_scene(prompt, substitutions(prompt, used)):
+                used = []
             prompt = substitutions(prompt, used)
             result["learned"] = used
             result["hits"].extend("learned" for _ in used)
@@ -264,10 +368,9 @@ class ImagePromptMapping:
             if (not isinstance(pair, dict) or set(pair) != {"from", "to"}
                     or any(not isinstance(pair[k], str) or not 1 <= len(pair[k].strip()) <= 60
                            or re.search(r"[\n\r,.;，。；<>]", pair[k]) for k in ("from", "to"))
-                    or pair["from"] == pair["to"] or SCENE_WORDS.search(pair["from"])
-                    or SCENE_WORDS.search(pair["to"]) or pair["from"].casefold() in seen
+                    or pair["from"] == pair["to"] or pair["from"].casefold() in seen
                     or not token_pattern(pair["from"]).search(prompt)):
-                return {**base, "status": "review", "notice": "用词调整可能改变画面，需要你确认。"}
+                return {**base, "status": "review", "notice": REVIEW_NOTICE}
             seen.add(pair["from"].casefold())
             clean.append({"from": pair["from"], "to": pair["to"]})
         candidate = substitutions(prompt, clean)
@@ -281,6 +384,8 @@ class ImagePromptMapping:
             candidate = shortened.strip()
         if candidate == prompt:
             return {**base, "status": "noop"}
+        if not equivalent_scene(prompt, candidate):
+            return {**base, "status": "review", "notice": REVIEW_NOTICE}
         return {**base, "status": "ready", "prompt": candidate, "candidates": clean,
                 "proposal": copy.deepcopy(proposal)}
 
