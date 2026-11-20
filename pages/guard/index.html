@@ -1514,6 +1514,7 @@
   }
   function renderNativeSettings() {
     if (settingsData) {
+      const timeoutFocus = document.activeElement?.id === "field-reply_primary_timeout_seconds";
       const host = el("nativeSettingsFields");
       host.replaceChildren();
       // 人格只读展示：来自AstrBot配置，修改请到AstrBot面板的人格管理。
@@ -1526,12 +1527,18 @@
         const summary=document.createElement("h3"); summary.textContent=group;
         summary.append(" ",helpButton(group, group === "语音回复"
           ? "开关与默认TTS模型同步所选AstrBot原生配置。实际语音还要求会话允许且触发概率通过；概率、双输出和文件服务仍在AstrBot设置。"
+          : group === "模型" ? "模型参数同步所选AstrBot档案；主模型超时切换是LH统一参数，对所有LH接管的回复生效。标题右侧问号可查看用途。"
           : "这些参数同步修改所选AstrBot原生配置，标题右侧问号可查看具体用途。"));
         details.append(summary);
         // 原生字段默认双列排布，长文本/回退列表仍整行，节省纵向空间。
         const grid = document.createElement("div"); grid.className = "native-fields-grid";
-        settingsData.fields.filter(f=>f.group===group)
-          .forEach(f=>grid.append(settingsControl(f,settingsData,settingsDraft,"setting-")));
+        settingsData.fields.filter(f=>f.group===group).forEach(f=>{
+          grid.append(settingsControl(f,settingsData,settingsDraft,"setting-"));
+          // LH参数使用独立保存链路，避免被宿主model配置规范化删除。
+          if (f.key === "request_max_retries" && settingsData.local_runner) {
+            buildField(PRIMARY_TIMEOUT_FIELD, currentConfig(PRIMARY_TIMEOUT_FIELD.key) ?? 15, grid);
+          }
+        });
         details.append(grid);
         host.append(details);
       });
@@ -1539,6 +1546,7 @@
         const note=document.createElement("p"); note.className="sub";
         note.textContent="当前配置使用外部Agent，主模型与人格需在对应Agent中设置。"; host.prepend(note);
       }
+      if (timeoutFocus) el("field-reply_primary_timeout_seconds")?.focus({preventScroll:true});
     }
     if (imageData) {
       el("imageSettingsFields").replaceChildren();
@@ -2151,6 +2159,10 @@
     { key: "reply_health_timeout_seconds", label: "回复流程最长等待（秒）", type: "number", min: 60, max: 7200 },
     { key: "outage_notify_interval_minutes", label: "提醒最小间隔（分钟）", type: "number", min: 1, max: 1440 },
   ];
+  const PRIMARY_TIMEOUT_FIELD = {
+    key: "reply_primary_timeout_seconds", label: "主模型超时切换",
+    type: "number", min: 1, max: 60, step: 1, unit: "秒"
+  };
   const OUTAGE_WATCH_JUDGE = [
     { key: "outage_watch_classifier", label: "判断模型", type: "bool" },
     { key: "outage_watch_vision", label: "判定看图模型", type: "bool" },
@@ -2170,6 +2182,10 @@
     expression_forbid_phrases: { desc: "命中的口头禅从正文删除，长词优先；代码块与表格内不处理，删除后收拢多余空白和重复标点。", ex: "填「行吧，我认」：回复出现即删除，其余正文保留；多条用逗号分隔。" },
     expression_private_reuse: { desc: "默认关闭：私聊直接回复，不引用当前消息，也不沿用本卡片的Emoji清理。开启后私聊复用引用与清理设置，@发送者仍仅用于群聊。", ex: "引用当前消息已开启时，私聊复用关闭：直接发正文；私聊复用开启：首条正文引用你的消息。保存参数后生效。" },
     reply_fallback_enabled: { desc: "默认关闭。已通过闸门的主模型调用失败后最多重试5次；耗尽私聊管理员，等1分钟再尝试一次，仍失败便停止。", ex: "只重发失败的模型请求，保留工具结果。撤回、权限、上下文失效或已输出片段时停止；失败请求及等待耗时不占普通回复有效期。" },
+    reply_primary_timeout_seconds: {
+      desc: "默认15秒，范围1–60秒。开启「断线恢复 → 兜底回复」后，对所有LH接管的本地回复生效，不随上方所选AstrBot档案改变。无有效输出且已配置回退模型时，取消主模型请求并直接切换。",
+      ex: "设15秒：非流式等待完整有效结果；流式等首个非空正文、工具或消息链，空心跳不算。有有效片段后不再切换；完整生成与回退模型仍保留60秒总预算。关闭兜底回复后本项不接管宿主超时。"
+    },
     outage_notify_admin_qq: { desc: "填写有效QQ号码，留空使用AstrBot全局管理员。仅发送QQ私聊，提醒共用持久限频额度。", ex: "多个QQ用逗号分隔；兜底回复不需要同时打开文字判定断线恢复。" },
     participation_confidence_threshold: { desc: "参与适合度至少达到这个分数才有机会放行；还需理解话题，并且没有静默否决。", ex: "设 50：理解清楚且适合度 75 可放行；对方说「别继续了」仍静默。设 0 也不会取消静默否决。" },
     classifier_provider_id: { desc: "负责先判断是否接话的文字小模型，不负责写回复。留空会跟随会话主模型。", ex: "选择「Qwen/Qwen3-8B（锁定上游）」：日常文字判断固定用它。" },
@@ -2380,6 +2396,7 @@
     { id: "outageWatchJudge", title: "判定链路", fields: OUTAGE_WATCH_JUDGE },
     { id: "outageWatchUnderstand", title: "理解链路", fields: OUTAGE_WATCH_UNDERSTAND },
     { id: "outageWatchReply", title: "回复链路", fields: OUTAGE_WATCH_REPLY },
+    { id: "nativeSettingsFields", title: "原生配置 → 模型", fields: [PRIMARY_TIMEOUT_FIELD], customRendered: true },
   ];
   const POLICY_KEYS = new Set(["gate_mode",
     ...GATE_FIELDS.map(f=>f.key), ...VISION_FIELDS.map(f=>f.key), ...CONTEXT_FIELDS.map(f=>f.key)]);
@@ -2684,7 +2701,8 @@
       ex: "开启：有效准备时间不占用本次回复有效期；关闭：沿用原有效期。未接入 LivingEmotion 时不会凭空扣时。"
     };
     const cfg = state.data.config || {};
-    FIELD_GROUPS.forEach(({id, fields}) => {
+    FIELD_GROUPS.forEach(({id, fields, customRendered}) => {
+      if (customRendered) return;
       const host = el(id);
       host.innerHTML = "";
       const valueOf = (field) => Object.prototype.hasOwnProperty.call(state.draft, field.key)
@@ -4341,6 +4359,19 @@
 
   async function save() {
     if (state.saving || state.policyChecking || nativeLoading) return;
+    // 此LH字段独立校验，避免空值被旧保存逻辑跳过或小数被当作秒数。
+    const timeoutValue = state.draft[PRIMARY_TIMEOUT_FIELD.key];
+    if (state.dirty.has(PRIMARY_TIMEOUT_FIELD.key) &&
+        (!Number.isInteger(timeoutValue) || timeoutValue < 1 || timeoutValue > 60)) {
+      el("saveMsg").textContent = Number.isFinite(timeoutValue)
+        ? "主模型超时切换需要1–60秒的整数" : "主模型超时切换需要有效数字，不能留空";
+      el("saveMsg").className = "msg err";
+      selectPage("reply"); switchSub("native");
+      const input = el("field-" + PRIMARY_TIMEOUT_FIELD.key);
+      input?.closest("details")?.setAttribute("open", "");
+      input?.focus();
+      return;
+    }
     const invalidPrompt = el("promptInjection").querySelector("textarea:invalid");
     if (invalidPrompt) {
       switchSub("prompts"); invalidPrompt.focus(); invalidPrompt.reportValidity();

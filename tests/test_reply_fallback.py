@@ -114,6 +114,40 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
             result = [item async for item in runner._iter_llm_responses_with_fallback()]
         return runner, result
 
+    async def run_timed_model(self, schedules):
+        """虚拟时钟重放Provider时延；保留生产wait_for调用并记录实际传入预算。"""
+        case = self
+
+        class TimedRunner(Runner):
+            async def _iter_llm_responses(self, **kwargs):
+                self.calls.append((self.provider, self.request_max_retries, kwargs))
+                for seconds, item in self.outcomes.pop(0):
+                    if seconds >= self.budget:
+                        case.now[0] += self.budget
+                        raise TimeoutError()
+                    case.now[0] += seconds
+                    if isinstance(item, Exception):
+                        raise item
+                    yield item
+
+        runner = TimedRunner(schedules)
+        runner.fallback_providers = [SimpleNamespace(
+            meta=lambda: SimpleNamespace(id="fallback"), get_model=lambda: "fixture-fallback")]
+        runner.budgets = []
+        original_wait_for = asyncio.wait_for
+
+        async def timed_wait_for(awaitable, timeout):
+            runner.budget = timeout
+            runner.budgets.append(timeout)
+            return await original_wait_for(awaitable, timeout)
+
+        self.assertTrue(self.retry.bind(self.event, runner))
+        with patch("reply.guard_reply_fallback.asyncio.wait_for", side_effect=timed_wait_for), \
+                patch("reply.guard_reply_fallback.LLMResponse", side_effect=lambda **kw:
+                      response(kw["completion_text"], role=kw["role"])):
+            result = [item async for item in runner._iter_llm_responses_with_fallback()]
+        return runner, result
+
     async def deliver(self, result):
         await self.guard.trace_agent_done(self.event, None, result)
         packet = Chain([Plain(result.completion_text)])
@@ -181,6 +215,132 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[0].completion_text, "partial")
         self.assertEqual(result[-1].role, "err")
         self.assertEqual(self.waits, [])
+
+    async def test_primary_without_output_rotates_at_fifteen_seconds_without_backoff(self):
+        started = self.now[0]
+        runner, result = await self.run_timed_model([
+            [(90, response("late primary"))], [(40, response("fallback reply"))]])
+        self.assertEqual([call[0].meta().id for call in runner.calls], ["main", "fallback"])
+        self.assertEqual(runner.budgets, [15, 60])
+        self.assertEqual(self.now[0] - started, 55)
+        self.assertEqual(self.event.get_extra("_livinghello_retry_seconds"), 15)
+        self.assertEqual(result[-1].completion_text, "fallback reply")
+        self.assertEqual(self.event.get_extra("_livinghello_reply_retry")["retries"], 1)
+        self.assertEqual(self.waits, [])
+        await self.deliver(result[-1])
+        self.assertEqual(len(self.event.sent), 1)
+        self.assertEqual(self.health.summary["state"], "healthy")
+
+    async def test_primary_before_fifteen_seconds_does_not_rotate(self):
+        runner, result = await self.run_timed_model([[(14, response("primary reply"))]])
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(result[-1].completion_text, "primary reply")
+        self.assertEqual(self.event.get_extra("_livinghello_reply_retry")["retries"], 0)
+
+    async def test_configured_timeout_applies_to_next_call_without_recreating_retry(self):
+        for seconds in (1, 8, 30, 60):
+            with self.subTest(seconds=seconds):
+                self.event = self.make_event()
+                self.guard.config["reply_primary_timeout_seconds"] = seconds
+                runner, result = await self.run_timed_model([
+                    [(90, response("late primary"))], [(1, response("fallback reply"))]])
+                self.assertEqual(runner.budgets, [seconds, 60])
+                self.assertEqual([c[0].meta().id for c in runner.calls], ["main", "fallback"])
+                self.assertEqual(result[-1].completion_text, "fallback reply")
+                self.assertEqual(self.waits, [])
+
+    async def test_longer_timeout_keeps_primary_and_valid_stream_completion_budget(self):
+        self.guard.config["reply_primary_timeout_seconds"] = 30
+        runner, result = await self.run_timed_model([
+            [(20, response("partial", chunk=True)), (30, response("completed"))]])
+        self.assertEqual(runner.budgets, [30, 40])
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(result[-1].completion_text, "completed")
+
+    def test_timeout_schema_backend_runtime_bounds_agree(self):
+        key = "reply_primary_timeout_seconds"
+        schema = json.loads((Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text())
+        self.assertEqual(schema[key]["default"], 15)
+        self.assertEqual(schema[key]["slider"], {"min": 1, "max": 60, "step": 1})
+        self.assertIn(key, EDITABLE)
+        for value in (1, 15, 60):
+            self.assertEqual(_coerce(key, value), value)
+            self.guard.config[key] = value
+            self.assertEqual(self.retry.primary_first_output_timeout(), value)
+        for value in (0, 61, -1, True, False, 1.5, 15.0, "15", None, float("nan"), float("inf"), []):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    _coerce(key, value)
+                self.guard.config[key] = value
+                expected = max(1, min(60, value)) if type(value) is int else 15
+                self.assertEqual(self.retry.primary_first_output_timeout(), expected)
+
+    async def test_empty_stream_chunks_do_not_reset_first_output_deadline(self):
+        runner, result = await self.run_timed_model([
+            [(5, response("", chunk=True)), (5, response("  ", chunk=True)),
+             (5, response("too late", chunk=True))],
+            [(1, response("fallback reply"))]])
+        self.assertEqual(runner.budgets, [15, 10, 5, 60])
+        self.assertEqual([call[0].meta().id for call in runner.calls], ["main", "fallback"])
+        self.assertEqual(result[-1].completion_text, "fallback reply")
+        self.assertEqual(self.waits, [])
+
+    async def test_stream_content_before_fifteen_seconds_keeps_original_completion_budget(self):
+        runner, result = await self.run_timed_model([
+            [(10, response("partial", chunk=True)), (20, response("completed"))]])
+        self.assertEqual(runner.budgets, [15, 50])
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(result[-1].completion_text, "completed")
+
+    async def test_stream_content_followed_by_timeout_does_not_mix_fallback(self):
+        runner, result = await self.run_timed_model([
+            [(14, response("partial", chunk=True)), (90, response("too late"))],
+            [(1, response("duplicate"))]])
+        self.assertEqual(runner.budgets, [15, 46])
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(result[0].completion_text, "partial")
+        self.assertEqual(result[-1].role, "err")
+        self.assertEqual(self.waits, [])
+
+    async def test_primary_timeout_still_checks_policy_and_recall_before_rotation(self):
+        for reason in ("policy_changed", "message_recalled"):
+            self.event = self.make_event()
+            started = self.now[0]
+            if reason == "policy_changed":
+                self.event.set_extra("_livinghello_policy_send_check",
+                    lambda: "policy_changed" if self.now[0] >= started + 15 else "")
+                scope = nullcontext()
+            else:
+                scope = patch.object(self.guard._delivery(), "recalled",
+                    side_effect=lambda _: self.now[0] >= started + 15)
+            with scope:
+                runner, result = await self.run_timed_model([
+                    [(90, response("too late"))], [(1, response("blocked fallback"))]])
+            self.assertEqual(len(runner.calls), 1)
+            self.assertEqual(result, [])
+            self.assertEqual(self.event.get_extra("_livinghello_reply_retry")["reason"], reason)
+            self.assertEqual(self.waits, [])
+
+    async def test_real_primary_timer_cancels_pending_provider_before_fallback(self):
+        self.retry.PRIMARY_FIRST_OUTPUT_TIMEOUT = .01
+        cancelled = asyncio.Event()
+
+        async def hang():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        runner = Runner([hang, response("fallback reply")])
+        runner.fallback_providers = [SimpleNamespace(
+            meta=lambda: SimpleNamespace(id="fallback"), get_model=lambda: "fixture-fallback")]
+        self.retry.bind(self.event, runner)
+        result = [item async for item in runner._iter_llm_responses_with_fallback()]
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual([call[0].meta().id for call in runner.calls], ["main", "fallback"])
+        self.assertEqual(result[-1].completion_text, "fallback reply")
+        self.assertEqual(self.waits, [])
+        self.assertEqual(runner.request_max_retries, 5)
 
     async def test_empty_and_error_roles_retry_but_tool_calls_and_no_reply_do_not(self):
         runner, result = await self.run_model([

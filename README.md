@@ -3,7 +3,7 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.9.4-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.5-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -115,4 +115,4 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 判定、图片理解、文字试跑、TTS和生图可能产生所选Provider费用。
 离线测试使用假模型和假发送，不代表真实模型效果或平台最终送达。
 
-当前版本 **2.9.4** 修复判定与回复历史条数的独立生效范围，精简主回复流水并保留来源与引用；详见[更新日志](CHANGELOG.md)。
+当前版本 **2.9.5** 支持主模型默认15秒无有效输出时直接切换回退模型；在“原生配置 → 模型 → 主模型超时切换”可设置1–60秒，需开启兜底回复。流式首个有效片段后不再切换；详见[兜底说明](docs/reply_fallback.md)和[更新日志](CHANGELOG.md)。

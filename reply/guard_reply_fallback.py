@@ -46,6 +46,7 @@ class ReplyFallback:
     RETRIES = 5
     COOLDOWN = 60
     CALL_TIMEOUT = 60
+    PRIMARY_FIRST_OUTPUT_TIMEOUT = 15
     DEADLINE = 540
     CAPACITY = 16
 
@@ -53,6 +54,18 @@ class ReplyFallback:
         self.plugin, self.clock, self.sleep = plugin, clock, sleep
         self.closed = False
         self.bindings, self.tasks = {}, set()
+
+    def primary_first_output_timeout(self):
+        """每次调用读当前配置，保存即生效；旧配置缺项沿用15秒。"""
+        return self.configured_timeout(self.plugin.config, default=self.PRIMARY_FIRST_OUTPUT_TIMEOUT)
+
+    @staticmethod
+    def configured_timeout(config, *, default=15):
+        """控制台载入证据与生成调用共用取值逻辑，不创建请求或后台任务。"""
+        value = config.get("reply_primary_timeout_seconds")
+        if type(value) is not int:
+            return default
+        return max(1, min(60, value))
 
     @property
     def enabled(self):
@@ -248,16 +261,22 @@ class ReplyFallback:
                 runner.request_max_retries = 1
                 stream = runner._iter_llm_responses(include_model=candidate is candidates[0])
                 call_deadline = min(started + self.CALL_TIMEOUT, state["deadline"])
+                # 主模型按配置等待首个有效输出；有内容后仍按原60秒预算收尾。
+                first_output_deadline = min(
+                    call_deadline, started + self.primary_first_output_timeout()
+                ) if candidate is candidates[0] else call_deadline
                 while True:
                     try:
                         # 超时仅包住取模型结果，不能覆盖yield后的工具/平台处理。
+                        deadline = call_deadline if has_output else first_output_deadline
                         response = await asyncio.wait_for(
-                            anext(stream), timeout=max(0, call_deadline - self.clock()))
+                            anext(stream), timeout=max(0, deadline - self.clock()))
                     except StopAsyncIteration:
                         break
                     else:
                         if getattr(response, "is_chunk", False):
-                            has_output = True
+                            # 空心跳不算回复，不能靠空片段延长主模型等待。
+                            has_output = has_output or not self.failed(response)
                             yield response
                             continue
                         final = response
@@ -301,6 +320,12 @@ class ReplyFallback:
             if reason:
                 self.cancel(event, runner, state, reason)
                 return
+            if (category == "timeout" and candidate is candidates[0]
+                    and len(candidates) > 1 and state["retries"] < self.RETRIES):
+                # 无输出超时直接轮到回退，不叠加退避；仍占一次共享重试额度。
+                state["retries"] += 1
+                attempt += 1
+                continue
             if disposition == ROTATE_NOW_REPORT:
                 # 认证/参数类错误重试不会变好：立即换候选，不占退避额度。
                 await self.plugin._reply_health().failure(

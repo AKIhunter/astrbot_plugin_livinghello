@@ -67,7 +67,8 @@ class ConsoleBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_route_methods_prefix_uniqueness_and_bound_owner(self):
         registered = []
-        owner = object()
+        # 路由注册会只读记录LH超时配置；替身保留真实插件的配置接口。
+        owner = SimpleNamespace(config={})
         context = SimpleNamespace(register_web_api=lambda *args: registered.append(args))
         api.register_webui(owner, context)
         self.assertEqual(len(registered), 17)

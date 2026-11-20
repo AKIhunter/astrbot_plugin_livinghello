@@ -32,6 +32,7 @@ try:
     from ..input.guard_probe_input import parse_probe, ProbeInputError
     from ..input.guard_understanding import audio_capable
     from ..reply.guard_native_reply import NativeReply, NativeReplyError
+    from ..reply.guard_reply_fallback import ReplyFallback
     from ..reply.guard_prompt_injection import catalog as prompt_catalog, validate as validate_prompts, TEXT_KEYS as PROMPT_TEXT_KEYS, BOOL_KEYS as PROMPT_BOOL_KEYS
     from ..integrations.guard_native_settings import NativeSettings
     from ..images.guard_image_settings import ImageSettings
@@ -51,6 +52,7 @@ except ImportError:
     from input.guard_probe_input import parse_probe, ProbeInputError
     from input.guard_understanding import audio_capable
     from reply.guard_native_reply import NativeReply, NativeReplyError
+    from reply.guard_reply_fallback import ReplyFallback
     from reply.guard_prompt_injection import catalog as prompt_catalog, validate as validate_prompts, TEXT_KEYS as PROMPT_TEXT_KEYS, BOOL_KEYS as PROMPT_BOOL_KEYS
     from integrations.guard_native_settings import NativeSettings
     from images.guard_image_settings import ImageSettings
@@ -100,6 +102,7 @@ NUMERIC_FIELDS: dict[str, tuple[str, float, float]] = {
     "proactive_cooldown_seconds": ("float", 0, 60.0),
     "duplicate_window_seconds": ("int", 0, 3600),
     "reply_health_timeout_seconds": ("int", 60, 7200),
+    "reply_primary_timeout_seconds": ("int", 1, 60),
 }
 BOOL_FIELDS = {
     "apply_to_private", "gate_main_fallback_enabled",
@@ -925,7 +928,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     mark("最近判定")
 
     data = {
-        "version": "2.9.4",
+        "version": "2.9.5",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
         "config": config,
@@ -974,6 +977,9 @@ def _load_schema_subset() -> dict[str, Any]:
 
 
 def _coerce(key: str, value: Any) -> Any:
+    # 此秒数与运行时保持整数语义，不把布尔值或小数悄悄改成秒数。
+    if key == "reply_primary_timeout_seconds" and type(value) is not int:
+        raise ValueError("主模型超时切换需要1–60秒的整数")
     # 新字段严格保留类型和原文；完整候选随后校验，不能截断或把字符串当开关。
     if key in PROMPT_TEXT_KEYS:
         if not isinstance(value, str):
@@ -1508,6 +1514,11 @@ def register_webui(plugin: Any, context: Context) -> None:
     logger.warning(
         f"[LivingHello] 控制台已注册 {_ok}/{len(routes)} 条路由（前缀 /{PLUGIN_NAME}/console）"
         if _ok else f"[LivingHello] 控制台一条路由都没注册成功（共 {len(routes)} 条尝试）"
+    )
+    # 兜底实例延迟创建；重载时用相同取值函数核验生效秒数，不发起模型请求。
+    logger.warning(
+        "[LivingHello] 回复兜底时限：primary_first_output=%ss call=%ss",
+        ReplyFallback.configured_timeout(plugin.config), ReplyFallback.CALL_TIMEOUT,
     )
 
     # 把可用的判定模型动态写进插件的内存 schema，让 AstrBot 配置页的
