@@ -13,6 +13,21 @@ It supports message fragments, image evidence, reply segments, quoting, TTS and 
 Input understanding, persona isolation and outage replay are implemented within LivingHello.
 See the [independent runtime guide](docs/independent-runtime.md) for freshness and delivery boundaries.
 
+## Supported platforms
+
+| Platform | AstrBot adapter | Scope |
+| --- | --- | --- |
+| QQ (OneBot v11, such as NapCat) | `aiocqhttp` | Group/private decisions, fragment merging and replies; QQ ID lists, admin notifications and recall protection |
+| Telegram | `telegram` | Common decisions, fragment merging and replies; offline session-isolation and delivery-guard tests |
+| Discord | `discord` | Common decisions and replies; offline delivery-guard tests |
+
+Telegram and Discord have not completed live send/receive acceptance tests. Image, quote, mention and voice
+delivery depend on the adapter. QQ recall protection requires a OneBot recall notice during the fragment wait.
+Other AstrBot adapters use the common message interfaces but are not yet individually validated or declared.
+See [platform features and limits](docs/usage.md#平台功能与限制).
+
+## Quick start
+
 Install on AstrBot 4.29.1 or later and open `guard`. Select a classifier, keep `enforce` and threshold 65,
 then choose the native reply model and persona and save. AstrBot still decides which configuration a conversation uses.
 
