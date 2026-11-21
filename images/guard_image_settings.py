@@ -838,6 +838,11 @@ class ImageSettings:
                           "我先停在这里。你想再调整一下，还是这次就算了？")
             else:
                 reason += "你想换个人物、场景或风格再试试，还是这次就算了？"
+        elif failure["kind"] == "provider_error":
+            # 上游接口故障：画不了与用户无关，问「要不要调整描述」答非所问。
+            # 一次性说清并给后续动作，标记已问，LE 不再补一条调整追问
+            # （2026-11-21 两句重复回复的事故即源于此分支缺失）。
+            reason = "画图的接口这会儿抽风了，不是你的问题。我先停一下，等会儿你再喊我画就行。"
         try:
             sent = await event.send(event.chain_result([Plain(self._apology(job, reason))]))
         except asyncio.CancelledError:
@@ -850,8 +855,11 @@ class ImageSettings:
             return
         failure["notified"] = True
         # 与失败说明同一条发送：LE 能持久区分“已说明失败”和“已问怎样调整”。
+        # provider_error 也算已问（LH 一句话说清+给了后续动作），LE 不再追问；
+        # quota_exhausted/result_unknown/delivery_unknown 保持沉默交接，由 LE 统一措辞。
         failure["adjustment_asked"] = failure["kind"] in {
-            "content_rejected", "prompt_adjustment_required", "prompt_too_long"} and not retry
+            "content_rejected", "prompt_adjustment_required", "prompt_too_long",
+            "provider_error"} and not retry
         if failure.get("promise_id"):
             # 原事项仍由原 ID 持有，不能交接出第二条待办。
             failure["auto_prompt_retry"] = bool(retry)

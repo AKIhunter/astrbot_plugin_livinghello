@@ -33,7 +33,9 @@ def payload_failure(status, payload):
     error = error if isinstance(error, dict) else {}
     code = _error_identifier(error.get("code"))
     error_type = _error_identifier(error.get("type"))
-    if code.lower() == "content_policy_violation":
+    if code.lower() == "content_policy_violation" or status == 451:
+        # 451 = 部分上游（如 gpt-image-2.6-flare）用「Unavailable For Legal Reasons」
+        # 表达内容审核拒绝；与 content_policy_violation 同类，走等义词改词重试。
         kind = "content_rejected"
     elif status == 429 or code.lower() in {"rate_limit_exceeded", "rate_limited", "too_many_requests"}:
         kind = "rate_limited"

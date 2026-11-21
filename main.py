@@ -522,7 +522,14 @@ class Main(Star):
         调用方必须持久化生成/发送阶段；失败或未知不能自动重新收费。
         event 是宿主的定时事件，message_id 必须固定为承诺 ID。
         """
+        def _why(reason):
+            # 静默分支留痕（issue #9）：每个 early-return 打一条 WARN，
+            # 避免排查时只能靠探针 + 重启定位（2026-11-21 实测 40 分钟盲查）。
+            self.logger.warning(
+                "[LH-img] deferred 提前返回：%s prompt=%d字 blocked=%s",
+                reason, len(prompt or ""), self._image_generation().blocked(event))
         if not self.get_deferred_image_contract()["available"]:
+            _why("contract_unavailable")
             return {"status": "unavailable"}
         service = self._image_generation()
         # 定时动作直接执行，不能再次进入普通回复的准备/after-sent 流程。
@@ -532,8 +539,10 @@ class Main(Star):
         if not isinstance(pending, dict) or not pending.get("path"):
             failure = event.get_extra("_livinghello_image_failure")
             if isinstance(failure, dict) and failure.get("kind") not in {"result_unknown", "delivery_unknown"}:
+                _why("structured_failure kind=%s" % failure.get("kind"))
                 return {"status": "failed", "failure": failure}
             # generate 内部可能已经发起收费请求，不能从返回文案推断可重试。
+            _why("no_pending_image (permission_denied / reserve_skipped / blocked / 参数无效)")
             return {"status": "unknown"}
         artifact = {"status": "generated", **pending,
                     "session": str(event.unified_msg_origin),
@@ -555,6 +564,10 @@ class Main(Star):
         if (not isinstance(artifact, dict) or not isinstance(request_id, str)
                 or not 1 <= len(request_id) <= 128 or artifact.get("session") != session
                 or not isinstance(artifact.get("path"), str)):
+            self.logger.warning(
+                "[LH-img] 投递拒绝 invalid_artifact：request=%s session匹配=%s path=%s",
+                str(request_id)[:16], artifact.get("session") == session if isinstance(artifact, dict) else False,
+                str(artifact.get("path"))[:60] if isinstance(artifact, dict) else None)
             return receipt("rejected", "invalid_artifact")
         service = self._image_generation()
         path = artifact["path"]
