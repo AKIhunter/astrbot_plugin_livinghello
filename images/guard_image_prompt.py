@@ -244,6 +244,14 @@ class ImagePromptMapping:
                     raise TableValidationError("regex_invalid", index) from None
                 except ValueError:
                     raise TableValidationError("regex_unsafe", index) from None
+            if rule.get("when") is not None:
+                # 条件正则与 pattern 走同一套安全检查，避免热更新引入灾难性回溯。
+                try:
+                    simple_pattern(rule["when"])
+                except re.error:
+                    raise TableValidationError("regex_invalid", index) from None
+                except ValueError:
+                    raise TableValidationError("regex_unsafe", index) from None
             if kind != "advisory" and (
                     not isinstance(rule.get("to"), str) or not 1 <= len(rule["to"]) <= 200):
                 raise TableValidationError("replacement", index)
@@ -327,6 +335,12 @@ class ImagePromptMapping:
         pending = []
         for rule in rules["rules"]:
             kind = rule["type"]
+            # when：条件规则。只有 prompt 命中该正则时才生效。
+            # 用于表达「款式 × 姿势」这类组合约束——单项都安全，叠加才拒
+            # （实测：雪纺吊带睡裙靠沙发 200，同款侧躺 451）。
+            condition = rule.get("when")
+            if condition and not re.search(condition, prompt, re.I):
+                continue
             pattern = token_pattern(rule["from"]) if kind == "token" else simple_pattern(rule["pattern"])
             found = pattern.search(prompt)
             if (kind == "advisory" or rule.get("requires_confirmation")) and found:
