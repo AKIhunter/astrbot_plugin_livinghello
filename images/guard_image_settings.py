@@ -1229,12 +1229,19 @@ class ImageSettings:
 
     @staticmethod
     def _retryable_image_error(exc):
-        """只有「确定没有出图」的失败才重试；内容拒绝和未知结果不重试。"""
+        """只有「确定没有出图」的失败才重试；内容拒绝和未知结果不重试。
+
+        例外：HTTP 200 包明确错误体（code/type 有值）的 result_unknown——
+        上游已声明本次没有产出，重试无重复扣费风险（2026-11-22 f5e507fb：
+        同 prompt 立即复测 200，正是该重试的场景）。"""
         if isinstance(exc, asyncio.CancelledError):
             return False
         kind = getattr(exc, "kind", None)
         if kind == "content_rejected":
             return False
+        if kind == "result_unknown" and (
+                getattr(exc, "code", None) or getattr(exc, "error_type", None)):
+            return True
         if kind == "rate_limited":
             return True
         if kind == "provider_error":
