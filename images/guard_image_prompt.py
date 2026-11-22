@@ -28,7 +28,7 @@ SCENE_WORDS = re.compile(
     r"cleavage|midriff|navel|waist|smil\w*|frown\w*|sad|unhappy|happy|teen\w*|adult\w*|boys?|girls?)\b|\d|"
     r"\bnot\b|\bno\b|without|不|没有|无|"
     r"对称|不对称|站|坐|躺|跪|姿势|表情|微笑|大笑|皱眉|裸|脱衣|"
-    r"儿童|未成年|岁|露胸|露腰|肚脐|腰部", re.I)
+    r"儿童|未成年|岁|露胸|腰腹|肚脐|腰部|露脐|露腰|腰", re.I)
 # 颜色只在明确语境内豁免；单独的 nude / 裸仍保留检查。
 COLOR_CONTEXT = re.compile(
     r"\bnude\s+(?:color|colour|beige|shade|pink|brown|lipstick|makeup|nail)\b|裸色|裸粉|裸妆", re.I)
@@ -60,7 +60,17 @@ def scene_signature(text):
                      "minor", "smil", "frown", "teen", "adult", "boy", "girl"):
             if word.startswith(stem):
                 return stem
-        return word
+        # 中文同义归一（2026-11-22）：同一身体部位/覆盖度概念的不同措辞
+        # 指向同一签名项——「腰」与「腰部」是同一个部位，「露脐」即露出「肚脐」。
+        # 改词只在「覆盖度是否改变」上判断，不再因用字差异误拒。
+        zh_norm = {
+            "腰部": "腰",
+            "腰腹": "腰",
+            "露腰": "腰",
+            "露脐": "肚脐",
+            "肚脐": "肚脐",
+        }
+        return zh_norm.get(word, word)
 
     return sorted(directions + [
         canonical(word)
