@@ -120,10 +120,13 @@ def preset_value(config, stem, variant="v4"):
     value = config.get(stem + "_text", preset_default(stem, variant))
     if not valid_text(value):
         return value
-    # Only untouched shipped text follows personality; user edits stay verbatim.
+    # Historical shipped text may migrate; saved current general wording is authoritative.
     legacy_hashes = {"general_prompt": LEGACY_GENERAL_HASHES,
                      "prompt_segment": LEGACY_SEGMENT_HASHES}.get(stem, ())
     legacy = hashlib.sha256(value.encode()).hexdigest() in legacy_hashes
+    # 已保存的通用词不能因 LE 人格切换被替换，即使文本恰好等于当前 v3/v4 预置。
+    if stem == "general_prompt" and stem + "_text" in config and not legacy:
+        return value
     if value in (preset_default(stem, "v3"), preset_default(stem, "v4")) or legacy:
         return preset_default(stem, variant)
     return value

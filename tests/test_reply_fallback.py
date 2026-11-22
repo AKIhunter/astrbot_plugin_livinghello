@@ -26,13 +26,21 @@ def response(text="成功回答", *, role="assistant", chunk=False):
                            tools_call_name=[], result_chain=None)
 
 
+class FallbackProvider:
+    def __init__(self, provider_id="fallback"):
+        self.provider_config = {"id": provider_id}
+        self.meta = lambda: SimpleNamespace(id=provider_id)
+        self.get_model = lambda: "fixture-fallback"
+
+
 class Runner:
-    def __init__(self, outcomes):
+    def __init__(self, outcomes, *, fallback=False):
         self.outcomes = list(outcomes)
         self.calls, self.sanitized = [], []
         self.provider = SimpleNamespace(meta=lambda: SimpleNamespace(id="main"),
-                                        get_model=lambda: "fixture-main")
-        self.fallback_providers = []
+                                        get_model=lambda: "fixture-main",
+                                        provider_config={"id": "main"})
+        self.fallback_providers = [FallbackProvider()] if fallback else []
         self.request_max_retries = 5
         self.run_context = SimpleNamespace(messages=[{"role": "user", "content": "test"}])
         self.aborted = False
@@ -106,8 +114,8 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.health.watch(event, expected=True)
         return event
 
-    async def run_model(self, outcomes):
-        runner = Runner(outcomes)
+    async def run_model(self, outcomes, *, fallback=False):
+        runner = Runner(outcomes, fallback=fallback)
         self.assertTrue(self.retry.bind(self.event, runner))
         # 离线框架LLMResponse是object；仅替换构造器，生产重试代码保持原样。
         with patch("reply.guard_reply_fallback.LLMResponse", side_effect=lambda **kw: response(
@@ -157,31 +165,27 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
         await self.event.send(packet)
         await self.health.finish(self.event)
 
-    async def test_five_retries_then_notify_before_minute_and_final_success(self):
+    async def test_total_retry_budget_then_notify_without_extra_attempt(self):
         self.event.message_str = '{"api_key": "fixture_hidden_1234"}'
         # 只开兜底，不开分类器恢复；独立开关仍应通知。
         self.assertFalse(self.health.enabled)
         notices = []
         self.guard.context.send_message.side_effect = lambda *args: notices.append(
             (len(self.waits), args)) or True
-        runner, result = await self.run_model([TimeoutError()] * 6 + [response()])
-        self.assertEqual(len(runner.calls), 7)
+        runner, result = await self.run_model([TimeoutError()] * 6, fallback=True)
+        self.assertEqual(len(runner.calls), 6)
         self.assertTrue(all(item[1] == 1 for item in runner.calls))
         self.assertEqual(runner.request_max_retries, 5)
         self.assertEqual(len(notices), 1)
-        notified_after = notices[0][0]
-        self.assertAlmostEqual(sum(self.waits[notified_after:]), 60)
+        self.assertEqual(result[-1].role, "err")
+        self.assertEqual(self.event.get_extra("_livinghello_reply_retry")["retries"], 5)
         route, chain = notices[0][1]
         self.assertEqual(route, "qq-bot:FriendMessage:9001")
         self.assertNotIn("fixture_hidden_1234", chain.chain[0].text)
-        self.assertEqual(self.event.get_extra("_livinghello_reply_retry")["retries"], 5)
-        await self.deliver(result[-1])
-        self.assertEqual(self.health.summary["state"], "healthy")
-        self.assertEqual(len(self.event.sent), 1)
 
     async def test_exhaustion_is_bounded_and_final_failure_still_recorded(self):
-        runner, result = await self.run_model([ConnectionError("upstream")] * 7)
-        self.assertEqual(len(runner.calls), 7)
+        runner, result = await self.run_model([ConnectionError("upstream")] * 3)
+        self.assertEqual(len(runner.calls), 2)  # 单模型：首次 + 1 次重试
         self.health.model_done(self.event, result[-1])
         await self.health.finish(self.event)
         self.assertEqual(self.health.summary["state"], "failed")
@@ -191,9 +195,9 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_admin_notification_does_not_retry_notification_or_block_last_call(self):
         self.health.notify = AsyncMock(side_effect=TimeoutError())
-        runner, result = await self.run_model([TimeoutError()] * 6 + [response()])
-        self.assertEqual(len(runner.calls), 7)
-        self.assertEqual(result[-1].role, "assistant")
+        runner, result = await self.run_model([TimeoutError(), TimeoutError()])
+        self.assertEqual(len(runner.calls), 2)
+        self.assertEqual(result[-1].role, "err")
         self.assertEqual(self.health.notify.await_count, 1)
         self.assertEqual(self.health.notification, "send_unknown")
 
@@ -345,7 +349,8 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_empty_and_error_roles_retry_but_tool_calls_and_no_reply_do_not(self):
         runner, result = await self.run_model([
-            response(""), response("   "), response("provider unavailable", role="err"), response()])
+            response(""), response("   "), response("provider unavailable", role="err"), response()],
+            fallback=True)
         self.assertEqual(len(runner.calls), 4)
         self.assertEqual(result[-1].role, "assistant")
         for item in (response("[[ASTRBOT_NO_REPLY]]"), response("")):
@@ -402,7 +407,7 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
         import main
         with patch.object(main, "time", SimpleNamespace(
                 monotonic=lambda: self.now[0], time=time.time)):
-            _, result = await self.run_model([TimeoutError()] * 6 + [response()])
+            _, result = await self.run_model([TimeoutError(), response()])
             self.assertEqual(result[-1].role, "assistant")
             self.assertEqual(self.guard._stale_reason(self.event, "1001"), "")
             self.now[0] += 31  # 成功生成耗时未计入兜底扣除。
@@ -413,8 +418,8 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
         slow = asyncio.Event()
         async def hang():
             await slow.wait()
-        runner, result = await self.run_model([hang] * 7)
-        self.assertEqual(len(runner.calls), 7)
+        runner, result = await self.run_model([hang] * 2)
+        self.assertEqual(len(runner.calls), 2)
         self.assertEqual(result[-1].role, "err")
         runner2 = Runner([hang])
         event2 = self.make_event()
@@ -430,11 +435,12 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner2.request_max_retries, 5)
 
     async def test_retry_budget_shared_between_agent_steps_and_capacity(self):
-        runner, _ = await self.run_model([TimeoutError()] * 5 + [response()])
+        runner, _ = await self.run_model([TimeoutError()] * 5 + [response()], fallback=True)
         runner.outcomes = [TimeoutError(), response()]
         result = [item async for item in runner._iter_llm_responses_with_fallback()]
-        self.assertEqual(len(runner.calls), 8)  # 下一步仅原调用+尚未消费的延后尝试。
-        self.assertEqual(result[-1].role, "assistant")
+        # 预算跨步骤共享：第一步已用满 5 次，下一步只允许原调用，失败即收尾。
+        self.assertEqual(len(runner.calls), 7)
+        self.assertEqual(result[-1].role, "err")
         self.retry.CAPACITY = len(self.retry.bindings)
         self.assertFalse(self.retry.bind(self.make_event(), Runner([response()])))
 

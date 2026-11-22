@@ -80,7 +80,8 @@ class ImageFailureFlowTests(unittest.IsolatedAsyncioTestCase):
         self.service._request.side_effect = asyncio.TimeoutError()
         result = await Main.generate_deferred_image(self.plugin, fixtures.Event(), "猫")
         self.assertEqual(result, {"status": "unknown"})
-        self.service._request.assert_awaited_once()
+        # 超时在本地按原描述重试 3 次；仍失败才进入未知结果。
+        self.assertEqual(self.service._request.await_count, 3)
 
     async def test_synchronous_failure_notice_only_hands_off_once(self):
         event = fixtures.Event()
@@ -104,7 +105,8 @@ class ImageFailureFlowTests(unittest.IsolatedAsyncioTestCase):
             await self.service._run_image_job(event, job)
             await self.service._notify_image_failure(
                 event, job, event.get_extra("_livinghello_image_failure"))
-        self.service._request.assert_awaited_once()
+        # 502 属于可重试失败：同一任务内共请求 3 次，只发一条失败通知。
+        self.assertEqual(self.service._request.await_count, 3)
         event.send.assert_awaited_once()
         handoff.assert_awaited_once()
         self.assertEqual(job["status"], "unknown")
@@ -126,7 +128,8 @@ class ImageFailureFlowTests(unittest.IsolatedAsyncioTestCase):
                     handoff.assert_awaited_once()
                     self.assertTrue(failure["notified"])
                     self.assertEqual(failure["adjustment_asked"], kind in {
-                        "content_rejected", "prompt_too_long", "prompt_adjustment_required"})
+                        "content_rejected", "prompt_too_long", "prompt_adjustment_required",
+                        "provider_error"})
         self.service._request.assert_not_awaited()
 
     async def test_unaccepted_failure_notice_never_hands_off_or_resends(self):

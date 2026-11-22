@@ -44,6 +44,8 @@ def find_current_runner(run_context):
 
 class ReplyFallback:
     RETRIES = 5
+    # 只有一个模型时，重试同一次就够；五次同一模型既救不回来，也最烧上下文。
+    SINGLE_MODEL_RETRIES = 1
     COOLDOWN = 60
     CALL_TIMEOUT = 60
     PRIMARY_FIRST_OUTPUT_TIMEOUT = 15
@@ -66,6 +68,34 @@ class ReplyFallback:
         if type(value) is not int:
             return default
         return max(1, min(60, value))
+
+    def total_retries(self):
+        """有回退模型时的总重试次数，跨模型共享同一个预算。"""
+        value = (self.plugin.config or {}).get("reply_fallback_total_retries")
+        if type(value) is int:
+            return max(1, min(8, value))
+        return self.RETRIES
+
+    def single_model_retries(self):
+        """没有回退模型时只重试一次，避免同一模型空转五次。"""
+        value = (self.plugin.config or {}).get("reply_single_model_retries")
+        if type(value) is int:
+            return max(0, min(3, value))
+        return self.SINGLE_MODEL_RETRIES
+
+    @staticmethod
+    def unique_candidates(primary, fallbacks):
+        """按 provider id 去重，防止回退列表里的同模型被当成另一个候选。"""
+        result, seen = [], set()
+        for provider in [primary, *(fallbacks or [])]:
+            config = getattr(provider, "provider_config", None) or {}
+            provider_id = str(config.get("id", "") or "") if isinstance(config, dict) else ""
+            key = provider_id or f"object:{id(provider)}"
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(provider)
+        return result
 
     @property
     def enabled(self):
@@ -237,7 +267,10 @@ class ReplyFallback:
         runner.request_stop()
 
     async def responses(self, event, runner, state):
-        candidates = [runner.provider, *getattr(runner, "fallback_providers", [])]
+        candidates = self.unique_candidates(
+            runner.provider, getattr(runner, "fallback_providers", []))
+        single = len(candidates) == 1
+        budget = self.single_model_retries() if single else self.total_retries()
         if not getattr(runner.run_context, "messages", None):
             yield LLMResponse(role="err", completion_text="No messages remain for the LLM request.")
             return
@@ -321,7 +354,7 @@ class ReplyFallback:
                 self.cancel(event, runner, state, reason)
                 return
             if (category == "timeout" and candidate is candidates[0]
-                    and len(candidates) > 1 and state["retries"] < self.RETRIES):
+                    and len(candidates) > 1 and state["retries"] < budget):
                 # 无输出超时直接轮到回退，不叠加退避；仍占一次共享重试额度。
                 state["retries"] += 1
                 attempt += 1
@@ -331,28 +364,30 @@ class ReplyFallback:
                 await self.plugin._reply_health().failure(
                     "main_model", category, event=event)
                 attempt += 1
-                if attempt >= len(candidates):
+                # 每个候选最多试一次，且总尝试不超过共享预算。
+                if attempt >= len(candidates) or attempt > budget:
                     break
                 continue
-            if state["retries"] < self.RETRIES:
+            if state["retries"] < budget:
                 state["retries"] += 1
                 delay = min(16, 2 ** (state["retries"] - 1)) + random.uniform(0, .25)
-            elif not state["delayed"]:
-                state.update(delayed=True, state="waiting")
-                # 提醒未知结果不自动重发；无有效QQ/节流仍继续有界的最后尝试。
-                notice_started = self.clock()
-                try:
-                    await asyncio.wait_for(self.plugin._reply_health().notify(
-                        event=event, fallback=True,
-                        message="【LivingHello 回复兜底】\n主模型已重试5次仍失败："
-                                + ERROR_LABELS.get(category, category)
-                                + "。等待1分钟后再尝试一次。"), timeout=10)
-                except TimeoutError:
-                    self.plugin._reply_health().notification = "send_unknown"
-                finally:
-                    self.account(event, notice_started)
-                delay = self.COOLDOWN
             else:
+                # 预算用尽：只发一次失败通知，不再额外等一分钟补一次。
+                # 总调用次数 = 首次 + budget，回退模型也共享这一个预算。
+                if not state["delayed"]:
+                    state.update(delayed=True, state="waiting")
+                    notice_started = self.clock()
+                    try:
+                        await asyncio.wait_for(self.plugin._reply_health().notify(
+                            event=event, fallback=True,
+                            message="【LivingHello 回复兜底】\n主模型已重试"
+                                    + str(budget) + "次仍失败："
+                                    + ERROR_LABELS.get(category, category)
+                                    + "。本轮不再重试。"), timeout=10)
+                    except TimeoutError:
+                        self.plugin._reply_health().notification = "send_unknown"
+                    finally:
+                        self.account(event, notice_started)
                 break
             reason = await self.wait(event, runner, state, delay)
             if reason:

@@ -205,6 +205,9 @@
   .segment-example { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; font-size: 12px; }
   .segment-example span { padding: 4px 9px; background: var(--accent-soft); border-radius: 6px; }
   #nativeSegments details { border-top: 1px solid var(--line-soft); padding-top: 10px; margin-top: 10px; }
+
+  #promptInjection details.prompt-collapse { border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+  #promptInjection details.prompt-collapse > summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   #nativeSegments summary { color: var(--muted); cursor: pointer; font-size: 12px; }
   #nativeSegments .actions { justify-content: space-between; border-top: 1px solid var(--line-soft); padding-top: 12px; }
   #nativeStatus { margin: 0; flex: 1; min-width: 160px; }
@@ -1074,7 +1077,10 @@
   <section data-sub="prompts" class="card" id="promptInjection" style="grid-column:1 / -1">
     <h2>提示词注入</h2>
     <p class="sub">每项默认开启，可独立开关、反复编辑并保存；关闭保留文本，只停止本项注入。通用说明与记忆写入同步用于 LE。</p>
-    <h3>预置提示词</h3><div id="promptCore"></div>
+    <details class="prompt-collapse" id="promptCoreGroup">
+      <summary>预置提示词（功能托管，点击展开查看）</summary>
+      <div id="promptCore"></div>
+    </details>
     <h3>普通提示词</h3><div id="promptOrdinary"></div>
   </section>
     <section data-sub="reply" class="card reply-card reply-compact-card" id="expression">
@@ -1746,6 +1752,7 @@
         if (JSON.stringify(settingsDraft[key])===JSON.stringify(settings.values[key])) delete settingsDraft[key];
       });
       renderNative();
+      applyPromptLocks();
       showSaveBar();
       el("nativeStatus").textContent = nativeDirty()
         ? "已重新读取原生设置，保留你的原生配置草稿；保存将更新这些字段。"
@@ -1791,6 +1798,7 @@
       if (changed) {
         nativeData=segments; settingsData=settings; imageData=images;
         renderNative();
+        applyPromptLocks();
       }
       el("nativeStatus").textContent = "与 AstrBot 配置同步 · 每 15 秒自动更新";
       el("nativeStatus").className = "msg";
@@ -1822,6 +1830,7 @@
       nativeSaving = false;
       el("nativeReload").disabled = state.saving;
       renderNative();
+      applyPromptLocks();
       showSaveBar();
     }
   }
@@ -2181,7 +2190,7 @@
   const FIELD_HELP = {
     expression_forbid_phrases: { desc: "命中的口头禅从正文删除，长词优先；代码块与表格内不处理，删除后收拢多余空白和重复标点。", ex: "填「行吧，我认」：回复出现即删除，其余正文保留；多条用逗号分隔。" },
     expression_private_reuse: { desc: "默认关闭：私聊直接回复，不引用当前消息，也不沿用本卡片的Emoji清理。开启后私聊复用引用与清理设置，@发送者仍仅用于群聊。", ex: "引用当前消息已开启时，私聊复用关闭：直接发正文；私聊复用开启：首条正文引用你的消息。保存参数后生效。" },
-    reply_fallback_enabled: { desc: "默认关闭。已通过闸门的主模型调用失败后最多重试5次；耗尽私聊管理员，等1分钟再尝试一次，仍失败便停止。", ex: "只重发失败的模型请求，保留工具结果。撤回、权限、上下文失效或已输出片段时停止；失败请求及等待耗时不占普通回复有效期。" },
+    reply_fallback_enabled: { desc: "默认关闭。已通过闸门的主模型调用失败后：有回退模型时总重试5次并切换模型；仅一个模型时只重试1次。耗尽后私聊管理员，不再额外等待补发。私聊要开启「私聊也做参与判断」才会接管。", ex: "只重发失败的模型请求，保留工具结果。群聊默认接管；私聊需开启「私聊也做参与判断」。撤回、权限、上下文失效或已输出片段时停止；失败请求及等待耗时不占普通回复有效期。" },
     reply_primary_timeout_seconds: {
       desc: "默认15秒，范围1–60秒。开启「断线恢复 → 兜底回复」后，对所有LH接管的本地回复生效，不随上方所选AstrBot档案改变。无有效输出且已配置回退模型时，取消主模型请求并直接切换。",
       ex: "设15秒：非流式等待完整有效结果；流式等首个非空正文、工具或消息链，空心跳不算。有有效片段后不再切换；完整生成与回退模型仍保留60秒总预算。关闭兜底回复后本项不接管宿主超时。"
@@ -2291,7 +2300,7 @@
     reply_recall_group: {on:"群聊收到对应原消息撤回通知后，停止等待、生成及未发气泡。",off:"不因群聊原消息撤回取消本轮回复，仍受其他有效期规则约束。",setup:"回复行为 → 撤回保护；平台必须能上报撤回通知，无需额外等待参数。"},
     reply_recall_private: {on:"私聊收到对应撤回通知后，取消尚未发送的回复。",off:"私聊撤回不触发取消；群聊遵循群聊开关。",setup:"回复行为 → 撤回保护；平台必须支持私聊撤回通知。"},
     apply_to_private: {on:"私聊也做参与判断，未达条件时可能静默。",off:"私聊跳过参与判断；碎片、表达、名单与撤回仍分别控制。",setup:"称呼与私聊 → 过滤私聊；判定模型和阈值在判定参数页设置。"},
-    reply_fallback_enabled: {on:"已放行的主模型失败时按兜底规则重试；耗尽后提醒并延后再尝试一次。",off:"不启用 LH 主回复兜底重试，宿主自己的回退设置仍有效。",setup:"断线恢复 → 提醒管理员 QQ；宿主回退模型和尝试次数在原生配置 → 模型设置。"},
+    reply_fallback_enabled: {on:"已放行的主模型失败时按兜底规则重试（有回退最多5次，单模型1次）；耗尽后提醒管理员。",off:"不启用 LH 主回复兜底重试，宿主自己的回退设置仍有效。",setup:"断线恢复 → 提醒管理员 QQ；宿主回退模型和尝试次数在原生配置 → 模型设置。"},
     classifier_outage_recovery_enabled: {on:"启用文字判定故障状态、探测与恢复补读，并按通知间隔提醒管理员。",off:"不启用此恢复流程；判定失败遵循现有静默规则，兜底回复独立。",setup:"断线恢复 → 提醒管理员 QQ、提醒间隔及各模型提醒开关；判定冷却参数在判定参数页。"},
     coupling_livingemotion_enabled: {on:"在接口就绪后接入情绪、好感度及爬楼背景，遵循 LE 自身模式。",off:"LH 不接入这些能力，LE 自身仍按它的配置运行。",setup:"功能耦合 → LivingEmotion；情绪、作息、主动行为与爬楼参数到 LE 配置页设置。"},
     coupling_livingmemory_enabled: {on:"按当前会话授权范围获取记忆，并允许按需检索与回忆。",off:"LH 不接入 LivingMemory 能力，插件本身仍独立运行。",setup:"功能耦合 → LivingMemory；存储、授权范围和检索参数到 LivingMemory 配置页设置。"},
@@ -2737,6 +2746,44 @@
     renderPromptInjection();
   }
 
+  function promptLock(stem) {
+    const memory = state.data?.function_coupling?.integrations?.livingmemory;
+    const native = nativeData?.values || {};
+    if (stem === "prompt_core") return {locked: true, reason: "LH 通用说明"};
+    if (stem === "prompt_memory") {
+      return memory?.effective === true
+        ? {locked: true, reason: "记忆功能已接入"} : {locked: false, reason: ""};
+    }
+    if (stem === "prompt_segment") {
+      return native.enable === true && native.only_llm_result === true
+        ? {locked: true, reason: "原生分段已开启"} : {locked: false, reason: ""};
+    }
+    if (stem.startsWith("prompt_image_")) {
+      return imageData?.available === true
+        ? {locked: true, reason: "AI 生图已启用"} : {locked: false, reason: ""};
+    }
+    return {locked: false, reason: ""};
+  }
+
+  function applyPromptLocks() {
+    document.querySelectorAll("#promptInjection .prompt-entry").forEach(article => {
+      const toggle = article.querySelector(".prompt-switch input[type=checkbox]");
+      if (!toggle) return;
+      const lock = promptLock(article.dataset.promptStem);
+      const locked = lock.locked && toggle.checked;
+      toggle.disabled = locked;
+      toggle.title = locked ? lock.reason : "";
+      const area = article.querySelector("textarea");
+      const reset = article.querySelector("button.btn");
+      const scope = article.querySelector("p.sub");
+      if (area) area.readOnly = locked;
+      if (reset) reset.disabled = locked;
+      if (scope) scope.textContent = locked
+        ? "由「" + lock.reason + "」托管，开关与文本已锁定，仅供查看。"
+        : (article.dataset.scopeText || "在本页编辑并保存；关闭保留文本并停止本项注入。");
+    });
+  }
+
   function renderPromptInjection() {
     const catalog = state.data.prompt_injection;
     const core = el("promptCore"), ordinary = el("promptOrdinary");
@@ -2744,12 +2791,16 @@
     if (!catalog) { core.textContent = "提示词读取失败，请检查插件版本。"; return; }
     const ordinaryStems = new Set((catalog.ordinary || []).map(item => item.stem));
     for (let item of [...catalog.shared || [], ...catalog.core || [], ...catalog.ordinary || []]) {
+      // 段落提示由原生 only_llm_result 自动选择，不再单独暴露开关，避免与分段提示冲突。
+      if (item.stem === "prompt_paragraph") continue;
       const enabledKey = item.stem + "_enabled", textKey = item.stem + "_text";
       const article = document.createElement("article"); article.className = "prompt-entry"; article.dataset.promptStem = item.stem;
       const label = document.createElement("div"); label.className = "prompt-switch";
       const title = document.createElement("label"); title.textContent=item.title;
       const toggle = document.createElement("input"); toggle.type = "checkbox"; toggle.id = "field-" + enabledKey;
       toggle.checked = (currentConfig(enabledKey) ?? item.enabled_default) === true; title.htmlFor = toggle.id;
+      const lock = promptLock(item.stem);
+      if (lock.locked && toggle.checked) { toggle.disabled = true; toggle.title = lock.reason; }
       label.append(title,helpButton(item.title,{
         desc:"控制「"+item.title+"」是否提供给本轮请求。",
         on:"在「"+item.scope+"」的适用条件下提供本项提示词；仍需对应功能可用。",
@@ -2757,11 +2808,16 @@
         setup:"提示词注入 → "+item.title+"，编辑下方文本并保存；最多 10000 字，开启时不能为空。",
       }),switchLabel(toggle));
       const scope = document.createElement("p"); scope.className = "sub";
-      scope.textContent = "在本页编辑并保存；开启后" + item.scope + "提供本项，关闭保留文本并停止本项注入。";
+      const defaultScope = "在本页编辑并保存；开启后" + item.scope + "提供本项，关闭保留文本并停止本项注入。";
+      article.dataset.scopeText = defaultScope;
+      scope.textContent = lock.locked && toggle.checked
+        ? "由「" + lock.reason + "」托管，开关与文本已锁定，仅供查看。"
+        : defaultScope;
       const area = document.createElement("textarea"); area.id = "field-" + textKey; area.spellcheck = false;
       area.value = currentConfig(textKey) ?? item.default; area.setAttribute("aria-label", item.title + " · 提示词");
+      area.readOnly = lock.locked && toggle.checked;
       const count = document.createElement("p"); count.className = "msg"; count.id = area.id + "-count"; area.setAttribute("aria-describedby", count.id);
-      const reset = document.createElement("button"); reset.type = "button"; reset.className = "btn"; reset.textContent = "恢复预置";
+      const reset = document.createElement("button"); reset.type = "button"; reset.className = "btn"; reset.textContent = "恢复预置"; reset.disabled = lock.locked && toggle.checked;
       function paint() {
         const size = Array.from(area.value).length;
         const invalid = size > catalog.max_chars || (toggle.checked && !area.value.trim()) ||
@@ -2781,10 +2837,12 @@
         toggle.nextElementSibling.textContent = toggle.checked ? "已开启" : "已关闭";
         if (!state.dirty.has(textKey) && area !== document.activeElement) area.value = currentConfig(textKey) ?? item.default;
         paint();
+        applyPromptLocks();
       };
       article.append(label, scope, area, count, reset);
       (ordinaryStems.has(item.stem) ? ordinary : core).append(article); paint();
     }
+    applyPromptLocks();
   }
 
   const COUPLING_HELP = {
@@ -4433,6 +4491,7 @@
       try {
         imageData=await apiPost("console/image-settings",{expected_revision:imageData.revision,values:imageDraft});
         imageDraft={}; saved.push("独立AI生图已保存并生效");
+        applyPromptLocks();
       } catch(err) { errors.push("文生图保存失败："+err.message); }
     }
     if (Object.keys(nativeDraft).length) {

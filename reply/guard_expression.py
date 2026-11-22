@@ -40,6 +40,22 @@ _COMMAND_LINE = re.compile(
 )
 _JSON_START = re.compile(r"[\[{]")
 _CHAT_PUNCT = re.compile(r"""[，,、；;：:。．.！!？?…~～“”‘’「」『』（）()【】\[\]《》〈〉"'—–]+""")
+
+# 整段气泡保留标点：代码、链接、场景动作、括号引用或多段长文。
+_CODE_OR_LINK = re.compile(r"```|~~~|`[^`\n]+`|https?://\S+|www\.\S+", re.I)
+_SCENE_OR_BRACKET = re.compile(r"\*[^*\n]+\*|[（）()【】\[\]《》〈〉「」『』“”‘’]")
+
+
+def preserve_punctuation(text):
+    """含代码/链接/场景动作/括号/多段时，整个气泡保留标点。"""
+    if not text:
+        return False
+    if _CODE_OR_LINK.search(text) or _SCENE_OR_BRACKET.search(text):
+        return True
+    if "\n" in text.strip():
+        return True
+    return len(text) > 120
+
 _CN_PERIOD = re.compile(r"[。．]")
 # 行末（含行尾空白）的连续句号整段换成间隔；句中的句号不受影响。
 _TRAILING_PERIOD = re.compile(r"[。．]+[ \t]*$", re.MULTILINE)
@@ -254,6 +270,9 @@ class Expression:
         result = []
         for component in chain:
             if isinstance(component, Plain):
+                if preserve_punctuation(component.text):
+                    result.append(component)
+                    continue
                 text = normalize_punctuation(component.text, space=punct_space_mode(self.config))
                 # 未改变正文时保留组件身份；发送去重按原组件跟踪。
                 if text != component.text:
@@ -270,11 +289,15 @@ class Expression:
         messages = arguments.get("messages")
         if not isinstance(messages, list):
             return
-        arguments["messages"] = [
-            {**item, "text": normalize_punctuation(item["text"], space=punct_space_mode(self.config))}
-            if isinstance(item, dict) and item.get("type") == "plain"
-            and isinstance(item.get("text"), str) else item for item in messages
-        ]
+        cleaned = []
+        for item in messages:
+            if (isinstance(item, dict) and item.get("type") == "plain"
+                    and isinstance(item.get("text"), str)
+                    and not preserve_punctuation(item["text"])):
+                item = {**item, "text": normalize_punctuation(
+                    item["text"], space=punct_space_mode(self.config))}
+            cleaned.append(item)
+        arguments["messages"] = cleaned
 
     def before_send(self, event, chain, plan):
         """仅调整当前主回复自动头；原有引用及指向其他人的@保留。"""

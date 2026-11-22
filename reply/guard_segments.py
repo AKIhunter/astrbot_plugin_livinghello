@@ -9,7 +9,7 @@ from astrbot.core.agent.message import TextPart
 try:
     from .guard_expression import (forbid_phrases, strip_forbidden,
                                        normalize_punctuation, punct_cleanup_enabled,
-                                       punct_space_mode)
+                                       punct_space_mode, preserve_punctuation)
     from .guard_native_reply import managed_options, second_period_regex
     from .guard_prompt_injection import preset_text, request_config
     from ..observability.guard_request_trace import emit
@@ -17,7 +17,7 @@ try:
 except ImportError:
     from reply.guard_expression import (forbid_phrases, strip_forbidden,
                                           normalize_punctuation, punct_cleanup_enabled,
-                                          punct_space_mode)
+                                          punct_space_mode, preserve_punctuation)
     from reply.guard_native_reply import managed_options, second_period_regex
     from reply.guard_prompt_injection import preset_text, request_config
     from observability.guard_request_trace import emit
@@ -109,6 +109,8 @@ class ReplySegments:
             # 先按原标点分段，再清理每段，避免清掉用户配置的断句符。
             _pcfg = getattr(self.plugin, "config", None)
             def clean(value):
+                if preserve_punctuation(value):
+                    return value
                 return (normalize_punctuation(value, space=punct_space_mode(_pcfg))
                         if punct_cleanup_enabled(_pcfg) else value)
             pending = ""

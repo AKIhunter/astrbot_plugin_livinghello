@@ -85,7 +85,8 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.service._request.side_effect = TimeoutError()
         result = await Main.generate_deferred_image(self.plugin, Event(), "猫")
         self.assertEqual(result, {"status": "unknown"})
-        self.service._request.assert_awaited_once()
+        # 超时在本地按原描述重试 3 次；仍失败才进入未知结果。
+        self.assertEqual(self.service._request.await_count, 3)
 
     async def test_deferred_fixed_id_keeps_paid_call_idempotent(self):
         self.plugin.get_deferred_image_contract = lambda: Main.get_deferred_image_contract(self.plugin)
@@ -511,7 +512,7 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.send.await_count,3)
         self.assertEqual(job["status"],"unknown")
         apology=event.send.await_args_list[-1].args[0]
-        self.assertIn("还不确定你有没有收到",apology.chain[0].text)
+        self.assertIn("刚才网络抽了一下",apology.chain[0].text)
         with self.service._connect() as db:
             self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0],"unknown")
 
@@ -537,12 +538,13 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(new.used(),0)
             self.assertTrue(new.reserve(Event("tomorrow"),"画猫",False))
 
-    async def test_upstream_failure_keeps_quota_and_does_not_retry(self):
+    async def test_upstream_failure_keeps_quota_and_retries_locally(self):
         self.service._request.side_effect=TimeoutError("secret-marker")
         result=await self.service.generate(Event(),"画猫")
         self.assertNotIn("secret-marker",result)
         self.assertEqual(self.service.used(),1)
-        self.assertEqual(self.service._request.await_count,1)
+        # 超时在同一个请求号内按原描述重试，最多 3 次；额度只计一次。
+        self.assertEqual(self.service._request.await_count,3)
 
     async def test_missing_reference_never_requests_or_consumes(self):
         self.assertIn("补充图片",await self.service.generate(Event(),"换背景",True))
@@ -721,7 +723,8 @@ class ImageHttpTests(unittest.IsolatedAsyncioTestCase):
             await self.service.generate(first, "API失败")
             row = await trace.get(first.get_extra(ID_KEY))
             self.assertEqual(row["features"]["image_api"]["status"], "failed")
-            self.assertEqual(row["summary"]["image_api_calls"], 1)
+            # 503 属于可重试失败：同一任务内共请求 3 次。
+            self.assertEqual(row["summary"]["image_api_calls"], 3)
             self.http_status = 200
             self.response_payload = {"data": [{"url": self.base.removesuffix("/v1") + "/image.png"}]}
             second = Event(mid="download-failure")
