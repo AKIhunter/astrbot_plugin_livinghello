@@ -50,6 +50,9 @@ DELIVERY_RETRY_SECONDS = 1.0
 # 上游按成功出图计费，失败不计费；同一任务内可本地按原描述重试。
 IMAGE_REQUEST_ATTEMPTS = 3
 IMAGE_RETRY_BASE_SECONDS = 1.5
+# 内容审核拒绝后，原句额外重发次数（2026-11-23 实测约 25% 是随机拒绝）。
+# 原句重发不调模型、不受模型超时影响，比改词链可靠；被拒请求上游不计费。
+CONTENT_RETRY_ATTEMPTS = 2
 IMAGE_EVENT = ContextVar("livinghello_image_event", default=None)
 FIELDS = {
     "enabled": ("启用AI生图", "bool", "主模型可按需要调用文生图或图生图工具，关闭后不提供工具。"),
@@ -62,7 +65,7 @@ FIELDS = {
     "follow_server_time": ("跟随服务器时间", "bool", "开启后每次生图自动把服务器当前时间（年月日、星期、时分）注入描述，让画面跟随现实昼夜、季节和节日；关闭则完全不附加。"),
     "prompt_guard_enabled": ("启用提示词映射", "bool", "开启后发送前应用等义替换、长度规则与成功用词；关闭则沿用原描述。开启后在本页设置映射表路径，修改JSON即可热生效。姿势、场景变化需用户确认。"),
     "prompt_guard_rules_path": ("提示词映射表路径", "string", "在插件数据目录放置image_prompt_rules.json；相对路径从该目录解析，也支持绝对路径。缺失使用内置规则，写坏保留有效规则。支持词语、简单正则、去重补充及调整提醒。"),
-    "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "本页→AI生图设置0~10次，默认2；需在LE开启承诺兑现，实际取此值与LE剩余自动重试次数的较小值。0关闭自动调整，用尽后等待用户。仅对明确内容拒绝或超长描述调整等义用词，每次实际生图仍计每日额度；超时、未知结果不补发。"),
+    "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "本页→AI生图设置0~10次，默认2；需在LE开启承诺兑现，实际取此值与LE剩余自动重试次数的较小值。0关闭自动调整，用尽后等待用户。仅对明确内容拒绝或超长描述调整等义用词，每次实际生图仍计每日额度。内容拒绝会先按原句自动重发2次（审核约25%是随机拒绝，被拒不扣费），仍拒才进入改词；超时、未知结果不补发。"),
     "prompt_guard_learn_enabled": ("记录并复用成功用词", "bool", "开启后按实际生图连接、模型及协议记录成功请求中使用的局部替换，后续自动复用；关闭停止记录与复用，保留已有数据。需开启提示词映射，记录保存在插件数据目录image_prompt_mappings.sqlite3。"),
     "timeout_seconds": ("生图超时（秒）", "int", "10~500秒；单次请求超时、限流、5xx或网络断开时，会在同一任务内按原描述本地重试，最多3次，成功才向上游计费。原自主回复时效仍生效。"),
 }
@@ -1258,12 +1261,21 @@ class ImageSettings:
         """同一请求号内按原描述重试；失败不计费，成功即返回。
 
         上游按成功出图计费，超时、限流、5xx 和网络断开都还没有拿到成功响应，
-        因此可以安全地重试。内容审核拒绝需要改词，交给原有提示词调整流程；
+        因此可以安全地重试。
+
+        内容审核拒绝也在这里先按原描述重试（2026-11-23 实测）：
+        同一个 prompt 连发 4 次会出现 3 过 1 拒，说明审核有约 25% 的随机拒绝；
+        而被拒请求上游不计费。原句重发既不需要调模型、也不受模型超时影响，
+        比走改词链更可靠——改词依赖 LLM，LLM 一超时整条重试链就静默断掉。
+        原句重试用尽后再交给提示词调整流程。
+
         未知结果（result_unknown）可能已经出图，不在这里自动重发。
         """
         delay = IMAGE_RETRY_BASE_SECONDS
-        retried = 0
-        for attempt in range(1, IMAGE_REQUEST_ATTEMPTS + 1):
+        retried = 0          # 可重试错误（超时/5xx/网络）的次数
+        content_retried = 0  # 内容审核拒绝后原句重发的次数
+        total_attempts = IMAGE_REQUEST_ATTEMPTS + CONTENT_RETRY_ATTEMPTS
+        for attempt in range(1, total_attempts + 1):
             try:
                 return await asyncio.wait_for(
                     self._request(values, connection, prompt, reference),
@@ -1271,19 +1283,35 @@ class ImageSettings:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                if attempt >= IMAGE_REQUEST_ATTEMPTS or not self._retryable_image_error(exc):
-                    event = IMAGE_EVENT.get()
+                event = IMAGE_EVENT.get()
+                reason = getattr(exc, "kind", None) or type(exc).__name__
+                if reason == "content_rejected":
+                    if content_retried < CONTENT_RETRY_ATTEMPTS and attempt < total_attempts:
+                        content_retried += 1
+                        if event:
+                            emit(event, "image_retry", "retry",
+                                 attempt=attempt, reason=reason)
+                        self.plugin.logger.warning(
+                            "[LH-img] 内容审核拒绝，原句第 %d/%d 次重发",
+                            content_retried, CONTENT_RETRY_ATTEMPTS)
+                        await asyncio.sleep(delay)
+                        delay = min(8.0, delay * 2)
+                        continue
+                    if event:
+                        event.set_extra("_livinghello_image_local_retries",
+                                        retried + content_retried)
+                    raise
+                if (retried >= IMAGE_REQUEST_ATTEMPTS - 1
+                        or not self._retryable_image_error(exc)):
                     if event:
                         event.set_extra("_livinghello_image_local_retries", retried)
                     raise
-                retried = attempt
-                event = IMAGE_EVENT.get()
-                reason = getattr(exc, "kind", None) or type(exc).__name__
+                retried += 1
                 if event:
                     emit(event, "image_retry", "retry", attempt=attempt, reason=reason)
                 self.plugin.logger.warning(
                     "[LivingHello] 生图失败（%s），本地第 %d/%d 次重试",
-                    reason, attempt, IMAGE_REQUEST_ATTEMPTS)
+                    reason, retried, IMAGE_REQUEST_ATTEMPTS)
                 await asyncio.sleep(delay)
                 delay = min(8.0, delay * 2)
         raise AssertionError("unreachable")
