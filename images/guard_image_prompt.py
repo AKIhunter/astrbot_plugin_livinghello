@@ -324,23 +324,51 @@ class ImagePromptMapping:
         for blocked in rules["blocklist"]:
             if token_pattern(blocked).search(prompt):
                 raise PromptReviewError("prompt_adjustment_required", "这段描述需要你确认调整，我先保留原画面。")
+        pending = []
         for rule in rules["rules"]:
             kind = rule["type"]
             pattern = token_pattern(rule["from"]) if kind == "token" else simple_pattern(rule["pattern"])
             found = pattern.search(prompt)
             if (kind == "advisory" or rule.get("requires_confirmation")) and found:
                 raise PromptReviewError("prompt_adjustment_required", rule["notice"])
+            if kind == "token":
+                # 只登记候选，统一在循环后同时替换：避免 A→B 的产物被 B→C 再吃一次
+                # （历史故障：半透明薄纱 → 细网纱细网纱）。
+                if found:
+                    pending.append((rule, pattern))
+                continue
             candidate = prompt
             if kind == "inject_if_missing":
                 if not found and rule["to"].casefold() not in prompt.casefold():
                     candidate += "\n" + rule["to"]
-            elif kind in {"token", "regex"} and found:
+            elif kind == "regex" and found:
                 candidate = pattern.sub(lambda _: rule["to"], prompt)
             if candidate != prompt:
                 if rule.get("requires_confirmation") or not equivalent_scene(prompt, candidate):
                     raise PromptReviewError("prompt_adjustment_required", rule.get("notice") or REVIEW_NOTICE)
                 prompt = candidate
                 result["hits"].append(rule["id"])
+        if pending:
+            spans = []
+            for rule, pattern in pending:
+                for match in pattern.finditer(prompt):
+                    spans.append((match.start(), match.end(), rule))
+            # 同一位置取最长匹配，重叠区间直接跳过，保证每条原文只被改写一次。
+            spans.sort(key=lambda span: (span[0], -(span[1] - span[0])))
+            pieces, cursor, applied = [], 0, []
+            for start, end, rule in spans:
+                if start < cursor:
+                    continue
+                pieces.extend((prompt[cursor:start], rule["to"]))
+                cursor = end
+                applied.append(rule)
+            pieces.append(prompt[cursor:])
+            candidate = "".join(pieces)
+            if candidate != prompt:
+                if not equivalent_scene(prompt, candidate):
+                    raise PromptReviewError("prompt_adjustment_required", REVIEW_NOTICE)
+                prompt = candidate
+                result["hits"].extend(rule["id"] for rule in applied)
         if values.get("prompt_guard_learn_enabled", True):
             try:
                 learned = self.learned(scope)
