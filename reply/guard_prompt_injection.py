@@ -8,12 +8,7 @@ except ImportError:
 MARKER = "<!--livinghello:expression:v1-->"
 # Kept as a compatibility export; actual request injection uses shared module IDs.
 TOPIC_CONTRACT = prompts()["shared_context"]
-SEGMENT_CONTRACT = (
-    "先完整回应当前内容，不限制整次回复的总字数。按意思自行分段，"
-    "普通聊天每段尽量8–100字，每段之间用空行分隔；需要时可以多段，"
-    "短答不硬凑字数或段数，代码、网址、表格及必要的完整解释不强拆。"
-    "同一段内不要仅因出现句号就换行；不要输出分段编号或分隔标签。"
-)
+SEGMENT_CONTRACT = ('按意思分段，每段之间用空行分隔。代码、网址、表格及必要的完整解释不强拆。同一段内不要仅因出现句号就换行；不要输出分段编号或分隔标签。')
 PARAGRAPH_CONTRACT = "普通聊天回复请使用一个连贯段落，不要用换行隔断；代码、表格等必要格式仍保留。"
 IMAGE_CONTRACT = (
     "生图需求必须先调用livinghello_generate_image取得本轮决定，"
@@ -79,6 +74,8 @@ LEGACY_GENERAL_HASHES = {
 }
 LEGACY_SEGMENT_HASHES = {
     "ed102232134394e2b971b19040af3a05af756f91111aa9d551b7e0934ecc494d",
+    # 旧版预置“每段 8–100 字 + 不限制总字数”，迁移到新分段规则。
+    "027495f1a61da3d90310badbf454e1b319ed5afc7c1c1fbfdc92090d94069412",
 }
 
 
