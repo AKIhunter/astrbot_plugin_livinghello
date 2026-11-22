@@ -20,7 +20,14 @@ class GenerateImageTool(FunctionTool[AstrAgentContext]):
     parameters: dict = field(default_factory=lambda: {
         "type": "object",
         "properties": {
-            "prompt": {"type": "string", "description": "内部生图描述，只传给上游，1~4000字；不要把它或其中画面细节复述到给用户的正文。"},
+            "prompt": {"type": "string", "description": (
+                "内部生图描述，只传给上游。必须简短：60字以内最稳，最多110字。"
+                "推荐句式「写实生活照，{身份与年龄}，{发色}，{瞳色}。她穿{服装}，{姿势}。」"
+                "不要写镜头角度、构图、皮肤质感、心情、光线影调这类修饰——"
+                "同一件衣服，堆到200字必被内容审核拒绝，压到60字就能过。"
+                "服装写「薄纱长袖衬衫，扣子扣好」这类可过写法；"
+                "姿势写「侧躺在床上」这类可过写法。"
+                "不要把它或其中画面细节复述到给用户的正文。")},
             "use_reference": {"type": "boolean", "description": "true使用本次输入图片做图生图；false文生图"},
             "promise_id": {"type": "string", "description": (
                 "本轮兑现当前会话已经接受、尚未执行的图片事项时填写原ID。"
