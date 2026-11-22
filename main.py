@@ -33,6 +33,7 @@ try:  # 作为插件包加载时走相对导入
     from .reply.guard_expression import Expression, takeover
     from .integrations.guard_livingemotion import availability_reason, is_state_line, state_lines
     from .integrations.guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
+    from .integrations.guard_tool_loop import bind_current as bind_tool_loop
     from .gate.guard_classifier_outage import (
         BackfillStatus,
         COOLDOWN_SECONDS,
@@ -67,6 +68,7 @@ except ImportError:  # 单文件调试兜底
     from reply.guard_expression import Expression, takeover
     from integrations.guard_livingemotion import availability_reason, is_state_line, state_lines
     from integrations.guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
+    from integrations.guard_tool_loop import bind_current as bind_tool_loop
     from gate.guard_classifier_outage import (
         BackfillStatus,
         COOLDOWN_SECONDS,
@@ -515,6 +517,10 @@ class Main(Star):
 
     def prepare_image_prompt_repair(self, prompt, proposal, *, expected_scope):
         return self._image_generation().prepare_prompt_repair(prompt, proposal, expected_scope)
+
+    def get_image_prompt_learned(self):
+        """LE 改词循环引用实测过审对；学习库为空或禁用时返回空表。"""
+        return self._image_generation().learned_pairs()
 
     async def generate_deferred_image(self, event, prompt):
         """只生成并交出待发图片，不触发普通回复的 after-sent 补图。
@@ -1507,6 +1513,8 @@ class Main(Star):
         self._reply_health().watch(event, expected=True)
         self._history_view().bind(event, find_current_runner(run_context))
         self._reply_fallback().bind_current(event, run_context)
+        # 工具循环护栏：相同调用去重，只读工具异常由本地重试。
+        bind_tool_loop(event, run_context, self)
         # 宿主已选择本轮provider；只取名称，后备切换的最终归属仍以宿主日志为准。
         try:
             provider = await self.context.get_using_provider_async(umo=event.unified_msg_origin)

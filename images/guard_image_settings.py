@@ -47,13 +47,16 @@ STYLE_MAX_CHARS = 1000
 # 同一张已生成的图最多投递两次；重试不重新请求上游，也不重复计额度。
 DELIVERY_ATTEMPTS = 2
 DELIVERY_RETRY_SECONDS = 1.0
+# 上游按成功出图计费，失败不计费；同一任务内可本地按原描述重试。
+IMAGE_REQUEST_ATTEMPTS = 3
+IMAGE_RETRY_BASE_SECONDS = 1.5
 IMAGE_EVENT = ContextVar("livinghello_image_event", default=None)
 FIELDS = {
     "enabled": ("启用AI生图", "bool", "主模型可按需要调用文生图或图生图工具，关闭后不提供工具。"),
     "provider_id": ("生图模型 / 路由上游", "provider", "复用AstrBot已注册模型或多API路由的具体上游连接，不读取BiliBot。所选API必须实际支持生图。"),
     "model": ("生图模型名称（可选）", "string", "留空使用所选模型名；同一API的生图模型名可在此指定。不会更改主对话模型。"),
     "protocol": ("生图接口", "protocol", "标准图片接口使用images/generations和images/edits；对话生图接口使用chat/completions的image模态。"),
-    "daily_limit": ("每日生图次数上限", "int", "全插件共用，按服务器本地自然日重置。每次上游请求计一次，失败和结果未知也计数；0禁止生图，重载不清零。"),
+    "daily_limit": ("每日生图次数上限", "int", "全插件共用，按服务器本地自然日重置。每个生图任务计一次，本地失败重试不重复计数；0禁止生图，重载不清零。"),
     "size": ("生成尺寸", "size", "使用服务支持的尺寸，建议分辨率范围512x512~2048x2048；可选自定义宽高。每次只请求1张图片。"),
     "style_prompt": ("画面风格提示词（全局）", "text", "每次生图自动附加在描述之后，用来固定整套出图风格；留空则完全不附加。用户明确要求画风时以用户描述为准，本段作为补充。最多1000字；启用映射默认总长900字，关闭后4000字，只截断风格部分。"),
     "follow_server_time": ("跟随服务器时间", "bool", "开启后每次生图自动把服务器当前时间（年月日、星期、时分）注入描述，让画面跟随现实昼夜、季节和节日；关闭则完全不附加。"),
@@ -61,7 +64,7 @@ FIELDS = {
     "prompt_guard_rules_path": ("提示词映射表路径", "string", "在插件数据目录放置image_prompt_rules.json；相对路径从该目录解析，也支持绝对路径。缺失使用内置规则，写坏保留有效规则。支持词语、简单正则、去重补充及调整提醒。"),
     "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "本页→AI生图设置0~10次，默认2；需在LE开启承诺兑现，实际取此值与LE剩余自动重试次数的较小值。0关闭自动调整，用尽后等待用户。仅对明确内容拒绝或超长描述调整等义用词，每次实际生图仍计每日额度；超时、未知结果不补发。"),
     "prompt_guard_learn_enabled": ("记录并复用成功用词", "bool", "开启后按实际生图连接、模型及协议记录成功请求中使用的局部替换，后续自动复用；关闭停止记录与复用，保留已有数据。需开启提示词映射，记录保存在插件数据目录image_prompt_mappings.sqlite3。"),
-    "timeout_seconds": ("生图超时（秒）", "int", "10~500秒，超时不会换上游补发，防止重复收费。原自主回复时效仍生效。"),
+    "timeout_seconds": ("生图超时（秒）", "int", "10~500秒；单次请求超时、限流、5xx或网络断开时，会在同一任务内按原描述本地重试，最多3次，成功才向上游计费。原自主回复时效仍生效。"),
 }
 DEFAULTS = dict(enabled=False, provider_id="", model="", protocol="images",
                 daily_limit=20, size="1024x1024",
@@ -233,6 +236,16 @@ class ImageSettings:
             return self.prompt_mapping.policy(self.values, self.connection(self.values))
         except NativeReplyError:
             return {"available": False, "reason": "选择生图模型后显示成功用词统计。"}
+
+    def learned_pairs(self):
+        """学习库 successes>failures 的高频对（≤8条），供 LE 改词 LLM 参考。"""
+        self.refresh()
+        try:
+            connection = self.connection(self.values)
+            scope = self.prompt_mapping.scope(self.values, connection)
+            return self.prompt_mapping.learned(scope)[:8]
+        except (NativeReplyError, sqlite3.Error, OSError):
+            return []
 
     def prepare_prompt_repair(self, prompt, proposal, expected_scope):
         self.refresh()
@@ -1017,8 +1030,8 @@ class ImageSettings:
                                          use_reference=use_reference,
                                          promise_id=event.get_extra("_livinghello_requested_promise")),
                               "generating")
-            image, revised = await asyncio.wait_for(self._request(
-                values, connection, prompt.strip(), reference), values["timeout_seconds"])
+            image, revised = await self._request_with_retry(
+                values, connection, prompt.strip(), reference)
             self.observe_prompt(event, request_id, "success")
             if self.blocked(event) or not self.values["enabled"]:
                 self.mark(request_id, "cancelled")
@@ -1099,7 +1112,9 @@ class ImageSettings:
             await self.finish_image(event, failure, "unknown" if kind in {
                 "result_unknown", "delivery_unknown"} else "failed")
             charged = "本次已请求，仍计额度。" if request_id else "本次未请求生图，不计额度。"
-            return f"生图未完成：{reason}{charged}不要在本轮自动重试。"
+            local_retries = int(event.get_extra("_livinghello_image_local_retries", 0) or 0)
+            tried = f"已按原描述在本地重试{local_retries}次，仍未成功。" if local_retries else ""
+            return f"生图未完成：{reason}{charged}{tried}不要在本轮自动重试。"
         finally:
             if service:
                 service.end(event, span, terminal_status, reason=terminal_reason)
@@ -1211,6 +1226,63 @@ class ImageSettings:
         if room <= 0:
             return prompt
         return prompt + "\n" + style[:room]
+
+    @staticmethod
+    def _retryable_image_error(exc):
+        """只有「确定没有出图」的失败才重试；内容拒绝和未知结果不重试。"""
+        if isinstance(exc, asyncio.CancelledError):
+            return False
+        kind = getattr(exc, "kind", None)
+        if kind == "content_rejected":
+            return False
+        if kind == "rate_limited":
+            return True
+        if kind == "provider_error":
+            # 4xx 参数/鉴权类错误重试也不会变好。
+            return False
+        status = getattr(exc, "status", None)
+        if isinstance(status, int) and status >= 500:
+            return True
+        if isinstance(exc, (asyncio.TimeoutError, ConnectionError, OSError)):
+            return True
+        name = type(exc).__name__
+        return any(token in name for token in (
+            "ClientError", "ClientConnector", "ServerDisconnected",
+            "ClientOSError", "ClientPayloadError"))
+
+    async def _request_with_retry(self, values, connection, prompt, reference):
+        """同一请求号内按原描述重试；失败不计费，成功即返回。
+
+        上游按成功出图计费，超时、限流、5xx 和网络断开都还没有拿到成功响应，
+        因此可以安全地重试。内容审核拒绝需要改词，交给原有提示词调整流程；
+        未知结果（result_unknown）可能已经出图，不在这里自动重发。
+        """
+        delay = IMAGE_RETRY_BASE_SECONDS
+        retried = 0
+        for attempt in range(1, IMAGE_REQUEST_ATTEMPTS + 1):
+            try:
+                return await asyncio.wait_for(
+                    self._request(values, connection, prompt, reference),
+                    values["timeout_seconds"])
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if attempt >= IMAGE_REQUEST_ATTEMPTS or not self._retryable_image_error(exc):
+                    event = IMAGE_EVENT.get()
+                    if event:
+                        event.set_extra("_livinghello_image_local_retries", retried)
+                    raise
+                retried = attempt
+                event = IMAGE_EVENT.get()
+                reason = getattr(exc, "kind", None) or type(exc).__name__
+                if event:
+                    emit(event, "image_retry", "retry", attempt=attempt, reason=reason)
+                self.plugin.logger.warning(
+                    "[LivingHello] 生图失败（%s），本地第 %d/%d 次重试",
+                    reason, attempt, IMAGE_REQUEST_ATTEMPTS)
+                await asyncio.sleep(delay)
+                delay = min(8.0, delay * 2)
+        raise AssertionError("unreachable")
 
     async def _request(self, values, connection, prompt, reference):
         import aiohttp
