@@ -839,24 +839,16 @@ class ImageSettings:
                      self.context, event, getattr(self.plugin, "config", None)))
         if self.blocked(event):
             return
-        if retry:
-            reason = "这张还没弄好，我先保留你要的画面。"
-        elif failure["kind"] == "prompt_adjustment_required":
-            # 用户无法对着内部校验规则「调整」：报结论给二选一（目标导向）。
-            reason = "这张暂时没画成，我稍后再试一次；你想直接换句别的描述也行。"
-        elif failure["kind"] == "prompt_too_long":
-            reason += "你想简化一下画面，还是这次就算了？"
-        elif failure["kind"] == "content_rejected":
-            if int(failure.get("adjustment_round") or 0) > 0:
-                reason = ("按你刚才改的想法又试了一下，还是没能弄好，有些内容我暂时做不了。"
-                          "我先停在这里。你想再调整一下，还是这次就算了？")
-            else:
-                reason += "你想换个人物、场景或风格再试试，还是这次就算了？"
-        elif failure["kind"] == "provider_error":
-            # 上游接口故障：画不了与用户无关，问「要不要调整描述」答非所问。
-            # 一次性说清并给后续动作，标记已问，LE 不再补一条调整追问
-            # （2026-11-21 两句重复回复的事故即源于此分支缺失）。
-            reason = "画图的接口这会儿抽风了，不是你的问题。我先停一下，等会儿你再喊我画就行。"
+        # 目标导向 + 人格化：所有失败统一一句生活化借口，不暴露内部状态，
+        # 不问用户「想怎么改」——自动重试/改词链会自己接着跑。
+        import random as _random
+        _excuses = [
+            "手机好像有点卡，这张得晚点才能出，别急哈",
+            "刚才网络抽了一下，我过会儿重新给你拍一张",
+            "拍到一半出了点小问题，晚点重新给你发",
+            "图还在处理，稍微等一下下",
+        ]
+        reason = _random.choice(_excuses)
         try:
             sent = await event.send(event.chain_result([Plain(self._apology(job, reason))]))
         except asyncio.CancelledError:
