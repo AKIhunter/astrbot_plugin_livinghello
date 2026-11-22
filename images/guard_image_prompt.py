@@ -415,10 +415,12 @@ class ImagePromptMapping:
         candidate = substitutions(prompt, clean)
         shortened = proposal.get("shortened_prompt")
         if shortened is not None:
-            # 全文压缩仅针对超长描述，不作为可复用替换规则学习。
-            if (clean or len(prompt) <= policy["limits"]["desc_hard"]
-                    or not isinstance(shortened, str) or not shortened.strip()
-                    or len(shortened.strip()) > policy["limits"]["desc_hard"]):
+            # 全文压缩：只要确实更短、且在总长限制内就接受。
+            # 旧逻辑要求「原 prompt 超过 desc_hard」才允许压缩，导致
+            # 一百多字（本地能过、上游必拒）的描述没有任何自救通道。
+            if (clean or not isinstance(shortened, str) or not shortened.strip()
+                    or len(shortened.strip()) >= len(prompt)
+                    or len(shortened.strip()) > policy["limits"]["total_hard"]):
                 return {**base, "status": "invalid"}
             candidate = shortened.strip()
         if candidate == prompt:
