@@ -2398,6 +2398,9 @@
     { id: "outageWatchReply", title: "回复链路", fields: OUTAGE_WATCH_REPLY },
     { id: "nativeSettingsFields", title: "原生配置 → 模型", fields: [PRIMARY_TIMEOUT_FIELD], customRendered: true },
   ];
+  // 列表字段以逗号串联显示；清空后提交 [] 而不是空串，否则保存时会被空值规则跳过。
+  const LIST_KEYS = new Set(FIELD_GROUPS.flatMap(group =>
+    (group.fields || []).filter(field => field.type === "list").map(field => field.key)));
   const POLICY_KEYS = new Set(["gate_mode",
     ...GATE_FIELDS.map(f=>f.key), ...VISION_FIELDS.map(f=>f.key), ...CONTEXT_FIELDS.map(f=>f.key)]);
 
@@ -4384,10 +4387,11 @@
       if (key === "gate_mode") return;
       const value = state.draft[key];
       if (value === null || value === undefined) return;
-      if (value === "" && !key.endsWith("_prompt_text") && !el("field-" + key)?.closest("#promptInjection")
+      if (value === "" && !LIST_KEYS.has(key) && !key.endsWith("_prompt_text") && !el("field-" + key)?.closest("#promptInjection")
           && key !== "classifier_provider_id" && key !== "vision_provider_id"
           && key !== "vision_shared_provider_id" && key !== "understand_image_provider_id") return;
-      payload[key] = value;
+      // 列表字段清空后是空字符串，必须显式提交空数组，否则会被当成「未改动」跳过，删不掉。
+      payload[key] = LIST_KEYS.has(key) && value === "" ? [] : value;
     });
     if(policyDirty()) {
       Object.assign(payload,policyValues());
