@@ -1081,8 +1081,12 @@ class ImageSettings:
                 terminal_reason = "quota_exhausted"
                 emit(event, "image_quota", "skipped", reason=terminal_reason)
             emit(event, "image_error", terminal_status, reason=terminal_reason, error_type=type(exc).__name__)
-            if terminal_reason != "quota_exhausted" and not isinstance(exc, PromptReviewError):
-                # 额度用尽属于产品限制，不是模型故障，不打扰管理员。
+            # 目标导向（2026-11-22）：content_rejected 是内容审核的预期内业务失败，
+            # 借口文案已发用户、改词循环自动接管——不打扰管理员，避免与借口双发。
+            business_expected = (getattr(exc, "kind", "") in {"content_rejected", "result_unknown"}
+                                 or terminal_reason == "quota_exhausted")
+            if (not business_expected and terminal_reason != "quota_exhausted"
+                    and not isinstance(exc, PromptReviewError)):
                 report_model_fault(self.plugin, "image_gen", terminal_status,
                                    str(exc)[:80], event)
             if service:
