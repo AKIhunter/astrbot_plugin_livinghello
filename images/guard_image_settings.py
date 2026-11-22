@@ -842,7 +842,8 @@ class ImageSettings:
         if retry:
             reason = "这张还没弄好，我先保留你要的画面。"
         elif failure["kind"] == "prompt_adjustment_required":
-            reason = failure.get("notice") or "画面需要调整，你想怎么改，还是这次就算了？"
+            # 用户无法对着内部校验规则「调整」：报结论给二选一（目标导向）。
+            reason = "这张暂时没画成，我稍后再试一次；你想直接换句别的描述也行。"
         elif failure["kind"] == "prompt_too_long":
             reason += "你想简化一下画面，还是这次就算了？"
         elif failure["kind"] == "content_rejected":
