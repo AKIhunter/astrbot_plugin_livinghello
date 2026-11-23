@@ -22,7 +22,7 @@ import json
 from typing import Any
 
 import mcp.types
-from astrbot.core import logger
+from astrbot.api import logger
 
 try:
     from ..observability.guard_request_trace import emit

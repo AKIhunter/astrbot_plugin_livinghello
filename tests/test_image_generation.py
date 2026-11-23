@@ -83,10 +83,15 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
     async def test_deferred_unknown_never_claims_delivery(self):
         self.plugin.get_deferred_image_contract = lambda: Main.get_deferred_image_contract(self.plugin)
         self.service._request.side_effect = TimeoutError()
-        result = await Main.generate_deferred_image(self.plugin, Event(), "猫")
-        self.assertEqual(result, {"status": "unknown"})
-        # 超时在本地按原描述重试 3 次；仍失败才进入未知结果。
-        self.assertEqual(self.service._request.await_count, 3)
+        event = Event()
+        event.set_extra("livingemotion:promise_id", "deferred-unknown")
+        result = await Main.generate_deferred_image(self.plugin, event, "猫")
+        self.assertEqual(result["status"], "unknown")
+        self.assertEqual(result["failure"]["kind"], "result_unknown")
+        self.assertEqual(result["failure"]["exception_type"], "TimeoutError")
+        self.assertTrue(result["failure"]["requested"])
+        # 延迟图片结果未知只记录原请求，不在内部重新收费。
+        self.assertEqual(self.service._request.await_count, 1)
 
     async def test_deferred_fixed_id_keeps_paid_call_idempotent(self):
         self.plugin.get_deferred_image_contract = lambda: Main.get_deferred_image_contract(self.plugin)
@@ -94,7 +99,32 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         second = await Main.generate_deferred_image(self.plugin, Event(mid="promise:fixed"), "猫")
         self.assertEqual(first["status"], "generated")
         self.assertEqual(second["status"], "unknown")
+        self.assertEqual(second["reason"], "duplicate_image_call")
         self.service._request.assert_awaited_once()
+
+    async def test_deferred_permission_denial_has_unrequested_receipt(self):
+        self.deferred_plugin()
+        for reason in ("relationship_unavailable", "action_policy_unavailable"):
+            with self.subTest(reason=reason), patch(
+                    "images.guard_image_settings.image_permission",
+                    new=AsyncMock(return_value={"allowed": False, "reason": reason})):
+                result = await Main.generate_deferred_image(self.plugin, Event(mid=reason), "猫")
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["failure"]["reason_code"], reason)
+                self.assertFalse(result["failure"]["requested"])
+                self.assertEqual(result["failure"]["kind"], "provider_error")
+        self.service._request.assert_not_awaited()
+
+    async def test_deferred_invalid_and_blocked_requests_have_diagnostics(self):
+        self.deferred_plugin()
+        event = Event()
+        invalid = await Main.generate_deferred_image(self.plugin, event, "")
+        self.assertEqual(invalid["failure"]["reason_code"], "invalid_parameters")
+        event.set_extra("_at_guard_delivery_blocked", "delivery_blocked")
+        blocked = await Main.generate_deferred_image(self.plugin, event, "猫")
+        self.assertEqual(blocked["failure"]["reason_code"], "delivery_blocked")
+        self.assertFalse(blocked["failure"]["requested"])
+        self.service._request.assert_not_awaited()
 
     def deferred_plugin(self):
         self.plugin.get_deferred_image_contract = lambda: Main.get_deferred_image_contract(self.plugin)
@@ -512,7 +542,8 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.send.await_count,3)
         self.assertEqual(job["status"],"unknown")
         apology=event.send.await_args_list[-1].args[0]
-        self.assertIn("刚才网络抽了一下",apology.chain[0].text)
+        self.assertTrue(apology.chain[0].text)
+        self.assertNotIn("接口", apology.chain[0].text)
         with self.service._connect() as db:
             self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0],"unknown")
 

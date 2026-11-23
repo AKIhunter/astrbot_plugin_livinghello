@@ -2,7 +2,7 @@
 
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
-[![Version](https://img.shields.io/badge/version-2.9.5-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.6-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -61,5 +61,5 @@ Private image prompts, mapping files and learned data remain local.
 Classifier, vision, TTS and image requests can incur provider charges.
 Developer: [AKIhunter](https://github.com/AKIhunter). Feedback QQ group: 991350637.
 
-Version **2.9.5** switches to a configured fallback model when the primary produces no valid output within 15 seconds by default. With reply fallback enabled, set 1–60 seconds under “Native settings → Models → Primary model timeout”. Streaming stops being eligible for fallback after its first valid output.
+Version **2.9.6** preserves permission, preflight and upstream failure diagnostics for LE. Deferred promise images stop internal retries when the upstream result is unknown, avoiding duplicate charges. Pair with LE 0.7.1; see the [changelog](CHANGELOG.md).
 See the [fallback guide](docs/reply_fallback.md) and [changelog](CHANGELOG.md).

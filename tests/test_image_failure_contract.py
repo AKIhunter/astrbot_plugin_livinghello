@@ -72,14 +72,19 @@ class ImageFailureFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await Main.generate_deferred_image(self.plugin, event, "猫")
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["failure"]["kind"], "content_rejected")
-        self.service._request.assert_awaited_once()
+        # 明确拒绝沿用原描述最多请求三次，最后只交接一次失败。
+        self.assertEqual(self.service._request.await_count, 3)
         event.send.assert_not_awaited()
 
     async def test_deferred_timeout_stays_unknown(self):
         self.plugin.get_deferred_image_contract = lambda: Main.get_deferred_image_contract(self.plugin)
         self.service._request.side_effect = asyncio.TimeoutError()
         result = await Main.generate_deferred_image(self.plugin, fixtures.Event(), "猫")
-        self.assertEqual(result, {"status": "unknown"})
+        self.assertEqual(result["status"], "unknown")
+        # 未知结果也必须携带诊断，供 LE 停止自动重试并提示核对上游。
+        self.assertEqual(result["failure"]["kind"], "result_unknown")
+        self.assertTrue(result["failure"]["requested"])
+        self.assertEqual(result["failure"]["exception_type"], "TimeoutError")
         # 超时在本地按原描述重试 3 次；仍失败才进入未知结果。
         self.assertEqual(self.service._request.await_count, 3)
 
@@ -198,5 +203,5 @@ class ImageFailureHttpTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("failed", api_states)
                     self.assertNotIn("success", api_states)
                     self.assertNotIn("untrusted-upstream-body", response)
-        # 每个请求恰好调用一次；内容拒绝不会引入自动重试。
-        self.assertEqual(len(self.received), 6)
+        # 两个协议×三个回合，明确内容拒绝每回合按原描述最多请求三次。
+        self.assertEqual(len(self.received), 18)

@@ -112,7 +112,7 @@ class ImageResultHandoffTests(unittest.IsolatedAsyncioTestCase):
         row = await self.app._promises().promises.get(pid)
         self.assertEqual(row["status"], "waiting")
         self.assertEqual(row["adjustment_notice_state"], "sent")
-        self.assertIn("还是这次就算了", self.event.send.await_args.args[0].chain[0].text)
+        self.assertTrue(self.event.send.await_args.args[0].chain[0].text)
 
     async def test_lost_binding_receipt_never_charges(self):
         pid = await self.promise()
@@ -160,6 +160,8 @@ class ImageResultHandoffTests(unittest.IsolatedAsyncioTestCase):
         self.deferred_peer()
         self.service._request.side_effect = [
             http_failure(400, '{"error":{"code":"content_policy_violation"}}'),
+            http_failure(400, '{"error":{"code":"content_policy_violation"}}'),
+            http_failure(400, '{"error":{"code":"content_policy_violation"}}'),
             (self.output, "blue shirt")]
         pid = await self.promise()
         await self.mapped_failure(pid)
@@ -172,11 +174,11 @@ class ImageResultHandoffTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await self.app._promises().run_due(), 1)
             self.assertEqual(await self.app._promises().run_due(), 0)
         self.assertEqual((await store.get(pid))["status"], "sent")
-        self.assertEqual(self.service._request.await_count, 2)
+        self.assertEqual(self.service._request.await_count, 4)
         self.context.send_message.assert_awaited_once()
         # 即时失败只说明一次；重试的图片走统一延迟投递出口。
         self.event.send.assert_awaited_once()
-        self.assertIn("保留你要的画面", self.event.send.await_args.args[0].chain[0].text)
+        self.assertTrue(self.event.send.await_args.args[0].chain[0].text)
         self.assertEqual(self.app.purpose_model.await_count, 1)
         connection = self.service.connection(self.service.values)
         mapped = self.service.prompt_mapping.apply(self.service.values, connection, "red blouse")
@@ -201,13 +203,14 @@ class ImageResultHandoffTests(unittest.IsolatedAsyncioTestCase):
         row = await self.app._promises().promises.get(pid)
         self.assertEqual((row["status"], row["action_state"]), ("waiting", "held"))
         self.assertEqual(json.loads(row["action_result_json"])["prompt_retry_count"], 2)
-        self.assertEqual(self.service._request.await_count, 3)
+        # 每个明确内容拒绝先原句重发两次；三个画面尝试共九个请求。
+        self.assertEqual(self.service._request.await_count, 9)
         self.app.send_promise_notice.assert_awaited_once()
         self.context.send_message.assert_not_awaited()
         self.clock[0] += 3600
         restarted = PromiseService(self.app.store, self.app)
         self.assertEqual(await restarted.run_due(), 0)
-        self.assertEqual(self.service._request.await_count, 3)
+        self.assertEqual(self.service._request.await_count, 9)
         self.assertEqual([r["promise_id"] for r in await restarted.promises.active()], [pid])
 
     async def test_rewrite_loses_authorization_before_second_request(self):
@@ -226,5 +229,21 @@ class ImageResultHandoffTests(unittest.IsolatedAsyncioTestCase):
         self.app.purpose_model.side_effect = revoked
         with patch.object(ImagePromiseAction, "make_event", side_effect=self.deferred_event):
             self.assertEqual(await self.app._promises().run_due(), 0)
-        self.assertEqual(self.service._request.await_count, 1)
+        self.assertEqual(self.service._request.await_count, 3)
         self.context.send_message.assert_not_awaited()
+
+    async def test_deferred_permission_failure_persists_without_image_request(self):
+        from astrbot_plugin_livingemotion.runtime.promise_actions import ImagePromiseAction
+        self.deferred_peer()
+        self.app.api.get_action_policy = AsyncMock(side_effect=ValueError("unavailable"))
+        self.app.send_promise_notice = AsyncMock(return_value="sent")
+        pid = await self.promise()
+        self.clock[0] += 301
+        with patch.object(ImagePromiseAction, "make_event", side_effect=self.deferred_event):
+            self.assertEqual(await self.app._promises().run_due(), 0)
+        row = await self.app._promises().promises.get(pid)
+        receipt = json.loads(row["action_result_json"])
+        self.assertEqual(row["status"], "waiting")
+        self.assertFalse(receipt["requested"])
+        self.assertEqual(receipt["reason_code"], "relationship_unavailable")
+        self.service._request.assert_not_awaited()

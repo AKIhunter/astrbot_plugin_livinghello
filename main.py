@@ -532,24 +532,39 @@ class Main(Star):
             # 静默分支留痕（issue #9）：每个 early-return 打一条 WARN，
             # 避免排查时只能靠探针 + 重启定位（2026-11-21 实测 40 分钟盲查）。
             self.logger.warning(
-                "[LH-img] deferred 提前返回：%s prompt=%d字 blocked=%s",
-                reason, len(prompt or ""), self._image_generation().blocked(event))
+                "[LH-img] deferred request=%s reason=%s",
+                str(getattr(getattr(event, "message_obj", None), "message_id", "-"))[:128],
+                reason)
         if not self.get_deferred_image_contract()["available"]:
             _why("contract_unavailable")
             return {"status": "unavailable"}
         service = self._image_generation()
         # 定时动作直接执行，不能再次进入普通回复的准备/after-sent 流程。
+        # 同一事件复用时不能把上一尝试的失败原因当作本次权限拒绝。
+        event.set_extra("_livinghello_image_failure", None)
+        event.set_extra("_livinghello_deferred_preflight", None)
         await service.generate(event, prompt, use_reference=False, _execute=True)
         pending = event.get_extra("_livinghello_pending_image")
         event.set_extra("_livinghello_pending_image", None)
         if not isinstance(pending, dict) or not pending.get("path"):
             failure = event.get_extra("_livinghello_image_failure")
-            if isinstance(failure, dict) and failure.get("kind") not in {"result_unknown", "delivery_unknown"}:
-                _why("structured_failure kind=%s" % failure.get("kind"))
-                return {"status": "failed", "failure": failure}
+            if isinstance(failure, dict):
+                _why(failure.get("reason_code") or failure.get("kind"))
+                return {"status": "unknown" if failure.get("kind") in {
+                    "result_unknown", "delivery_unknown"} else "failed", "failure": failure}
+            preflight = event.get_extra("_livinghello_deferred_preflight")
+            if (isinstance(preflight, dict) and preflight.get("requested") is False
+                    and preflight.get("reason_code") != "duplicate_image_call"):
+                reason = preflight.get("reason_code") or "preflight_failed"
+                _why(reason)
+                return {"status": "failed", "failure": {
+                    "kind": "provider_error", "reason": "这次未能开始生图，我先保留需求。",
+                    "reason_code": reason, "requested": False, "request_id": "",
+                    "prompt": prompt, "use_reference": False}}
             # generate 内部可能已经发起收费请求，不能从返回文案推断可重试。
-            _why("no_pending_image (permission_denied / reserve_skipped / blocked / 参数无效)")
-            return {"status": "unknown"}
+            reason = (preflight or {}).get("reason_code") or "pending_image_missing"
+            _why(reason)
+            return {"status": "unknown", "reason": reason}
         artifact = {"status": "generated", **pending,
                     "session": str(event.unified_msg_origin),
                     "delivery_contract": "livinghello.deferred-image-delivery.v1"}

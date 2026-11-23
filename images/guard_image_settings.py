@@ -65,9 +65,9 @@ FIELDS = {
     "follow_server_time": ("跟随服务器时间", "bool", "开启后每次生图自动把服务器当前时间（年月日、星期、时分）注入描述，让画面跟随现实昼夜、季节和节日；关闭则完全不附加。"),
     "prompt_guard_enabled": ("启用提示词映射", "bool", "开启后发送前应用等义替换、长度规则与成功用词；关闭则沿用原描述。开启后在本页设置映射表路径，修改JSON即可热生效。姿势、场景变化需用户确认。"),
     "prompt_guard_rules_path": ("提示词映射表路径", "string", "在插件数据目录放置image_prompt_rules.json；相对路径从该目录解析，也支持绝对路径。缺失使用内置规则，写坏保留有效规则。支持词语、简单正则、去重补充及调整提醒。"),
-    "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "本页→AI生图设置0~10次，默认2；需在LE开启承诺兑现，实际取此值与LE剩余自动重试次数的较小值。0关闭自动调整，用尽后等待用户。仅对明确内容拒绝或超长描述调整等义用词，每次实际生图仍计每日额度。内容拒绝会先按原句自动重发2次（审核约25%是随机拒绝，被拒不扣费），仍拒才进入改词；超时、未知结果不补发。"),
+    "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "本页→AI生图设置0~10次，默认2；需在LE开启承诺兑现，实际取此值与LE剩余自动重试次数的较小值。0关闭自动调整，用尽后等待用户。仅对明确内容拒绝或超长描述调整等义用词。内容拒绝先按原句最多重试2次，仍拒才进入改词；LE承诺的未知结果不自动重发。任务占本地每日额度，上游收费以实际账单为准。"),
     "prompt_guard_learn_enabled": ("记录并复用成功用词", "bool", "开启后按实际生图连接、模型及协议记录成功请求中使用的局部替换，后续自动复用；关闭停止记录与复用，保留已有数据。需开启提示词映射，记录保存在插件数据目录image_prompt_mappings.sqlite3。"),
-    "timeout_seconds": ("生图超时（秒）", "int", "10~500秒；单次请求超时、限流、5xx或网络断开时，会在同一任务内按原描述本地重试，最多3次，成功才向上游计费。原自主回复时效仍生效。"),
+    "timeout_seconds": ("生图超时（秒）", "int", "10~500秒；普通任务失败时按原描述最多请求3次。LE承诺图片遇到超时、5xx或网络断开等未知结果时停止内部重试，等待核对。超时不表示上游未生成或未收费；原自主回复时效仍生效。"),
 }
 DEFAULTS = dict(enabled=False, provider_id="", model="", protocol="images",
                 daily_limit=20, size="1024x1024",
@@ -953,7 +953,12 @@ class ImageSettings:
         if service and not event.get_extra("_livinghello_tool_spans"):
             service.increment(event, "tool_calls")
         emit(event, "image_api", "skipped", calls=0, reason="preflight")
+        request_id = None
+        # 给延迟生图门面结构化回执；不从返回给模型的文案推测是否已收费。
+        event.set_extra("_livinghello_deferred_preflight", None)
         def outcome(status, reason):
+            event.set_extra("_livinghello_deferred_preflight",
+                            dict(status=status, reason_code=reason, requested=False))
             emit(event, "image_preflight", status, reason=reason)
             if service:
                 service.end(event, span, status, reason=reason)
@@ -975,7 +980,6 @@ class ImageSettings:
         event.set_extra("_livinghello_image_failure", None)
         event.set_extra("_livinghello_prompt_guard", None)
         values = copy.deepcopy(self.values)
-        request_id = None
         task = asyncio.current_task()
         self._tasks.add(task)
         token = IMAGE_EVENT.set(event)
@@ -1109,6 +1113,8 @@ class ImageSettings:
                 emit(event, "prompt_guard", "review", before=len(prompt.strip()), reason=kind)
             failure = self._image_failure(event, dict(prompt=prompt.strip(), use_reference=use_reference),
                                           kind, request_id)
+            failure.update(exception_type=type(exc).__name__, reason_code=terminal_reason,
+                           requested=bool(request_id))
             await self.finish_image(event, failure, "unknown" if kind in {
                 "result_unknown", "delivery_unknown"} else "failed")
             charged = "本次已请求，仍计额度。" if request_id else "本次未请求生图，不计额度。"
@@ -1116,6 +1122,10 @@ class ImageSettings:
             tried = f"已按原描述在本地重试{local_retries}次，仍未成功。" if local_retries else ""
             return f"生图未完成：{reason}{charged}{tried}不要在本轮自动重试。"
         finally:
+            if terminal_status != "success":
+                event.set_extra("_livinghello_deferred_preflight", dict(
+                    status=terminal_status, reason_code=terminal_reason,
+                    requested=bool(request_id)))
             if service:
                 service.end(event, span, terminal_status, reason=terminal_reason)
             IMAGE_EVENT.reset(token)
@@ -1285,6 +1295,11 @@ class ImageSettings:
             except Exception as exc:
                 event = IMAGE_EVENT.get()
                 reason = getattr(exc, "kind", None) or type(exc).__name__
+                # LE 的延迟图片有持久执行阶段：未知结果不能在内部再发收费请求。
+                if (event and event.get_extra("livingemotion:promise_id")
+                        and describe_failure(exc, requested=True)[0] in {
+                            "result_unknown", "delivery_unknown"}):
+                    raise
                 if reason == "content_rejected":
                     if content_retried < CONTENT_RETRY_ATTEMPTS and attempt < total_attempts:
                         content_retried += 1
