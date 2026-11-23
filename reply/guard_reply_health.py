@@ -11,9 +11,6 @@ import time
 import uuid
 from pathlib import Path
 
-from astrbot.api.event import MessageChain
-from astrbot.api.message_components import At, Plain, Reply
-
 try:
     from ..integrations.guard_tool_result import failed as tool_result_failed
 except ImportError:  # 兼容独立离线入口
@@ -268,6 +265,8 @@ def send_accepted(value):
 
 
 def substantive(chain):
+    # DSH reuses pure error classification without importing AstrBot at load time.
+    from astrbot.api.message_components import At, Plain, Reply
     return any(not isinstance(c, (At, Reply))
                and (not isinstance(c, Plain) or c.text.strip()) for c in chain or [])
 
@@ -471,6 +470,7 @@ class ReplyHealth:
 
     async def suppress_native_error(self, event, message, *, native_exception=None):
         """同时覆盖宿主直发和结果发送；只认异常类型/宿主异常上下文。"""
+        from astrbot.api.message_components import Plain
         row = event.get_extra(KEY)
         if not row or not event.get_group_id():
             return False
@@ -833,6 +833,8 @@ class ReplyHealth:
             text += "\n可在“最近判断”搜索请求编号查看详情。"
         routes = [f"{platform_id}:FriendMessage:{admin}" for admin in admins]
         count = 0
+        from astrbot.api.event import MessageChain
+        from astrbot.api.message_components import Plain
         for route in routes:
             # 私聊管理员，纯文本通知，不带原群引用或群内 @。
             chain = MessageChain()

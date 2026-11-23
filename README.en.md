@@ -6,6 +6,8 @@
 
 [简体中文](README.md) · **English**
 
+Basic DSH prerelease: `dsh/v0.1.0-alpha.1`. See the [DSH compatibility guide](docs/DSH.md) for the separate package and limited scope. The following describes AstrBot.
+
 Understand the topic before joining a conversation. LivingHello combines local rules,
 text and visual participation decisions, then delegates replies to AstrBot's native model and persona.
 It supports message fragments, image evidence, reply segments, quoting, TTS and separate image generation.

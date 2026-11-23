@@ -7,6 +7,8 @@
 
 **简体中文** · [English](README.en.md)
 
+DSH 基础适配预发布：`dsh/v0.1.0-alpha.1`，安装与能力边界见 [DSH 说明](docs/DSH.md)。下文仍介绍 AstrBot 版本。
+
 让机器人先理解话题，在合适的时候接话。LivingHello先判断参与是否合适，
 再交给AstrBot主模型和人格回复；支持连续消息合并、图片理解、分段、引用、语音和独立生图。
 开发者：[AKIhunter](https://github.com/AKIhunter)；反馈QQ群：991350637。

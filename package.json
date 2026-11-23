@@ -1,0 +1,22 @@
+{
+  "name": "@akihunter/dsh-livinghello",
+  "version": "0.1.0-alpha.1",
+  "description": "Basic LivingHello admission for DSH using the original Python GateEngine",
+  "type": "module",
+  "main": "dsh/index.mjs",
+  "exports": "./dsh/index.mjs",
+  "engines": { "node": ">=22.19" },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-scope": "0.2.1-rc.2",
+    "@deepseek-ai/schemastery": "3.18.5"
+  },
+  "files": ["dsh", "cordis.patch.yml", "gate/__init__.py", "gate/guard_engine.py", "gate/guard_gate_parser.py", "gate/guard_classifier_outage.py", "reply/guard_reply_health.py", "reply/__init__.py", "images/guard_vision_choice.py", "images/__init__.py", "integrations/guard_livingemotion.py", "integrations/guard_coupling.py", "integrations/guard_tool_result.py", "integrations/__init__.py", "docs/DSH.md", "tests/dsh"],
+  "scripts": { "test": "node --test tests/dsh/*.test.mjs" },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "compatibility": { "dsh": "0.2.1-rc.2", "dshReleases": { "0.2.1-rc.2": "compatible" }, "profiles": ["web"] }
+  }
+}
