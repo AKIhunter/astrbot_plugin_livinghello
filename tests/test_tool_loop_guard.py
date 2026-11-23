@@ -63,13 +63,19 @@ class ToolLoopGuardTests(unittest.IsolatedAsyncioTestCase):
             tool=tool or self.tool, run_context=self.context, **args)]
 
     async def test_identical_call_runs_once_and_reuses_result(self):
-        original = OriginalExecutor([outcome("first")])
+        result = mcp.types.CallToolResult(
+            content=[mcp.types.TextContent(type="text", text="first")],
+            structuredContent={"ok": True}, _meta={"source": "fixed"})
+        original = OriginalExecutor([result])
         executor = GuardedToolExecutor(original, self.plugin)
         first = await self.collect(executor, query="今天天气")
         second = await self.collect(executor, query="今天天气")
         self.assertEqual(original.calls, 1)
         self.assertEqual(text_of(first), "first")
         self.assertIn("duplicate suppressed", text_of(second))
+        # 追加提示不能丢掉上游结构化回执和元数据，也不能修改首次结果。
+        self.assertEqual(second[-1].model_dump(by_alias=True)["structuredContent"], {"ok": True})
+        self.assertEqual(second[-1].model_dump(by_alias=True)["_meta"], {"source": "fixed"})
 
     async def test_side_effect_tool_deduplicates_but_never_retries(self):
         original = OriginalExecutor([outcome("sent"), outcome("sent-again")])
@@ -123,6 +129,7 @@ class ToolLoopGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(original.calls, 1)
         self.assertTrue(first[-1].model_dump(by_alias=True)["isError"])
         self.assertTrue(second[-1].model_dump(by_alias=True)["isError"])
+        self.assertEqual(text_of(first), "upstream unavailable")
         self.assertIn("已经执行过并失败", text_of(second))
 
     async def fast_sleep(self, _seconds):

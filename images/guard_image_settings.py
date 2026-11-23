@@ -47,11 +47,11 @@ STYLE_MAX_CHARS = 1000
 # 同一张已生成的图最多投递两次；重试不重新请求上游，也不重复计额度。
 DELIVERY_ATTEMPTS = 2
 DELIVERY_RETRY_SECONDS = 1.0
-# 上游按成功出图计费，失败不计费；同一任务内可本地按原描述重试。
+# 同一任务内按原描述有限重试；本地额度不等同于上游HTTP计费。
 IMAGE_REQUEST_ATTEMPTS = 3
 IMAGE_RETRY_BASE_SECONDS = 1.5
-# 内容审核拒绝后，原句额外重发次数（2026-11-23 实测约 25% 是随机拒绝）。
-# 原句重发不调模型、不受模型超时影响，比改词链可靠；被拒请求上游不计费。
+# 内容审核拒绝后原句额外重发次数；不推定上游拒绝概率或收费规则。
+# 原句重发不调用改词模型；额度、取消与总请求预算仍由现有链路限制。
 CONTENT_RETRY_ATTEMPTS = 2
 IMAGE_EVENT = ContextVar("livinghello_image_event", default=None)
 FIELDS = {
@@ -65,9 +65,9 @@ FIELDS = {
     "follow_server_time": ("跟随服务器时间", "bool", "开启后每次生图自动把服务器当前时间（年月日、星期、时分）注入描述，让画面跟随现实昼夜、季节和节日；关闭则完全不附加。"),
     "prompt_guard_enabled": ("启用提示词映射", "bool", "开启后发送前应用等义替换、长度规则与成功用词；关闭则沿用原描述。开启后在本页设置映射表路径，修改JSON即可热生效。姿势、场景变化需用户确认。"),
     "prompt_guard_rules_path": ("提示词映射表路径", "string", "在插件数据目录放置image_prompt_rules.json；相对路径从该目录解析，也支持绝对路径。缺失使用内置规则，写坏保留有效规则。支持词语、简单正则、去重补充及调整提醒。"),
-    "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "本页→AI生图设置0~10次，默认2；需在LE开启承诺兑现，实际取此值与LE剩余自动重试次数的较小值。0关闭自动调整，用尽后等待用户。仅对明确内容拒绝或超长描述调整等义用词。内容拒绝先按原句最多重试2次，仍拒才进入改词；LE承诺的未知结果不自动重发。任务占本地每日额度，上游收费以实际账单为准。"),
+    "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "本页→AI生图设置0~10次，默认2；需在LE开启承诺兑现，实际取此值与LE剩余自动调整次数的较小值。0关闭自动改词，用尽后等待用户。仅对明确内容拒绝或超长描述调整等义用词。工具内部先按原句有限重试：内容拒绝最多追加2次，仍拒才进入改词；普通任务网络类最多追加2次，混合失败总请求最多5次。LE承诺的未知结果不自动重发。本地任务占一次每日额度，上游计费以实际账单为准。"),
     "prompt_guard_learn_enabled": ("记录并复用成功用词", "bool", "开启后按实际生图连接、模型及协议记录成功请求中使用的局部替换，后续自动复用；关闭停止记录与复用，保留已有数据。需开启提示词映射，记录保存在插件数据目录image_prompt_mappings.sqlite3。"),
-    "timeout_seconds": ("生图超时（秒）", "int", "10~500秒；普通任务失败时按原描述最多请求3次。LE承诺图片遇到超时、5xx或网络断开等未知结果时停止内部重试，等待核对。超时不表示上游未生成或未收费；原自主回复时效仍生效。"),
+    "timeout_seconds": ("生图超时（秒）", "int", "10~500秒；普通任务超时、限流、5xx或网络断开时，按原描述最多追加2次请求；混合内容拒绝时总请求最多5次。LE承诺图片遇到超时、5xx或网络断开等未知结果时停止内部重试，等待核对。每个任务预占一次本地额度，超时不表示上游未生成或未收费；原自主回复时效仍生效。"),
 }
 DEFAULTS = dict(enabled=False, provider_id="", model="", protocol="images",
                 daily_limit=20, size="1024x1024",
@@ -998,7 +998,10 @@ class ImageSettings:
                 guarded["styled_prompt"] = self.prompt_body(values, guarded)
                 event.set_extra("_livinghello_prompt_guard", guarded)
                 emit(event, "prompt_guard", "success", before=len(prompt.strip()),
-                     after=len(guarded["prompt"]), types=guarded["hits"], model=connection[2])
+                     after=len(guarded["prompt"]), types=guarded["hits"], model=connection[2],
+                     desc_len=len(guarded["prompt"]), style_len=guarded["style_len"],
+                     time_len=guarded["time_len"],
+                     total_len=len(guarded["styled_prompt"]))
                 pid = event.get_extra("_livinghello_requested_promise")
                 if pid:
                     binding = dict(promise_id=pid, prompt=prompt.strip(),
@@ -1233,11 +1236,10 @@ class ImageSettings:
 
     @staticmethod
     def _retryable_image_error(exc):
-        """只有「确定没有出图」的失败才重试；内容拒绝和未知结果不重试。
+        """沿用当前有限重试策略；带错误码/类型的错误体与无信息的未知结果区分。
 
-        例外：HTTP 200 包明确错误体（code/type 有值）的 result_unknown——
-        上游已声明本次没有产出，重试无重复扣费风险（2026-11-22 f5e507fb：
-        同 prompt 立即复测 200，正是该重试的场景）。"""
+        可重试不代表上游免计费；计费与请求幂等性由实际连接决定。
+        内容拒绝由外层单独使用原句重发预算。"""
         if isinstance(exc, asyncio.CancelledError):
             return False
         kind = getattr(exc, "kind", None)
@@ -1262,19 +1264,11 @@ class ImageSettings:
             "ClientOSError", "ClientPayloadError"))
 
     async def _request_with_retry(self, values, connection, prompt, reference):
-        """同一请求号内按原描述重试；失败不计费，成功即返回。
+        """同一任务内按原描述有限重试，成功即返回，耗尽后交接。
 
-        上游按成功出图计费，超时、限流、5xx 和网络断开都还没有拿到成功响应，
-        因此可以安全地重试。
-
-        内容审核拒绝也在这里先按原描述重试（2026-11-23 实测）：
-        同一个 prompt 连发 4 次会出现 3 过 1 拒，说明审核有约 25% 的随机拒绝；
-        而被拒请求上游不计费。原句重发既不需要调模型、也不受模型超时影响，
-        比走改词链更可靠——改词依赖 LLM，LLM 一超时整条重试链就静默断掉。
-        原句重试用尽后再交给提示词调整流程。
-
-        未知结果（result_unknown）可能已经出图，不在这里自动重发。
-        """
+        网络类最多追加两次，内容拒绝最多追加两次，混合失败总请求最多五次。
+        本地任务只预占一次额度；这不代表实际 HTTP 请求只计费一次。
+        无错误码/类型且无法确认结果的响应不自动重发。"""
         delay = IMAGE_RETRY_BASE_SECONDS
         retried = 0          # 可重试错误（超时/5xx/网络）的次数
         content_retried = 0  # 内容审核拒绝后原句重发的次数
@@ -1425,7 +1419,11 @@ class ImageSettings:
             raise PromptReviewError("prompt_too_long", "描述和时间信息过长，需要缩短画面描述。")
         # 总长只裁全局风格，永远不静默截断用户画面描述。
         style = values.get("style_prompt", "")[:max(0, limit - len(timed) - 1)]
-        return self.styled_prompt(timed, style)
+        body = self.styled_prompt(timed, style)
+        # 长度口径取实际发送文本，包含截断后的风格与时间，而非配置原长。
+        guarded["time_len"] = len(timed) - len(guarded["prompt"])
+        guarded["style_len"] = max(0, len(body) - len(timed) - 1)
+        return body
 
     @staticmethod
     def revised(payload):

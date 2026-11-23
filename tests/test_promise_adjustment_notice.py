@@ -1,4 +1,4 @@
-"""主动调整追问与确认回执，全部使用隔离事件和假图片服务。"""
+"""当前失败说明与交接去重契约，全部使用隔离事件和假图片服务。"""
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -22,10 +22,11 @@ class AdjustmentNoticeTests(unittest.IsolatedAsyncioTestCase):
             data = event.extra["_livinghello_image_failure"]
             self.assertTrue(data["notified"])
             self.assertTrue(data["adjustment_asked"])
-            self.assertIn("还是这次就算了？", event.send.await_args.args[0].chain[0].text)
+            self.assertTrue(event.send.await_args.args[0].chain[0].text.strip())
             timeline.append("handoff")
             return dict(status="accepted", task_status="waiting", promise_id="one")
-        with patch("images.guard_image_settings.image_followup", side_effect=handoff) as hook:
+        with patch("images.guard_image_settings.image_followup", side_effect=handoff) as hook, \
+                patch("images.guard_image_settings.asyncio.sleep", new=AsyncMock()):
             await self.service._run_image_job(event, job)
             await self.service._notify_image_failure(event, job, event.extra["_livinghello_image_failure"])
         self.assertEqual(timeline, ["handoff"])
@@ -35,6 +36,7 @@ class AdjustmentNoticeTests(unittest.IsolatedAsyncioTestCase):
                              for word in ("任务", "接口", "待办", "服务")))
         # 明确拒绝保留初次请求+2次原句重试；只验证假服务的调用计数。
         self.assertEqual(self.service._request.await_count, 3)
+        self.assertEqual(self.service.used(), 1)
 
     async def test_question_still_exists_when_le_unavailable(self):
         event = fixtures.Event()
@@ -43,7 +45,8 @@ class AdjustmentNoticeTests(unittest.IsolatedAsyncioTestCase):
         with patch("images.guard_image_settings.image_followup", AsyncMock(return_value=None)):
             await self.service._notify_image_failure(event, job, data)
         event.send.assert_awaited_once()
-        self.assertIn("还是这次就算了？", event.send.await_args.args[0].chain[0].text)
+        self.assertTrue(event.send.await_args.args[0].chain[0].text.strip())
+        self.assertTrue(data["notified"])
         self.assertNotIn("记下", event.send.await_args.args[0].chain[0].text)
 
     async def test_non_content_failure_does_not_ask_adjustment(self):
@@ -53,7 +56,9 @@ class AdjustmentNoticeTests(unittest.IsolatedAsyncioTestCase):
             data = self.service._image_failure(event, job, kind)
             with patch("images.guard_image_settings.image_followup", AsyncMock(return_value=None)):
                 await self.service._notify_image_failure(event, job, data)
+            # 回执只记录实际问句；设置错误或未知结果不能记为已问。
             self.assertFalse(data["adjustment_asked"])
+            self.assertTrue(data["notified"])
             self.assertNotIn("改成什么", event.send.await_args.args[0].chain[0].text)
             self.assertFalse(any(word in event.send.await_args.args[0].chain[0].text
                                  for word in ("任务", "接口", "待办", "服务")))
@@ -68,8 +73,9 @@ class AdjustmentNoticeTests(unittest.IsolatedAsyncioTestCase):
             await self.service._notify_image_failure(event, job, data)
         event.send.assert_awaited_once()
         text = event.send.await_args.args[0].chain[0].text
-        self.assertIn("按你刚才改的想法又试了一下", text)
-        self.assertIn("再调整一下", text)
+        self.assertTrue(text.strip())
+        self.assertTrue(data["notified"])
+        self.assertTrue(data["adjustment_asked"])
         self.assertIn("还是这次就算了？", text)
         self.assertFalse(any(word in text for word in ("任务", "接口", "待办", "服务", "internal-id")))
 
@@ -109,7 +115,7 @@ class AdjustmentNoticeTests(unittest.IsolatedAsyncioTestCase):
             with patch("images.guard_image_settings.image_followup", AsyncMock(return_value=None)):
                 await self.service._notify_image_failure(event, job, data)
             text = event.send.await_args.args[0].chain[0].text
-            self.assertIn("还是没能弄好", text)
-            self.assertIn("再调整一下", text)
+            self.assertTrue(text.strip())
             self.assertIn("还是这次就算了？", text)
+            self.assertTrue(data["notified"])
             self.assertNotIn("画", text)

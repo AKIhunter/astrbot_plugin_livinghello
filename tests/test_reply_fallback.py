@@ -607,7 +607,8 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
         event.trace = SimpleNamespace()
         event.cleanup_temporary_local_files = lambda: None
         runner = native()
-        outputs = [TimeoutError()] * 6 + [response()]
+        # 未配置回退模型时，LH默认只追加一次；原生SDK的5次预算会被还原。
+        outputs = [TimeoutError(), response()]
         calls = []
         async def chat(**payload):
             calls.append(payload)
@@ -656,8 +657,8 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
                    response(kw["completion_text"], role=kw["role"])):
             await asyncio.create_task(scheduler.execute(event))
         await asyncio.sleep(0)
-        self.assertEqual(len(calls), 7)
+        self.assertEqual(len(calls), 2)
         self.assertTrue(all(payload["request_max_retries"] == 1 for payload in calls))
         self.assertEqual(len(event.sent), 1)
-        self.assertEqual(self.guard.context.send_message.await_count, 1)
+        self.assertEqual(self.guard.context.send_message.await_count, 0)
         self.assertNotIn("_iter_llm_responses_with_fallback", vars(runner))

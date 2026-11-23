@@ -518,7 +518,8 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
                         {"path":str(self.output),"request_id":request_id})
         event.send.side_effect=[OSError("offline-once"),None]
         self.service.generate=AsyncMock(return_value="图片已生成。")
-        with patch("images.guard_image_settings.asyncio.sleep",new=AsyncMock()):
+        with patch("images.guard_image_settings.asyncio.sleep",new=AsyncMock()), \
+                patch("images.guard_image_settings.random.choice", side_effect=lambda items: items[0]):
             await self.service._run_image_job(event,job)
         self.assertEqual(event.send.await_count,2)
         self.assertIsInstance(event.send.await_args_list[0].args[0].chain[0], Image)
@@ -542,8 +543,9 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.send.await_count,3)
         self.assertEqual(job["status"],"unknown")
         apology=event.send.await_args_list[-1].args[0]
-        self.assertTrue(apology.chain[0].text)
-        self.assertNotIn("接口", apology.chain[0].text)
+        self.assertIsInstance(apology.chain[0], Plain)
+        self.assertTrue(apology.chain[0].text.strip())
+        self.assertFalse(any(word in apology.chain[0].text for word in ("任务", "接口", "待办", "服务")))
         with self.service._connect() as db:
             self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0],"unknown")
 

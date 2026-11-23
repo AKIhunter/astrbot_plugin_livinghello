@@ -93,7 +93,7 @@ TABLE_ERRORS = {
     "limits": "长度限制格式或范围不正确",
     "blocklist": "阻断词列表格式不正确",
     "rule": "规则ID、类型或唯一性不正确",
-    "token": "来源词必须是1～100字的字符串",
+    "token": "来源词须为1～100字的字符串，或1～20个不重复的来源词",
     "regex_unsafe": "正则不支持分组、反向引用或复杂重复",
     "regex_invalid": "正则语法不正确",
     "replacement": "替换内容必须是1～200字的字符串",
@@ -114,6 +114,13 @@ def token_pattern(text):
     left = r"(?<!\w)" if text and text[0].isascii() and text[0].isalnum() else ""
     right = r"(?!\w)" if text and text[-1].isascii() and text[-1].isalnum() else ""
     return re.compile(left + re.escape(text) + right, re.I)
+
+
+def rule_token_pattern(source):
+    """数组中的每个来源都按字面词边界匹配，长词优先，不开放复杂正则。"""
+    sources = source if isinstance(source, list) else [source]
+    return re.compile("|".join(token_pattern(s).pattern
+                               for s in sorted(sources, key=len, reverse=True)), re.I)
 
 
 def simple_pattern(text):
@@ -235,7 +242,11 @@ class ImagePromptMapping:
             kind = rule["type"]
             source = rule.get("from") if kind == "token" else rule.get("pattern")
             if kind == "token":
-                if not isinstance(source, str) or not 1 <= len(source) <= 100:
+                sources = source if isinstance(source, list) else [source]
+                if (not 1 <= len(sources) <= 20
+                        or any(not isinstance(s, str) or not 1 <= len(s) <= 100
+                               or not s.strip() for s in sources)
+                        or len({s.casefold() for s in sources}) != len(sources)):
                     raise TableValidationError("token", index)
             else:
                 try:
@@ -341,7 +352,7 @@ class ImagePromptMapping:
             condition = rule.get("when")
             if condition and not re.search(condition, prompt, re.I):
                 continue
-            pattern = token_pattern(rule["from"]) if kind == "token" else simple_pattern(rule["pattern"])
+            pattern = rule_token_pattern(rule["from"]) if kind == "token" else simple_pattern(rule["pattern"])
             found = pattern.search(prompt)
             if (kind == "advisory" or rule.get("requires_confirmation")) and found:
                 raise PromptReviewError("prompt_adjustment_required", rule["notice"])

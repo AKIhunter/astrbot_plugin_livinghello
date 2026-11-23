@@ -38,7 +38,9 @@ def install_framework_stubs():
     star.Context = star.Star = object
     star.StarTools = types.SimpleNamespace(get_data_dir=lambda *_: None)
     provider = mod("astrbot.api.provider")
-    provider.LLMResponse = provider.ProviderRequest = object
+    # 错误收尾会构造 LLMResponse；替身也须接受宿主的字段。
+    provider.LLMResponse = types.SimpleNamespace
+    provider.ProviderRequest = object
     components = mod("astrbot.api.message_components")
 
     class Plain:
@@ -67,7 +69,8 @@ def install_framework_stubs():
             self.message_str, self.text, self.chain, self.time = message_str, text, chain or [], time
     components.Plain, components.At, components.Image, components.Reply = Plain, At, Image, Reply
     components.Record = Record
-    mod("astrbot.core")
+    core = mod("astrbot.core")
+    core.logger = api.logger
     mod("astrbot.core.agent")
     message = mod("astrbot.core.agent.message")
     class TextPart:

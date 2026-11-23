@@ -243,6 +243,14 @@ if __name__ == "__main__":
     if args.write:
         path = ROOT / "docs/configuration.md"
         text = path.read_text(encoding="utf-8")
+        schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+        defaults = ["| 字段 | 默认值 | 说明 |", "| --- | --- | --- |"]
+        defaults += [f"| `{key}` | `{json.dumps(item['default'], ensure_ascii=False)}` | "
+                     f"{item['description']} |" for key, item in schema.items()]
+        pattern = r"(<!-- schema-defaults:start -->\n).*?(<!-- schema-defaults:end -->)"
+        assert re.search(pattern, text, re.S), "Missing schema-defaults markers"
+        text = re.sub(pattern, lambda m: m[1] + "\n" + "\n".join(defaults)
+                      + "\n\n" + m[2], text, flags=re.S)
         pattern = r"(<!-- field-usage:start -->\n).*?(<!-- field-usage:end -->)"
         assert re.search(pattern, text, re.S), "Missing field-usage markers"
         path.write_text(re.sub(pattern, lambda m: m[1] + configuration_guide(ROOT)

@@ -43,6 +43,33 @@ class MappingTests(unittest.TestCase):
     def test_tokens_have_word_boundaries_and_ignore_case(self):
         self.assertEqual(self.apply("NECKLINE necklineish")["prompt"], "collar necklineish")
 
+    def test_token_array_is_literal_longest_first_and_does_not_cascade(self):
+        self.table([
+            {"id": "aliases", "type": "token", "from": ["cat", "orange cat", "c.t"], "to": "kitty"},
+            {"id": "next", "type": "token", "from": "kitty", "to": "feline"},
+        ])
+        self.assertEqual(self.apply("ORANGE CAT catfish c.t kitty")["prompt"],
+                         "kitty catfish kitty feline")
+        self.assertEqual(self.mapping.rules(self.values)["rules"][0]["from"],
+                         ["cat", "orange cat", "c.t"])
+
+    def test_token_array_condition_and_scene_check(self):
+        self.table([{"id": "shirt", "type": "token", "from": ["blouse", "top"],
+                     "to": "shirt", "when": "garden"}])
+        self.assertEqual(self.apply("blue blouse")["prompt"], "blue blouse")
+        self.assertEqual(self.apply("blue blouse in garden")["prompt"], "blue shirt in garden")
+        self.table([{"id": "pose", "type": "token", "from": ["standing", "kneeling"],
+                     "to": "sitting"}])
+        with self.assertRaises(PromptReviewError):
+            self.apply("standing cat")
+
+    def test_invalid_token_arrays_fail_whole_table(self):
+        for source in ([], ["cat", None], ["cat", "CAT"], [" "], ["cat"] * 21,
+                       {"cat": "kitty"}, ["x" * 101]):
+            with self.subTest(source=source), self.assertRaises(ValueError):
+                ImagePromptMapping.validate_table({"version": 1, "rules": [
+                    {"id": "bad", "type": "token", "from": source, "to": "kitty"}]})
+
     def test_regex_keeps_next_clause(self):
         self.table([{"id": "short", "type": "regex", "pattern": r"extra detail[^,.;\n]*", "to": "detail"}])
         self.assertEqual(self.apply("extra detail many words, garden; cat")["prompt"], "detail, garden; cat")
@@ -314,6 +341,19 @@ class MappingGenerationTests(unittest.IsolatedAsyncioTestCase):
         guarded = event.get_extra("_livinghello_prompt_guard")
         self.assertEqual(len(guarded["styled_prompt"]), 900)
         self.assertTrue(guarded["styled_prompt"].startswith("猫" * 500 + "\n"))
+
+    async def test_trace_lengths_use_actual_style_after_truncation(self):
+        self.service.values["style_prompt"] = "风" * 1000
+        event = Event()
+        with patch("images.guard_image_settings.emit") as trace:
+            await self.service.generate(event, "猫" * 500, _execute=True)
+        entries = [c.kwargs for c in trace.call_args_list
+                   if len(c.args) > 1 and c.args[1] == "prompt_guard"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual({k: entries[0][k] for k in ("desc_len", "style_len", "time_len", "total_len")},
+                         {"desc_len": 500, "style_len": 399, "time_len": 0, "total_len": 900})
+        self.assertNotIn("prompt", entries[0])
+        self.assertEqual(self.service.used(), 1)
 
     async def test_time_overhead_reduces_shortening_budget_before_quota(self):
         self.service.values["follow_server_time"] = True

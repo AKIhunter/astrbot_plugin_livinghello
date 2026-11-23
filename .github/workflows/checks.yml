@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ASTRBOT_NATIVE_SOURCE: ${{ github.workspace }}/.native-host/astrbot
+      ASTRBOT_HOST_SOURCE: ${{ github.workspace }}/.native-host
       PYTHONPATH: ${{ github.workspace }}/.native-peer
     steps:
       - uses: actions/checkout@v4

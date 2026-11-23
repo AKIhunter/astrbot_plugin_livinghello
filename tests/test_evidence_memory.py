@@ -50,6 +50,11 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(self.req.extra_user_content_parts, [])
         self.assertEqual(len(self.cache.rows), 0)
 
+    def test_real_mcp_failure_text_never_becomes_evidence(self):
+        from mcp.types import CallToolResult, TextContent
+        self.remember(CallToolResult(content=[TextContent(type="text", text="官方文字")], isError=True))
+        self.assertEqual(len(self.cache.rows), 0)
+
     def test_scope_persona_sender_provider_tool_and_topic_must_match(self):
         self.remember()
         for event in (Event(origin="qq:group:1"), Event(sender="2"), Event(persona="other")):

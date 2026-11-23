@@ -2,7 +2,7 @@
 
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
-[![Version](https://img.shields.io/badge/version-2.9.6-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.7-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -61,5 +61,5 @@ Private image prompts, mapping files and learned data remain local.
 Classifier, vision, TTS and image requests can incur provider charges.
 Developer: [AKIhunter](https://github.com/AKIhunter). Feedback QQ group: 991350637.
 
-Version **2.9.6** preserves permission, preflight and upstream failure diagnostics for LE. Deferred promise images stop internal retries when the upstream result is unknown, avoiding duplicate charges. Pair with LE 0.7.1; see the [changelog](CHANGELOG.md).
+Version **2.9.7** adds literal source arrays for image prompt mappings and traces the actual prompt lengths, aligns preset and configuration guidance, and fixes offline CI. It preserves LE 0.7.1 failure receipts and stops deferred promise retries when the upstream result is unknown. See the [mapping guide](docs/image-prompt-mapping.md) and [failure handoff](docs/image-failure-followup.md).
 See the [fallback guide](docs/reply_fallback.md) and [changelog](CHANGELOG.md).

@@ -130,9 +130,9 @@ class PromptTests(unittest.IsolatedAsyncioTestCase):
         for variant in ("v3", "v4"):
             for stem in ("prompt_core", "prompt_memory", "general_prompt", "group_prompt"):
                 stored = {stem + "_text": prompt.preset_default(stem, "v4")}
+                expected_variant = "v4" if stem == "general_prompt" else variant
                 self.assertEqual(prompt.preset_text(stored, stem, variant=variant),
-                                 stored[stem + "_text"] if stem == "general_prompt"
-                                 else prompt.preset_default(stem, variant))
+                                 prompt.preset_default(stem, expected_variant))
                 stored[stem + "_text"] = "手写  文本\n<标签> 😀"
                 self.assertEqual(prompt.preset_text(stored, stem, variant=variant), stored[stem + "_text"])
 
@@ -153,6 +153,27 @@ class PromptTests(unittest.IsolatedAsyncioTestCase):
         # A historical hash for one field cannot migrate another field.
         self.assertEqual(prompt.preset_value({"prompt_segment_text": OLD_GENERAL}, "prompt_segment"),
                          OLD_GENERAL)
+
+    def test_image_builtin_migration_keeps_custom_and_disabled_text(self):
+        advice = ("prompt 参数建议控制在 60～110 字，优先写「谁、穿什么、在哪、什么姿势」，"
+                  "按用户需求保留必要细节，不堆砌无关修饰；长度不保证通过上游审核。\n")
+        old_order = prompt.IMAGE_CONTRACT.replace(advice, "")
+        new_retry = ("有每日共享额度；工具内部会按原描述有限重试，模型不要重复调用。"
+                     "最终失败或结果未知后，遵循返回的处理决定，不得自行重画。")
+        old_description = prompt.IMAGE_DESCRIPTION.replace(new_retry, "有每日共享额度，失败或结果未知不能自动重试。")
+        for stem, old in (("prompt_image_order", old_order),
+                          ("prompt_image_description", old_description)):
+            with self.subTest(stem=stem):
+                import hashlib
+                self.assertIn(hashlib.sha256(old.encode()).hexdigest(), prompt.LEGACY_IMAGE_HASHES[stem])
+                config = {stem + "_text": old}
+                self.assertEqual(prompt.preset_text(config, stem), prompt.preset_default(stem))
+                self.assertEqual(config[stem + "_text"], old)
+                config[stem + "_text"] += " "
+                self.assertEqual(prompt.preset_text(config, stem), old + " ")
+                config.update({stem + "_text": old, stem + "_enabled": False})
+                self.assertEqual(prompt.preset_text(config, stem), "")
+                self.assertEqual(config[stem + "_text"], old)
 
     async def test_invalid_mixed_save_has_no_partial_write(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -315,6 +315,12 @@ class ReplyHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(tool_result_delivered(
             "send_message", result("Message sent to session x"))[0])
 
+    async def test_real_mcp_failure_cannot_count_as_delivery(self):
+        from mcp.types import CallToolResult, TextContent
+        result = CallToolResult(content=[TextContent(type="text", text="Message sent to session x")],
+                                isError=True)
+        self.assertFalse(tool_result_delivered("send_message_to_user", result)[0])
+
     async def test_close_does_not_alert_or_cancel_real_task(self):
         release = asyncio.Event()
         async def flow():

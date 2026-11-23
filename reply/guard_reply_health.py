@@ -14,6 +14,11 @@ from pathlib import Path
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import At, Plain, Reply
 
+try:
+    from ..integrations.guard_tool_result import failed as tool_result_failed
+except ImportError:  # 兼容独立离线入口
+    from integrations.guard_tool_result import failed as tool_result_failed
+
 KEY = "_livinghello_reply_health"
 WINDOW = 600
 # 可单独勾选通知的模型；tts 由宿主执行，只能间接感知，默认不提醒。
@@ -292,7 +297,7 @@ def tool_result_delivered(tool_name, tool_result):
     if str(tool_name or "") != "send_message_to_user" or tool_result is None:
         return False, ""
     text = tool_result_text(tool_result)
-    if getattr(tool_result, "isError", False):
+    if tool_result_failed(tool_result):
         return False, text
     if text.strip().lower().startswith("error:"):
         return False, text

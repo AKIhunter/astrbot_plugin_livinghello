@@ -24,6 +24,8 @@ from typing import Any
 import mcp.types
 from astrbot.api import logger
 
+from .guard_tool_result import failed as tool_result_failed
+
 try:
     from ..observability.guard_request_trace import emit
     from ..reply.guard_reply_fallback import find_current_runner
@@ -112,16 +114,11 @@ def _stopped(event) -> bool:
     return bool(getattr(event, "stopped", False))
 
 
-def _result_error(item: mcp.types.CallToolResult) -> bool:
-    # MCP 2.x 使用 snake_case 属性；旧 SDK 仍暴露协议的 camelCase 属性。
-    return bool(getattr(item, "is_error", getattr(item, "isError", False)))
-
-
 def _is_error(items: list[Any]) -> bool:
     for item in items:
         if not isinstance(item, mcp.types.CallToolResult):
             continue
-        if _result_error(item):
+        if tool_result_failed(item):
             return True
         for content in getattr(item, "content", None) or []:
             text = getattr(content, "text", "")

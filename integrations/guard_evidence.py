@@ -8,6 +8,8 @@ import time
 
 from astrbot.core.agent.message import TextPart
 
+from .guard_tool_result import failed as tool_result_failed
+
 try:
     from .guard_identity import request_identity
 except ImportError:
@@ -33,7 +35,7 @@ class EvidenceMemory:
 
     @staticmethod
     def text(result):
-        if result is None or getattr(result, "isError", False):
+        if result is None or tool_result_failed(result):
             return ""
         content = getattr(result, "content", None)
         if content is not None:

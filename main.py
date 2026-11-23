@@ -34,6 +34,7 @@ try:  # 作为插件包加载时走相对导入
     from .integrations.guard_livingemotion import availability_reason, is_state_line, state_lines
     from .integrations.guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
     from .integrations.guard_tool_loop import bind_current as bind_tool_loop
+    from .integrations.guard_tool_result import failed as tool_result_failed
     from .gate.guard_classifier_outage import (
         BackfillStatus,
         COOLDOWN_SECONDS,
@@ -69,6 +70,7 @@ except ImportError:  # 单文件调试兜底
     from integrations.guard_livingemotion import availability_reason, is_state_line, state_lines
     from integrations.guard_coupling import snapshot as coupling_snapshot, enabled as coupling_enabled, clean_request
     from integrations.guard_tool_loop import bind_current as bind_tool_loop
+    from integrations.guard_tool_result import failed as tool_result_failed
     from gate.guard_classifier_outage import (
         BackfillStatus,
         COOLDOWN_SECONDS,
@@ -1491,11 +1493,11 @@ class Main(Star):
                 event.get_extra("_livinghello_request_id") or "",
                 safe_excerpt(target, 80), delivered, spent * 1000,
                 safe_excerpt(result_text, 120))
-        # MCP isError只用于受控结果类别，不保存参数、工具正文或模型思考。
+        # MCP 1.x/2.x失败标记只用于受控结果类别，不保存参数、正文或模型思考。
         service.end(event, span, "uncollected" if tool_result is None else
-                    "failed" if getattr(tool_result, "isError", False) else "success",
+                    "failed" if tool_result_failed(tool_result) else "success",
                     reason="tool_result_missing" if tool_result is None else
-                    "tool_result_error" if getattr(tool_result, "isError", False) else "")
+                    "tool_result_error" if tool_result_failed(tool_result) else "")
         if span is None:
             emit(event, "tools", "uncollected", reason="tool_start_missing",
                  tool=str(getattr(tool, "name", "")))
