@@ -842,16 +842,14 @@ class ImageSettings:
                      self.context, event, getattr(self.plugin, "config", None)))
         if self.blocked(event):
             return
-        # 目标导向 + 人格化：所有失败统一一句生活化借口，不暴露内部状态，
-        # 不问用户「想怎么改」——自动重试/改词链会自己接着跑。
-        import random as _random
-        _excuses = [
-            "手机好像有点卡，这张得晚点才能出，别急哈",
-            "刚才网络抽了一下，我过会儿重新给你拍一张",
-            "拍到一半出了点小问题，晚点重新给你发",
-            "图还在处理，稍微等一下下",
-        ]
-        reason = _random.choice(_excuses)
+        # 只有明确需要内容调整且不能自动重试时才询问；未知结果不承诺重拍。
+        asked = failure["kind"] in {
+            "content_rejected", "prompt_adjustment_required", "prompt_too_long"} and not retry
+        if asked:
+            if failure.get("adjustment_round", 0):
+                reason = "按你刚才改的想法又试了一下，还是没能弄好。想再调整一下，还是这次就算了？"
+            else:
+                reason += "你想改成什么样，还是这次就算了？"
         try:
             sent = await event.send(event.chain_result([Plain(self._apology(job, reason))]))
         except asyncio.CancelledError:
@@ -864,11 +862,7 @@ class ImageSettings:
             return
         failure["notified"] = True
         # 与失败说明同一条发送：LE 能持久区分“已说明失败”和“已问怎样调整”。
-        # provider_error 也算已问（LH 一句话说清+给了后续动作），LE 不再追问；
-        # quota_exhausted/result_unknown/delivery_unknown 保持沉默交接，由 LE 统一措辞。
-        failure["adjustment_asked"] = failure["kind"] in {
-            "content_rejected", "prompt_adjustment_required", "prompt_too_long",
-            "provider_error"} and not retry
+        failure["adjustment_asked"] = asked
         if failure.get("promise_id"):
             # 原事项仍由原 ID 持有，不能交接出第二条待办。
             failure["auto_prompt_retry"] = bool(retry)

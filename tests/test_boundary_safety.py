@@ -18,6 +18,7 @@ from images import guard_image_budget as budget, guard_image_evidence as evidenc
 from input.guard_understanding import Observation
 from reply import guard_expression as expression
 from reply.guard_native_reply import managed_regex
+from reply.guard_prompt_injection import SEGMENT_CONTRACT, PARAGRAPH_CONTRACT
 from test_gate import gate_config, plugin
 from test_reply_delivery import Event
 import test_native_pipeline as native
@@ -404,12 +405,18 @@ class BoundaryTests(unittest.IsolatedAsyncioTestCase):
                                   "regex": managed_regex(), "split_mode": "regex"})
                     bodies = ["".join(c.text for c in m.chain if isinstance(c, Plain)) for m in event.sent]
                     self.assertEqual(len(bodies), 2 if enabled else 1)
-                    self.assertNotIn("。", "".join(bodies))
+                    # 不拆泡且保留模型段落时，多行正文按当前规则保留标点。
+                    if only and not enabled:
+                        self.assertEqual(bodies, [text])
+                    else:
+                        self.assertNotIn("。", "".join(bodies))
                     self.assertEqual("".join("".join(bodies).split()),
-                                     "先把需要说明的内容说完整再按意思分成自然的小段")
+                                     "".join((text if only and not enabled
+                                              else text.replace("。", "")).split()))
                     req = SimpleNamespace(extra_user_content_parts=[])
                     guard.segments.attach(event, req)
-                    self.assertEqual("8–100" in req.extra_user_content_parts[0].text, only)
+                    self.assertEqual([part.text for part in req.extra_user_content_parts],
+                                     [SEGMENT_CONTRACT if only else PARAGRAPH_CONTRACT])
 
     def test_missing_pillow_drops_inline_image_and_keeps_direct_path(self):
         with patch.dict(sys.modules, {"PIL": None}):

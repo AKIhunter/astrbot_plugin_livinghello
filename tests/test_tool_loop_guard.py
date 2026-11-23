@@ -99,7 +99,7 @@ class ToolLoopGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(text_of(items), "ok")
 
     async def test_read_only_tool_retries_error_result_then_succeeds(self):
-        original = OriginalExecutor([outcome("error: upstream 502", error=True), outcome("ok")])
+        original = OriginalExecutor([outcome("upstream unavailable", error=True), outcome("ok")])
         executor = GuardedToolExecutor(original, self.plugin)
         with patch("integrations.guard_tool_loop.asyncio.sleep", new=self.fast_sleep):
             items = await self.collect(executor, query="x")
@@ -115,13 +115,14 @@ class ToolLoopGuardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_result_is_cached_as_failure(self):
         self.plugin.config["tool_local_retry_attempts"] = 1
-        original = OriginalExecutor([outcome("error: nope", error=True)])
+        # 正文不带 error:，必须靠协议错误位识别；缓存回执也不能丢掉该位。
+        original = OriginalExecutor([outcome("upstream unavailable", error=True)])
         executor = GuardedToolExecutor(original, self.plugin)
         first = await self.collect(executor, query="x")
         second = await self.collect(executor, query="x")
         self.assertEqual(original.calls, 1)
-        self.assertTrue(first[-1].isError)
-        self.assertTrue(second[-1].isError)
+        self.assertTrue(first[-1].model_dump(by_alias=True)["isError"])
+        self.assertTrue(second[-1].model_dump(by_alias=True)["isError"])
         self.assertIn("已经执行过并失败", text_of(second))
 
     async def fast_sleep(self, _seconds):

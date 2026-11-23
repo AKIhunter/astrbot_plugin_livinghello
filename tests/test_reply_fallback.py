@@ -437,7 +437,10 @@ class ReplyFallbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_retry_budget_shared_between_agent_steps_and_capacity(self):
         runner, _ = await self.run_model([TimeoutError()] * 5 + [response()], fallback=True)
         runner.outcomes = [TimeoutError(), response()]
-        result = [item async for item in runner._iter_llm_responses_with_fallback()]
+        # 第二个 agent 步骤也需使用同一个离线构造器，预算仍保存在原 runner。
+        with patch("reply.guard_reply_fallback.LLMResponse", side_effect=lambda **kw: response(
+                kw["completion_text"], role=kw["role"])):
+            result = [item async for item in runner._iter_llm_responses_with_fallback()]
         # 预算跨步骤共享：第一步已用满 5 次，下一步只允许原调用，失败即收尾。
         self.assertEqual(len(runner.calls), 7)
         self.assertEqual(result[-1].role, "err")

@@ -112,11 +112,16 @@ def _stopped(event) -> bool:
     return bool(getattr(event, "stopped", False))
 
 
+def _result_error(item: mcp.types.CallToolResult) -> bool:
+    # MCP 2.x 使用 snake_case 属性；旧 SDK 仍暴露协议的 camelCase 属性。
+    return bool(getattr(item, "is_error", getattr(item, "isError", False)))
+
+
 def _is_error(items: list[Any]) -> bool:
     for item in items:
         if not isinstance(item, mcp.types.CallToolResult):
             continue
-        if getattr(item, "isError", False):
+        if _result_error(item):
             return True
         for content in getattr(item, "content", None) or []:
             text = getattr(content, "text", "")
@@ -140,8 +145,7 @@ def _with_notice(items: list[Any], text: str) -> list[Any]:
         if isinstance(item, mcp.types.CallToolResult):
             content = list(getattr(item, "content", None) or [])
             content.append(mcp.types.TextContent(type="text", text=text))
-            out.append(mcp.types.CallToolResult(
-                content=content, isError=bool(getattr(item, "isError", False))))
+            out.append(item.model_copy(update={"content": content}))
             added = True
         else:
             out.append(item)

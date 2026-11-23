@@ -1,6 +1,6 @@
 # 开发与维护
 
-面向代码贡献者及维护者：从完整克隆执行回归、维护日志并准备发布。权威来源是仓库源码、[tests](../tests/)、[离线入口](../run_offline_tests.py) 和 [CI](../.github/workflows/checks.yml)。已核对源码：2026-11-04；每次发布、宿主接口变更或故障后重新核对。本页不作为任意服务器的已部署状态证明。
+面向代码贡献者及维护者：从完整克隆执行回归、维护日志并准备发布。权威来源是仓库源码、[tests](../tests/)、[离线入口](../run_offline_tests.py) 和 [CI](../.github/workflows/checks.yml)。离线回归说明已核对：2026-11-23；每次发布、宿主接口变更或故障后重新核对。本页不作为任意服务器的已部署状态证明。
 
 ## 仓库布局
 
@@ -67,6 +67,12 @@ LE源码按标准包名放在父目录，使用LE requirements-dev依赖。
 
 回归覆盖语义否决、视觉/记忆降级、碎片合并、撤回窗口、结果交付、分段、保存冲突、人格固定、记录恢复及配套交接。调整模型或提示词后仍需用脱敏实际案例验证语义；离线通过不证明真实准确率或线上 Token 节省比例。
 
+MCP工具错误按`is_error`或旧`isError`识别；复用工具结果时保留原错误位及其他回执字段。
+重试预算测试的每个agent步骤都使用离线响应构造器。
+图片调整通知测试关闭自动改词，保留初次请求和两次原句重试，并核对实际问句与`adjustment_asked`一致。
+提示词默认值需对齐schema与运行时；手写或已保存的`general_prompt_text`保持原样。
+分段回归遵循当前注入契约：不拆泡且保留模型段落时，多行正文保留标点。
+
 ## UI 隔离回归
 
 [tests/ui](../tests/ui/) 下有四组控制台浏览器回归。`server.mjs` 把 `fixture-bridge.js` 注入真实页面，配置写入与模型响应都是内存替身，全程无外联、无真实发送。需要 Node.js 与本机 Playwright；`browser`、`save-latency`、`private-reply` 默认复用同级 `astrbot_plugin_livingemotion/tests/ui/node_modules/playwright`，可用 `PLAYWRIGHT_MODULE` 指向其他安装位置；`function-coupling.test.mjs` 写死了相对路径，不读该变量。
@@ -90,7 +96,7 @@ node tests/ui/function-coupling.test.mjs
 ## 文档检查与发布
 
 `scripts/check_docs.py` 使用Python标准库和Node.js解析页面静态帮助，
-检查全部Markdown链接/锚点、118项schema及13项独立生图默认值、逐项用法、
+检查全部Markdown链接/锚点、119项schema及13项独立生图默认值、逐项用法、
 原生字段路径、版本、图标与测试布局。运行前准备Node.js，不导入或启动宿主，不需要密钥。
 
 发布前还应使用可用 YAML 解析器解析 metadata，确认 GitHub Markdown 与 Mermaid 渲染。版本以 metadata 为准，同步控制台版本和更新日志；源代码若增加注册版本也须保持一致。

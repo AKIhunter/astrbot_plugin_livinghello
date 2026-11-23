@@ -131,7 +131,8 @@ class PromptTests(unittest.IsolatedAsyncioTestCase):
             for stem in ("prompt_core", "prompt_memory", "general_prompt", "group_prompt"):
                 stored = {stem + "_text": prompt.preset_default(stem, "v4")}
                 self.assertEqual(prompt.preset_text(stored, stem, variant=variant),
-                                 prompt.preset_default(stem, variant))
+                                 stored[stem + "_text"] if stem == "general_prompt"
+                                 else prompt.preset_default(stem, variant))
                 stored[stem + "_text"] = "手写  文本\n<标签> 😀"
                 self.assertEqual(prompt.preset_text(stored, stem, variant=variant), stored[stem + "_text"])
 

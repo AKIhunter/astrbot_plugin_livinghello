@@ -7,7 +7,10 @@ from images.guard_image_failure import http_failure
 
 
 class AdjustmentNoticeTests(unittest.IsolatedAsyncioTestCase):
-    setUp = fixtures.ImageGenerationTests.setUp
+    def setUp(self):
+        fixtures.ImageGenerationTests.setUp(self)
+        # 本组验证停止后询问用户；自动改词和重试由单独矩阵覆盖。
+        self.service.values["prompt_guard_retry_limit"] = 0
 
     async def test_content_rejection_question_and_receipt_share_one_send(self):
         event = fixtures.Event()
@@ -30,7 +33,8 @@ class AdjustmentNoticeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.send.await_count, 1)
         self.assertFalse(any(word in event.send.await_args.args[0].chain[0].text
                              for word in ("任务", "接口", "待办", "服务")))
-        self.service._request.assert_awaited_once()
+        # 明确拒绝保留初次请求+2次原句重试；只验证假服务的调用计数。
+        self.assertEqual(self.service._request.await_count, 3)
 
     async def test_question_still_exists_when_le_unavailable(self):
         event = fixtures.Event()
