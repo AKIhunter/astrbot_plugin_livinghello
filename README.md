@@ -3,7 +3,7 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.9.7-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.8-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -115,4 +115,4 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 判定、图片理解、文字试跑、TTS和生图可能产生所选Provider费用。
 离线测试使用假模型和假发送，不代表真实模型效果或平台最终送达。
 
-当前版本 **2.9.7** 支持生图映射来源词数组与实际提示词长度追踪，统一预置和配置说明并修复离线 CI。保留 LE 0.7.1 的失败回执与承诺未知结果停止重发逻辑；详见[映射说明](docs/image-prompt-mapping.md)、[失败交接](docs/image-failure-followup.md)和[更新日志](CHANGELOG.md)。
+当前版本 **2.9.8** 要求需要工具的回答在结果返回后再输出完整正文，并在合并时精确去重、保留新增内容。真实模型遵循度与费用节省需另行观察；详见[回复去重](docs/reply-merge-dedup.md)和[更新日志](CHANGELOG.md)。

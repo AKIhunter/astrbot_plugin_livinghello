@@ -80,6 +80,11 @@ def install_framework_stubs():
         def mark_as_temp(self):
             self.no_save = True
             return self
+        def model_dump_for_context(self):
+            data = {"type": self.type, "text": self.text}
+            if getattr(self, "no_save", False):
+                data["_no_save"] = True
+            return data
     message.TextPart = TextPart
     mod("astrbot.core.platform")
     message_type = mod("astrbot.core.platform.message_type")

@@ -10,6 +10,11 @@ MARKER = "<!--livinghello:expression:v1-->"
 TOPIC_CONTRACT = prompts()["shared_context"]
 SEGMENT_CONTRACT = ('按意思分段，每段之间用空行分隔。代码、网址、表格及必要的完整解释不强拆。同一段内不要仅因出现句号就换行；不要输出分段编号或分隔标签。')
 PARAGRAPH_CONTRACT = "普通聊天回复请使用一个连贯段落，不要用换行隔断；代码、表格等必要格式仍保留。"
+TOOL_REPLY_CONTRACT = (
+    "本轮需要工具时，先调用工具，完整正文留到结果返回后一次给出；工具调用前及调用之间不输出聊天正文。"
+    "工具返回后只补本轮尚未表达的新内容，不复述已表达的句段；失败时如实简短说明，不重讲全文。"
+    "生图仍遵循专用的简短承接规则。"
+)
 IMAGE_CONTRACT = (
     "生图需求必须先调用livinghello_generate_image取得本轮决定，然后才给承接或婉拒的文字；工具决定前不要承诺会画。\n"
     "调用工具时，prompt 参数只是内部生图说明，绝不会展示给用户；不要把 prompt 或其中任何姿势、穿搭、画面细节复述到给用户的正文。\n"
@@ -213,5 +218,8 @@ def attach_shared(plugin, event, request, text_part):
                  ("memorize_long_term_memory", "store_memory", "add_memory", "remember", "write_long_term_memory")
                  for tool in tools)
     modules = shared_modules(variant, core=True, memory=memory, settings=settings)
+    if tools:
+        # 执行契约独立于可编辑表达词；按模块 ID 装配一次，不随工具轮次累积。
+        modules["lh.tool_reply"] = TOOL_REPLY_CONTRACT
     offer(request, "LH", modules, text_part)
     return variant

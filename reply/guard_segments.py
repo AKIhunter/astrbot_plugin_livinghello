@@ -12,6 +12,7 @@ try:
                                        punct_space_mode, preserve_punctuation)
     from .guard_native_reply import managed_options, second_period_regex
     from .guard_prompt_injection import preset_text, request_config
+    from .guard_reply_merge import merge_text_parts
     from ..observability.guard_request_trace import emit
     from .guard_thinking_filter import strip_thinking
 except ImportError:
@@ -20,6 +21,7 @@ except ImportError:
                                           punct_space_mode, preserve_punctuation)
     from reply.guard_native_reply import managed_options, second_period_regex
     from reply.guard_prompt_injection import preset_text, request_config
+    from reply.guard_reply_merge import merge_text_parts
     from observability.guard_request_trace import emit
     from reply.guard_thinking_filter import strip_thinking
 
@@ -95,14 +97,16 @@ class ReplySegments:
         options["split_words"] = raw.get("split_words", [])
         chain = []
         before = len(result.chain or [])
-        # 流式每个token不是一个模型段落；相邻Plain先合成完整模型正文。
-        pending = ""
+        # 非流式保留每次模型输出边界以去重；流式 token 仍按原字拼接。
+        pending = []
         def flush():
             nonlocal pending
             if not pending:
                 return
             # 相邻 Plain 已合并成完整模型正文，此处是剥离 thinking 与口头禅禁忌的最佳时点。
-            text = strip_thinking(pending)[0]
+            text = strip_thinking(
+                "".join(pending) if streaming else merge_text_parts(pending)
+            )[0]
             text = strip_forbidden(
                 text, forbid_phrases(getattr(self.plugin, "config", None) or {})
             )
@@ -113,7 +117,7 @@ class ReplySegments:
                     return value
                 return (normalize_punctuation(value, space=punct_space_mode(_pcfg))
                         if punct_cleanup_enabled(_pcfg) else value)
-            pending = ""
+            pending = []
             if not text.strip():
                 return
             if not split:
@@ -125,10 +129,10 @@ class ReplySegments:
                     cleaned = clean(value)
                     if cleaned.strip():
                         chain.append(Plain(cleaned))
-            pending = ""
+            pending = []
         for component in result.chain or []:
             if isinstance(component, Plain):
-                pending += component.text
+                pending.append(component.text)
             else:
                 flush()
                 chain.append(component)

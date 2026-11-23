@@ -1,6 +1,6 @@
 # LivingHello 当前文档
 
-适用2.9.6，2026-11-23核对。README只介绍当前产品；历史变更统一见[更新日志](../CHANGELOG.md)。
+适用2.9.8，2026-11-23核对。README只介绍当前产品；历史变更统一见[更新日志](../CHANGELOG.md)。
 源码变化时同步权威文档，每次提交检查链接、默认值、版本、资产和离线回归。
 
 | 用途 | 权威入口 | 依据 |
@@ -17,6 +17,7 @@
 | 图片预算与技术正文保护 | [资源边界](boundary-safety.md) | 解码、OCR、分段与正文保护 |
 | 失败通知和需用户调整 | [通知](image-failure-notice.md)、[失败交接](image-failure-followup.md) | 失败类别、唯一通知与恢复 |
 | 主模型超时切换、失败与慢回复 | [兜底](reply_fallback.md)、[垫场](early-ack.md) | 可配置首个有效输出时限、有界重试与取消守卫 |
+| 工具前后重复正文与新增内容 | [回复去重](reply-merge-dedup.md) | 请求局部契约、非流式精确去重与分段 |
 | 开发、接口与测试 | [开发维护](development.md) | tests、scripts、CI |
 | 独立输入、人设隔离与故障补答 | [独立实现](independent-runtime.md) | 原生身份、RecoveryReplay |
 
