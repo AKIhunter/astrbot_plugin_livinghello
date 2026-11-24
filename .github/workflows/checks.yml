@@ -2,8 +2,9 @@ name: 文档与离线回归
 
 on:
   pull_request:
+    branches: [dsh]
   push:
-    branches: [main]
+    branches: [dsh]
 
 permissions:
   contents: read
