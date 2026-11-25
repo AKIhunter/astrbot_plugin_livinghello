@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from astrbot.api.message_components import Plain, Image, Reply, Record
-from input.guard_understanding import Understanding, audio_capable
+from input.guard_understanding import Observation, Understanding, audio_capable
 from console.guard_expression_help import HELP
 from console.guard_webui import _providers, _load_schema_subset, EDITABLE
 from test_gate import gate_config, plugin
@@ -771,3 +771,42 @@ class HelpTest(unittest.TestCase):
 
     def test_explicit_text_model_is_not_audio(self):
         self.assertFalse(audio_capable(SimpleNamespace(get_model=lambda: "Qwen3-8B", provider_config={})))
+
+
+class FragmentImageAdoptionTest(unittest.TestCase):
+    """碎片在 parse 之后才合并；图片必须在理解阶段补齐，否则判定阶段要重看一遍。"""
+
+    def test_fragment_images_are_adopted_before_current(self):
+        event = Event()
+        event.set_extra("_at_guard_fragments", [
+            {"text": "先发的图", "images": [{"url": "https://a/img1.png", "sender_id": "1",
+                                            "message_id": "m1", "age_seconds": "0.4"}]},
+            {"text": "当前消息", "images": [{"url": "https://a/img2.png", "sender_id": "1",
+                                           "message_id": "m2", "age_seconds": "0.0"}]},
+        ])
+        event.set_extra("_at_guard_fragment_sources", (object(), event))
+        observation = Observation()
+        Understanding._adopt_fragment_images(event, observation)
+        self.assertEqual(observation.images, ["https://a/img1.png"])
+        self.assertEqual(observation.image_sources[0]["source"], "fragment")
+        self.assertEqual(observation.image_sources[0]["message_id"], "m1")
+
+    def test_current_event_images_are_left_to_parse(self):
+        event = Event()
+        event.set_extra("_at_guard_fragments", [
+            {"text": "当前消息", "images": [{"url": "https://a/img.png"}]},
+        ])
+        event.set_extra("_at_guard_fragment_sources", (event,))
+        observation = Observation()
+        Understanding._adopt_fragment_images(event, observation)
+        self.assertEqual(observation.images, [])
+
+    def test_same_url_is_not_adopted_twice(self):
+        event = Event()
+        event.set_extra("_at_guard_fragments", [
+            {"text": "同一张", "images": [{"url": "https://a/img.png"}]},
+        ])
+        event.set_extra("_at_guard_fragment_sources", (object(),))
+        observation = Observation(images=["https://a/img.png"])
+        Understanding._adopt_fragment_images(event, observation)
+        self.assertEqual(len(observation.images), 1)

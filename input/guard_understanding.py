@@ -243,8 +243,12 @@ class Understanding:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                state = "timeout" if isinstance(exc, asyncio.TimeoutError) else (
-                    "bug" if isinstance(exc, self._CODE_BUG_TYPES) else "failed")
+                # 主动放弃不是模型失败：消息被顶替、策略刚生效时一次都没调，
+                # 记 skipped 才不会被失败率和「图片理解失败」日志误导。
+                abandoned = str(exc) in {"image_superseded", "image_policy_changed"}
+                state = "skipped" if abandoned else (
+                    "timeout" if isinstance(exc, asyncio.TimeoutError) else (
+                        "bug" if isinstance(exc, self._CODE_BUG_TYPES) else "failed"))
                 notes[start] = f"[{label}未能读取，勿猜测内容]"
                 if any("OCR文字证据" in value for value in ocr_notes.get(start, [])):
                     notes[start] += "\n[画面未读；只可使用上面的OCR文字证据，勿猜测其余内容]"
@@ -263,8 +267,11 @@ class Understanding:
                             str(source.get("source") or "?")[:12], scheme[:8],
                             "y" if source.get("file_id") else "n",
                             source.get("age_seconds", "-")))
-                    self.plugin.logger.warning(
-                        "[LivingHello] 图片理解失败 state=%s err=%s:%s 来源=%s",
+                    report = (getattr(self.plugin.logger, "debug", None)
+                              if abandoned else self.plugin.logger.warning)
+                    report(
+                        "[LivingHello] 图片理解%s state=%s err=%s:%s 来源=%s",
+                        "跳过" if abandoned else "失败",
                         state, type(exc).__name__, str(exc)[:80],
                         " | ".join(parts) or "无")
                 except Exception:
@@ -639,6 +646,34 @@ class Understanding:
                 raise ValueError("所选路由上游已不存在，禁止静默改用其他模型")
         return provider, ({"model": model} if model else {})
 
+    @staticmethod
+    def _adopt_fragment_images(event, observation):
+        """把合并碎片的图片并入本批。
+
+        parse 早于碎片合并发生，只读当前消息会让 observation 里没有图，
+        于是判定阶段拿到 media_unresolved 再补看一遍。这里按发送顺序补齐，
+        当前事件自己那一份跳过，保留「current」归属不受影响。
+        """
+        rows = event.get_extra("_at_guard_fragments", ()) or ()
+        if not rows:
+            return
+        sources = event.get_extra("_at_guard_fragment_sources", ()) or ()
+        for index, row in enumerate(rows):
+            owner = sources[index] if index < len(sources) else None
+            if owner is event:
+                continue
+            for image in row.get("images", ()) or ():
+                url = str(image.get("url") or "")
+                if not url or url in observation.images:
+                    continue
+                observation.images.append(url)
+                observation.image_sources.append({
+                    "source": "fragment",
+                    "sender": str(image.get("sender_id") or ""),
+                    "message_id": str(image.get("message_id") or ""),
+                    "age_seconds": image.get("age_seconds", "-"),
+                })
+
     async def enrich(self, event, observation, roles=None):
         if self.plugin._policy_send_reason(event):
             return
@@ -646,6 +681,8 @@ class Understanding:
             return
         event.set_extra("_at_guard_understanding_enriched", True)
         selected_roles = set(roles or ("vision", "stt"))
+        # 碎片在 parse 之后才合并，这里补齐来源图片，避免判定阶段再补看一遍。
+        self._adopt_fragment_images(event, observation)
         # 视频独立于图片开关与图片模型；仍属于 vision 角色，遵守同一角色过滤与硬预算。
         for role, urls in (("vision", observation.images), ("video", observation.videos),
                            ("stt", observation.voices[:4])):
