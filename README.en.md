@@ -2,7 +2,7 @@
 
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
-[![Version](https://img.shields.io/badge/version-2.9.8-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.10.0-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -54,6 +54,7 @@ Private image prompts, mapping files and learned data remain local.
 | [History context](docs/history-context.md#主回复模型的lh短流水) | Independent history limits and compact reply context |
 | [Prompt mapping](docs/image-prompt-mapping.md) | Bounded repairs and learned substitutions |
 | [Image receipts](docs/image-delivery-receipts.md) | Persistent facts and original promise settlement |
+| [Diagnostic export](docs/diagnostics.md) | Last 72 hours, redaction, admin download and automatic retention |
 | [Development](docs/development.md) | Modules, interfaces and offline tests |
 | [Documentation index](docs/README.md) | Current documents |
 | [Changelog](CHANGELOG.md) | Historical changes |
@@ -61,5 +62,5 @@ Private image prompts, mapping files and learned data remain local.
 Classifier, vision, TTS and image requests can incur provider charges.
 Developer: [AKIhunter](https://github.com/AKIhunter). Feedback QQ group: 991350637.
 
-Version **2.9.8** asks tool-assisted replies to wait for tool results before producing the complete answer, and removes exact repeated sentences or paragraphs during merging while keeping new content. Real model compliance and cost savings still require observation. See the [reply deduplication guide](docs/reply-merge-dedup.md).
+Version **2.10.0** adds a diagnostic ZIP download at the top of `guard` for the last 72 hours. Independent records are capped at 32 MiB with 1 MiB files and automatic expiry cleanup every minute. Export makes no model calls and requires no configuration migration. LivingEmotion 0.8.0 provides its own export; each plugin works independently. See the [diagnostic guide](docs/diagnostics.md).
 See the [fallback guide](docs/reply_fallback.md) and [changelog](CHANGELOG.md).

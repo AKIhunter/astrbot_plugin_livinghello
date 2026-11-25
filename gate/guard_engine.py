@@ -499,6 +499,13 @@ class DecisionLog:
 
     def add(self, entry: dict[str, Any]) -> None:
         self.ring.append(entry)
+        diagnostics = getattr(self, "diagnostics", None)
+        if callable(diagnostics):
+            # Keep safe diagnostic evidence independently of the business ring.
+            try:
+                diagnostics(entry)
+            except Exception:
+                pass
         if self.path is None:
             return
         try:

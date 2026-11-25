@@ -928,7 +928,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     mark("最近判定")
 
     data = {
-        "version": "2.9.8",
+        "version": "2.10.0",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
         "config": config,
@@ -1479,12 +1479,42 @@ async def handle_probe(plugin: Any):
     )
 
 
+async def handle_diagnostics_export(plugin):
+    try:
+        from ..diagnostic_bundle import require_admin, DiagnosticBusy, download_response, export_async
+        from ..observability.guard_diagnostics import prepare
+    except ImportError:
+        from diagnostic_bundle import require_admin, DiagnosticBusy, download_response, export_async
+        from observability.guard_diagnostics import prepare
+    bundle = None
+    try:
+        actor = require_admin(plugin.context, request)
+        if request.query.keys():
+            return _failure("诊断导出不接受文件路径或其他参数。", 400)
+        bundle = await export_async(*prepare(plugin))
+        if require_admin(plugin.context, request) != actor:
+            raise PermissionError("forbidden")
+        response = download_response(bundle)
+        bundle = None  # The response owns cleanup, including disconnects.
+        return response
+    except PermissionError as exc:
+        return _failure("登录已失效或无权限。", 403 if str(exc) == "forbidden" else 401)
+    except DiagnosticBusy:
+        return _failure("诊断包正在打包或下载，请稍后重试。", 409)
+    except Exception:
+        return _failure("诊断包导出失败，请稍后重试。", 503)
+    finally:
+        if bundle is not None:
+            bundle.close()
+
+
 def register_webui(plugin: Any, context: Context) -> None:
     routes: list[tuple[str, str, Handler, str]] = [
         ("console/state", "GET", handle_state, "LivingHello 控制台状态"),
         ("console/decisions", "GET", handle_decisions, "搜索群ID、私聊QQ及判定内容"),
         ("console/request-trace", "GET", handle_request_trace, "读取单次请求的监听与执行追踪"),
         ("console/listeners", "GET", handle_listeners, "核查当前实例激活监听与采集健康"),
+        ("console/diagnostics/export", "GET", handle_diagnostics_export, "导出近3天脱敏诊断包"),
         ("console/config", "POST", handle_config, "保存 LivingHello 参数"),
         ("console/message-policy/validate", "POST", handle_message_policy_validate, "只校验六个消息名单草稿"),
         ("console/native-segments", "GET", handle_native_segments, "读取AstrBot原生分段配置"),

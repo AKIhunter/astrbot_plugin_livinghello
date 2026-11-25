@@ -332,6 +332,13 @@ class RequestTrace:
         return result
 
     def _queue(self, row):
+        diagnostics = getattr(self.plugin, "diagnostics", None)
+        if diagnostics is not None and not self.closed:
+            try:
+                from .guard_diagnostics import request_record
+                diagnostics.record("request", request_record(self._snapshot(row)))
+            except Exception:
+                diagnostics.dropped += 1
         if not self.path or self.closed:
             return
         rid = row["request_id"]

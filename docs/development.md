@@ -178,6 +178,7 @@ LivingMemory 的 `core/retrieval/request_timing.py` 可通过请求局部 Contex
 | 路径 | 方法 | 用途 |
 | --- | --- | --- |
 | console/state | GET | 状态、参数与最近10条记录；附只读参考流水增强 |
+| console/diagnostics/export | GET | 严格管理员 JWT；近72小时脱敏 ZIP；拒绝查询参数，下载结束清理 |
 | console/decisions | GET | query / 分类搜索近期记录；与 state 使用同一展示增强 |
 | console/config | POST | 参数白名单保存 |
 | console/native-segments | GET / POST | 原生分段读取 / 版本校验保存 |

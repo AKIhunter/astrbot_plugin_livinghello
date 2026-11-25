@@ -922,11 +922,18 @@
   <span class="badge" id="modeBadge">加载中</span>
   <span class="spacer"></span>
   <span class="msg" id="dirtyMsg"></span>
+  <button class="btn" id="diagnosticsExport" type="button" aria-describedby="diagnosticsStatus">导出诊断日志（近3天）</button>
   <button class="btn" id="introBtn" title="五步配好核心项">快速开始</button>
   <button class="btn" id="helpBtn" title="查看每个配置项的作用与示例">参数手册</button>
   <button class="btn primary" id="saveBtn">保存参数</button>
 </div>
 <p class="sub">可独立使用，也可与配套插件联用，仅管理回复判定与发送方式。</p>
+<p class="msg" id="diagnosticsStatus" role="status" aria-live="polite"></p>
+<script type="module">
+  import { bindDiagnosticExport } from "./diagnostics.mjs";
+  bindDiagnosticExport(document.getElementById("diagnosticsExport"), document.getElementById("diagnosticsStatus"),
+    () => window.AstrBotPluginView || window.AstrBotPluginPage);
+</script>
 
 <nav class="page-tabs" role="tablist" aria-label="控制台页面">
   <button id="tab-overview" role="tab" aria-controls="panel-overview" aria-selected="true" tabindex="0" data-page="overview">运行概览</button>

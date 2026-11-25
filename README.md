@@ -3,7 +3,7 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.9.8-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.10.0-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -92,6 +92,7 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 | 判定与回复历史条数、短流水格式 | [历史说明](docs/history-context.md#主回复模型的lh短流水) |
 | 图片映射、重试和成功用词 | [映射说明](docs/image-prompt-mapping.md) |
 | 图片回执与原事项结算 | [回执契约](docs/image-delivery-receipts.md) |
+| 一键导出近3天的脱敏诊断包 | [诊断日志](docs/diagnostics.md) |
 | 开发、测试与接口 | [开发维护](docs/development.md) |
 | 全部当前文档 | [文档索引](docs/README.md) |
 | 历史变更 | [更新日志](CHANGELOG.md) |
@@ -115,4 +116,4 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 判定、图片理解、文字试跑、TTS和生图可能产生所选Provider费用。
 离线测试使用假模型和假发送，不代表真实模型效果或平台最终送达。
 
-当前版本 **2.9.8** 要求需要工具的回答在结果返回后再输出完整正文，并在合并时精确去重、保留新增内容。真实模型遵循度与费用节省需另行观察；详见[回复去重](docs/reply-merge-dedup.md)和[更新日志](CHANGELOG.md)。
+当前版本 **2.10.0** 可在 `guard` 页面顶部一键导出近3天的脱敏诊断包。独立记录最多32 MiB，单文件1 MiB，每分钟自动清理过期文件；导出不调用模型，无需迁移配置。配套 LE 0.8.0 提供各自诊断入口，两个插件均可独立导出。详见[诊断日志](docs/diagnostics.md)和[更新日志](CHANGELOG.md)。

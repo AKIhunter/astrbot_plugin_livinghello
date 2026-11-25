@@ -150,6 +150,11 @@ class Main(Star):
         self.recent_images = defaultdict(lambda: deque(maxlen=30))
         self.image_cache = ImageObservationCache()
         self.engine = GateEngine(self.config, self.data_dir, self.logger)
+        try:
+            from .observability.guard_diagnostics import start as start_diagnostics
+        except ImportError:
+            from observability.guard_diagnostics import start as start_diagnostics
+        self.diagnostics = start_diagnostics(self)
         self.classifier_outage = ClassifierOutageRecovery(
             self.config, self.data_dir, self.logger
         )
@@ -2026,6 +2031,15 @@ class Main(Star):
         await self._delivery().prepare(event)
 
     async def terminate(self):
+        try:
+            await self._terminate_runtime()
+        finally:
+            diagnostics = getattr(self, "diagnostics", None)
+            if diagnostics is not None:
+                diagnostics.record("lifecycle", {"status": "unloaded"})
+                await asyncio.to_thread(diagnostics.close)
+
+    async def _terminate_runtime(self):
         turns = getattr(self, "_reply_turns", None)
         if turns is not None:
             turns.close()

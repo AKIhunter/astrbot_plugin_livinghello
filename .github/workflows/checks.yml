@@ -42,3 +42,5 @@ jobs:
         run: python -B scripts/check_docs.py
       - name: 独立插件离线回归
         run: python -B run_offline_tests.py
+      - name: 诊断下载按钮交互
+        run: node --test tests/test_diagnostics.mjs

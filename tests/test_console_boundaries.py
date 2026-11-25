@@ -71,9 +71,10 @@ class ConsoleBoundaryTests(unittest.IsolatedAsyncioTestCase):
         owner = SimpleNamespace(config={})
         context = SimpleNamespace(register_web_api=lambda *args: registered.append(args))
         api.register_webui(owner, context)
-        self.assertEqual(len(registered), 17)
+        self.assertEqual(len(registered), 18)
         pairs = {(route, tuple(methods)) for route, _, methods, _ in registered}
-        self.assertEqual(len(pairs), 17)
+        self.assertEqual(len(pairs), 18)
+        self.assertIn(("/astrbot_plugin_LivingHello/console/diagnostics/export", ("GET",)), pairs)
         self.assertTrue(all(route.startswith("/astrbot_plugin_LivingHello/console/")
                             for route, *_ in registered))
         state = next(fn for route, fn, _, _ in registered if route.endswith("/state"))
