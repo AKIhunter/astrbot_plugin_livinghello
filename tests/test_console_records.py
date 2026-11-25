@@ -180,7 +180,7 @@ class SaveTest(_SaveFixture):
     def test_disk_failure_restores_config_and_records(self):
         guard, result, before = self.save({"fragment_wait_private": True, "gate_min_length": 5}, fail=True)
         self.assertEqual(dict(guard.config), before)
-        self.assertIn("配置未落盘", result)
+        self.assertIn("配置未落盘", result["message"])
         self.assertEqual(guard.engine.stats["judged"], 17)
 
     def test_same_value_does_not_report_policy_change(self):
@@ -282,7 +282,7 @@ class SaveTest(_SaveFixture):
 
     def test_unknown_field_cannot_clear_statistics(self):
         guard, result, before = self.save({"reset_stats": True})
-        self.assertIn("不允许", result)
+        self.assertIn("不允许", result["message"])
         self.assertEqual(dict(guard.config), before)
 
     def test_search_endpoint(self):

@@ -113,6 +113,9 @@ def main():
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root))
     sys.path.insert(0, str(root / "tests"))
+    # 装了真实宿主时，把 4.29 的接口适配成测试书写时的契约（与 pytest 入口一致）。
+    from host_contract import install
+    install()
     suite = unittest.defaultTestLoader.discover(str(root / "tests"), pattern="test_*.py")
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     return 0 if result.wasSuccessful() else 1

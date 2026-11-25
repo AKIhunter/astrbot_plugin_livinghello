@@ -67,7 +67,7 @@ class SaveReceiptTest(unittest.IsolatedAsyncioTestCase):
                 before = dict(self.guard.config)
                 result = await self.save({"understand_video_provider_id": selected,
                                           "fragment_wait_seconds": 4})
-                self.assertIn(error, result)
+                self.assertIn(error, result["message"])
                 self.assertEqual(dict(self.guard.config), before)
                 write.assert_not_called()
         with patch.object(guard_webui, "_providers", AsyncMock(return_value=models)):
@@ -77,8 +77,10 @@ class SaveReceiptTest(unittest.IsolatedAsyncioTestCase):
     async def test_nonempty_model_still_checks_availability_and_capability(self):
         models = AsyncMock(return_value=[{"id": "text", "supports_images": False}])
         with patch.object(guard_webui, "_providers", models):
-            self.assertIn("不在可用列表", await self.save({"classifier_provider_id": "missing"}))
-            self.assertIn("无法确认支持图片", await self.save({"vision_shared_provider_id": "text"}))
+            result = await self.save({"classifier_provider_id": "missing"})
+            self.assertIn("不在可用列表", result["message"])
+            result = await self.save({"vision_shared_provider_id": "text"})
+            self.assertIn("无法确认支持图片", result["message"])
             result = await self.save({"classifier_provider_id": "text"})
         self.assertEqual(result["status"], "ok")
         self.assertEqual(models.await_count, 3)

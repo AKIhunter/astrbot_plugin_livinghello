@@ -19,7 +19,10 @@ class MappingTests(unittest.TestCase):
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.mapping = ImagePromptMapping(self.root)
+        # 宿主的 astrbot.api.logger 不是 logging.Logger，assertLogs 只认后者；
+        # 这里显式传标准库 logger，断言内容与生产无关。
+        self.logger = logging.getLogger("lh-image-prompt-mapping-test")
+        self.mapping = ImagePromptMapping(self.root, logger=self.logger)
         self.values = {**DEFAULTS, "provider_id": "image-native"}
         self.connection = ("https://example.invalid/v1", "never-persist-this-key", "image-one")
 
@@ -240,7 +243,7 @@ class MappingTests(unittest.TestCase):
     def test_load_status_reports_real_source_and_effective_count(self):
         self.table([{"id": "one", "type": "token", "from": "cat", "to": "kitty"},
                     {"id": "two", "type": "token", "from": "blouse", "to": "shirt"}])
-        with self.assertLogs(self.mapping.logger, level="INFO") as logs:
+        with self.assertLogs(self.logger, level="INFO") as logs:
             policy = self.mapping.policy(self.values, self.connection)
             self.mapping.policy(self.values, self.connection)
         self.assertEqual(len(logs.output), 1)
@@ -248,7 +251,7 @@ class MappingTests(unittest.TestCase):
                          ("loaded", "file", 2))
         self.assertEqual(policy["rules_file"], "image_prompt_rules.json")
         (self.root / "image_prompt_rules.json").write_text("{broken")
-        with self.assertLogs(self.mapping.logger, level="WARNING") as logs:
+        with self.assertLogs(self.logger, level="WARNING") as logs:
             policy = self.mapping.policy(self.values, self.connection)
             self.mapping.policy(self.values, self.connection)
         self.assertEqual(len(logs.output), 1)
@@ -261,7 +264,7 @@ class MappingTests(unittest.TestCase):
     def test_invalid_first_table_falls_back_with_safe_rule_diagnostic(self):
         private = "sk-fixture-do-not-display"
         self.table([{"id": "bad", "type": "regex", "pattern": "(" + private + ")", "to": "cat"}])
-        with self.assertLogs(self.mapping.logger, level="WARNING") as logs:
+        with self.assertLogs(self.logger, level="WARNING") as logs:
             policy = self.mapping.policy(self.values, self.connection)
         self.assertEqual((policy["rules_source"], policy["rule_count"]), ("builtin", 1))
         self.assertIn("第1条规则", policy["warning"])
@@ -285,7 +288,7 @@ class MappingTests(unittest.TestCase):
         self.assertIn("UTF-8", policy["warning"])
 
     def test_missing_file_warns_once_and_recovery_switches_to_current_table(self):
-        with self.assertLogs(self.mapping.logger, level="WARNING") as logs:
+        with self.assertLogs(self.logger, level="WARNING") as logs:
             self.mapping.policy(self.values, self.connection)
             policy = self.mapping.policy(self.values, self.connection)
         self.assertEqual(len(logs.output), 1)

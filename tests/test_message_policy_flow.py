@@ -45,13 +45,15 @@ class ReadSpyEvent(QQEvent):
 class RuntimePolicyTest(unittest.IsolatedAsyncioTestCase):
     async def test_quote_metadata_and_images_use_actual_origin_before_body(self):
         guard = plugin(gate_config(message_blacklist_qq=["789"], message_blacklist_groups=["888"]))
-        nested = Reply(sender_id="789", message_str="BLACK_BODY", chain=[Plain("BLACK_BODY")])
-        outer = Reply(sender_id="555", message_str="允许原文 BLACK_BODY",
+        nested = Reply(id="q2", sender_id="789", message_str="BLACK_BODY", chain=[Plain("BLACK_BODY")])
+        outer = Reply(id="q3", sender_id="555", message_str="允许原文 BLACK_BODY",
                       chain=[Plain("允许原文"), nested, Image.fromURL("https://invalid.test/picture")])
         event = QQEvent(components=[Plain("当前消息"), outer])
         meta = guard._message_meta(event)
         self.assertNotIn("BLACK_BODY", str(meta))
-        outer.group_id = "888"
+        # 宿主 4.29 的 Reply 是 pydantic 模型且没有 group_id 字段，
+        # 用 object.__setattr__ 写进 __dict__，模拟跨群引用消息的来源。
+        object.__setattr__(outer, "group_id", "888")
         self.assertEqual(guard._event_images(event), [])
         observation = await guard._understanding().parse(event)
         self.assertNotIn("允许原文", observation.text)
@@ -154,7 +156,7 @@ class RuntimePolicyTest(unittest.IsolatedAsyncioTestCase):
             await guard.terminate()
 
     async def test_only_other_all_and_quoted_at_do_not_wake(self):
-        for components in ([At(qq="555")], [At(qq="all")], [Reply(sender_id="789", chain=[At(qq="999")])]):
+        for components in ([At(qq="555")], [At(qq="all")], [Reply(id="q1", sender_id="789", chain=[At(qq="999")])]):
             guard = plugin(gate_config(message_graylist_qq=["123"]))
             event = QQEvent(components=components)
             await guard.check_incoming_message_policy(event)

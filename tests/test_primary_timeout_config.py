@@ -49,7 +49,7 @@ class PrimaryTimeoutConfigTests(unittest.IsolatedAsyncioTestCase):
                 before = dict(self.guard.config)
                 result = await self.save({"fragment_wait_seconds": 4,
                                          "reply_primary_timeout_seconds": seconds})
-                self.assertIsInstance(result, str)
+                self.assertEqual(result["status"], "error")
                 self.assertEqual(dict(self.guard.config), before)
                 write.assert_not_called()
 

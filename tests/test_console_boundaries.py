@@ -54,7 +54,7 @@ class ConsoleBoundaryTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(body=body), \
                     patch.object(api.request, "json", AsyncMock(return_value=body), create=True):
                 result = await api.handle_config(guard)
-            self.assertIsInstance(result, str)
+            self.assertEqual(result["status"], "error")
             self.assertEqual(guard.config, before)
 
     async def test_search_rejects_unknown_category_and_bounds_query(self):

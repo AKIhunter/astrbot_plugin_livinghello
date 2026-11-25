@@ -53,6 +53,8 @@ python3 -B run_offline_tests.py
 
 `ASTRBOT_NATIVE_SOURCE` 指向含 `core/` 的 AstrBot 包目录。未提供源码时相关集成测试标记跳过，独立回归继续；报告应区分通过和跳过，不能将独立通过当作配套验收。标准库 unittest 也可在设置 `PYTHONPATH` 后从 `tests/` 发现，但根入口更方便。
 
+装了真实宿主时，用例沿用书写时的旧契约（组件用 `url` 构造、路由返回字典、临时部件带 `no_save`）。这套差异由 `tests/host_contract.py` 单向适配：pytest 经 `tests/conftest.py` 安装，unittest 入口在 `run_offline_tests.py` 里安装；插件代码不写兼容分支。宿主再改接口时只改这一处，不要改成两边都兼容的生产逻辑。
+
 原图片事项和映射学习的显式双插件门面：
 
 ```bash

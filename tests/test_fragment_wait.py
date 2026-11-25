@@ -570,7 +570,8 @@ class PipelineTest(unittest.IsolatedAsyncioTestCase):
         await self.finish(a)
         await self.finish(b)
         req = await self.judge(b)
-        self.assertIn(image.url, req.image_urls)
+        # 宿主 4.29 的 fromURL 把地址放在 file 上，url 为空。
+        self.assertIn(image.file, req.image_urls)
         self.assertIn("被引用的问题", req.extra_user_content_parts[0].text)
         self.assertEqual(self.guard._gate_images(b, "1001")[0]["message_id"], "1")
         self.assertIs(a.components[1], image)
