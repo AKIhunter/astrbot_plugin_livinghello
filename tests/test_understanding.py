@@ -324,7 +324,7 @@ class UnderstandingTest(unittest.IsolatedAsyncioTestCase):
             set_model=Mock(), text_chat=AsyncMock(return_value=SimpleNamespace(completion_text="可见文字")))
         self.guard.context = SimpleNamespace(get_provider_by_id=Mock(return_value=provider))
         observation = await self.parse([Image(url="image.png")],
-            understand_image_enabled=True, understand_image_provider_id="own-vision")
+            understand_image_enabled=True, vision_shared_provider_id="own-vision")
         await self.reader.enrich(self.event, observation)
         provider.text_chat.assert_awaited_once()
         self.assertEqual(provider.text_chat.await_args.kwargs["image_urls"], ["image.png"])
@@ -352,7 +352,6 @@ class UnderstandingTest(unittest.IsolatedAsyncioTestCase):
                 self.guard.context = context
                 self.guard.config.update(
                     understand_image_enabled=False, understand_video_enabled=True,
-                    understand_image_provider_id="image-vl",
                     understand_video_provider_id=selected, vision_shared_provider_id=shared,
                 )
                 observation = await self.reader.parse(event)
@@ -390,7 +389,7 @@ class UnderstandingTest(unittest.IsolatedAsyncioTestCase):
         observation = await self.parse(
             [Image(url="image.png"), component("Video", url="clip.mp4")],
             understand_image_enabled=True, understand_video_enabled=True,
-            understand_image_provider_id="router::image-vl",
+            vision_shared_provider_id="router::image-vl",
             understand_video_provider_id="router::video-vl",
         )
         with patch("images.guard_image_budget.fit_sync", return_value=(["image.png"], [])), \
@@ -433,7 +432,7 @@ class UnderstandingTest(unittest.IsolatedAsyncioTestCase):
     async def test_video_hard_timeout_cancels_model_and_counts_preparation_once(self):
         import time
         self.guard.config.update(understand_image_enabled=True, understand_video_enabled=True,
-                                 understand_image_provider_id="image-vl",
+                                 vision_shared_provider_id="image-vl",
                                  understand_video_provider_id="video-vl")
         self.event.message_obj.message = [Image(url="image.png"), component("Video", url="clip.mp4")]
         cancelled = asyncio.Event()
@@ -618,7 +617,7 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         guard = plugin(gate_config(
             expression_takeover_enabled=True,
             understand_image_enabled=True,
-            understand_image_provider_id="own-vision",
+            vision_shared_provider_id="own-vision",
             understand_voice_enabled=True,
         ))
         native = SimpleNamespace(enabled_for=lambda event: True)
@@ -666,7 +665,7 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         guard = plugin(gate_config(
             expression_takeover_enabled=True,
             understand_image_enabled=True,
-            understand_image_provider_id="own-vision",
+            vision_shared_provider_id="own-vision",
         ))
         native = SimpleNamespace(enabled_for=lambda event: True)
         provider = SimpleNamespace(text_chat=AsyncMock())
@@ -693,7 +692,7 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         guard = plugin(gate_config(
             expression_takeover_enabled=True,
             understand_image_enabled=True,
-            understand_image_provider_id="own-vision",
+            vision_shared_provider_id="own-vision",
         ))
         native = SimpleNamespace(enabled_for=lambda event: True)
         provider = SimpleNamespace(
@@ -728,7 +727,7 @@ class ExpressionMediaTest(unittest.IsolatedAsyncioTestCase):
         guard = plugin(gate_config(
             expression_takeover_enabled=True,
             understand_image_enabled=True,
-            understand_image_provider_id="own-vision",
+            vision_shared_provider_id="own-vision",
         ))
         native = SimpleNamespace(enabled_for=lambda event: True)
         provider = SimpleNamespace(

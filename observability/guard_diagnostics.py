@@ -14,7 +14,7 @@ DECISION_FIELDS = frozenset((
     "stage", "parse_reason", "failure_category",
 ))
 SETTING_FIELDS = (
-    "gate_mode", "classifier_provider_id", "vision_provider_id", "vision_shared_provider_id",
+    "gate_mode", "classifier_provider_id", "vision_shared_provider_id",
     "classifier_timeout_seconds", "vision_timeout_seconds", "gate_total_timeout_seconds",
     "reply_primary_timeout_seconds", "reply_fallback_enabled", "watermark_scope",
     "private_watermark_window_seconds", "gate_reply_max_age_seconds",

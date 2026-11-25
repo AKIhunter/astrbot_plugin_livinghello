@@ -20,8 +20,8 @@ function payloadFor(draft, listKeys = []) {
 }
 
 for (const key of [
-  "classifier_provider_id", "vision_provider_id", "vision_shared_provider_id",
-  "understand_image_provider_id", "understand_video_provider_id", "understand_voice_provider_id",
+  "classifier_provider_id", "vision_shared_provider_id",
+  "understand_video_provider_id", "understand_voice_provider_id",
 ]) {
   test(`${key} 清空后仍提交到后端`, () => {
     assert.deepEqual(payloadFor({ [key]: "" }), { [key]: "" });
@@ -30,7 +30,7 @@ for (const key of [
 
 test("保存模型和其他改动时，不丢弃清空的视频或语音选择", () => {
   const draft = { understand_video_provider_id: "", understand_voice_provider_id: "",
-    understand_image_provider_id: "image-vl", fragment_wait_seconds: 4 };
+    fragment_wait_seconds: 4 };
   assert.deepEqual(payloadFor(draft), draft);
 });
 

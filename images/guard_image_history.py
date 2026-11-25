@@ -12,11 +12,11 @@ try:
         MAX_LOOKUP_IMAGES, SUMMARY_LIMIT, SUMMARY_PREFIX, TOOL_NAME, old_images,
     )
     from .guard_media import image_target
-    from .guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+    from .guard_vision_choice import effective_vision_for
 except ImportError:
     from images.image_history import MAX_LOOKUP_IMAGES, SUMMARY_LIMIT, SUMMARY_PREFIX, TOOL_NAME, old_images
     from images.guard_media import image_target
-    from images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+    from images.guard_vision_choice import effective_vision_for
 
 
 class ImageHistory:
@@ -102,9 +102,8 @@ class ImageHistory:
                     return "旧图为空，无法补读。"
             elif not url.startswith(("https://", "http://")) or len(url) > 4096:
                 return "旧图引用格式不可用，请重新引用图片。"
-            # 与图片理解同口径：显式覆盖优先，留空跟随「视觉模型（共用）」。
-            selected = effective_vision_provider(
-                self.plugin.config, UNDERSTAND_OVERRIDE_KEY)
+            # 与图片理解同口径：都用视觉模型，留空跟随会话当前模型。
+            selected = effective_vision_for(self.plugin.config, "image")
             provider, kwargs = await self.plugin._understanding().resolve(selected, event, "vision")
             # 模型解析可能跨越撤回或名单变更；发起外部调用前重新核对授权。
             if not self._scope_is_current(event, scope):

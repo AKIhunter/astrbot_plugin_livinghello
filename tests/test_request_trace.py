@@ -104,7 +104,7 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.guard.config.update(
             understand_image_enabled=True,
-            understand_image_provider_id="own-vision",
+            vision_shared_provider_id="own-vision",
         )
         self.guard.context = SimpleNamespace(
             get_registered_star=lambda _: SimpleNamespace(

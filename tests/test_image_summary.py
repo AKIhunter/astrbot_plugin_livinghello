@@ -117,7 +117,7 @@ class HandoffTest(unittest.TestCase):
     def run_event(self, value, original_urls=None):
         p = plugin(gate_config(
             classifier_provider_id="text::Qwen/Qwen3-8B",
-            vision_provider_id="vision::qwen3-vl-plus"))
+            vision_shared_provider_id="vision::qwen3-vl-plus"))
         models = {"text": Provider(NEED_IMAGE), "vision": Provider(value)}
         p.context = SimpleNamespace(get_provider_by_id=models.get)
         event = GateEvent(mentions=[Image.fromURL(IMAGE["url"])])
@@ -149,7 +149,7 @@ class HandoffTest(unittest.TestCase):
     def test_context_advance_keeps_summary_without_cancelling_reply(self):
         p = plugin(gate_config(
             classifier_provider_id="text::Qwen/Qwen3-8B",
-            vision_provider_id="vision::qwen3-vl-plus"))
+            vision_shared_provider_id="vision::qwen3-vl-plus"))
         event = GateEvent(mentions=[Image.fromURL(IMAGE["url"])])
 
         class Revising(Provider):
@@ -171,7 +171,7 @@ class HandoffTest(unittest.TestCase):
         for summary, expected_stop in [(visual_output(),False),(output(),True)]:
             p = plugin(gate_config(
                 classifier_provider_id="text::Qwen/Qwen3-8B",
-                vision_provider_id="vision::qwen3-vl-plus"))
+                vision_shared_provider_id="vision::qwen3-vl-plus"))
             models={"text":Provider(NEED_IMAGE),"vision":Provider(summary)}
             async def text_reply(origin):
                 return Provider(model="deepseek-flash",modalities=["text","image"])
@@ -260,12 +260,12 @@ class VisionListTest(unittest.TestCase):
         self.assertEqual(len(entries), 6)
 
     def test_schema_has_separate_text_and_visual_options(self):
-        schema = {"classifier_provider_id":{}, "vision_provider_id":{}}
+        schema = {"classifier_provider_id":{}, "vision_shared_provider_id":{}}
         p = SimpleNamespace(context=SimpleNamespace(get_registered_star=lambda name:
             SimpleNamespace(config=SimpleNamespace(schema=schema))))
         _write_schema_options(p, ["text","vision"], ["vision"])
         self.assertEqual(schema["classifier_provider_id"]["options"], ["","text","vision"])
-        self.assertEqual(schema["vision_provider_id"]["options"], ["","vision"])
+        self.assertEqual(schema["vision_shared_provider_id"]["options"], ["","vision"])
 
 
 if __name__ == "__main__":

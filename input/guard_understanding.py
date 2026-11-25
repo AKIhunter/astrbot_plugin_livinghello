@@ -23,13 +23,13 @@ try:
     from ..reply.guard_expression import takeover
     from ..images.guard_media import image_target
     from ..reply.guard_reply_delivery import number
-    from ..images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, VIDEO_OVERRIDE_KEY, effective_vision_provider
+    from ..images.guard_vision_choice import effective_vision_for
 except ImportError:
     from reply.guard_reply_health import report_model_fault
     from reply.guard_expression import takeover
     from images.guard_media import image_target
     from reply.guard_reply_delivery import number
-    from images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, VIDEO_OVERRIDE_KEY, effective_vision_provider
+    from images.guard_vision_choice import effective_vision_for
 
 
 def read(value, *names, default=""):
@@ -250,6 +250,25 @@ class Understanding:
                     notes[start] += "\n[画面未读；只可使用上面的OCR文字证据，勿猜测其余内容]"
                 states.append(state)
                 observation.errors.append("vision:" + type(exc).__name__)
+                # 只在失败分支记录，且不输出 URL 本体：签名参数可能带凭据。
+                try:
+                    parts = []
+                    for offset, url in enumerate(batch):
+                        index = start + offset
+                        source = (observation.image_sources[index]
+                                  if index < len(observation.image_sources) else {}) or {}
+                        text = str(url)
+                        scheme = text.split(":", 1)[0] if ":" in text else "local"
+                        parts.append("%s/%s/file=%s/age=%s" % (
+                            str(source.get("source") or "?")[:12], scheme[:8],
+                            "y" if source.get("file_id") else "n",
+                            source.get("age_seconds", "-")))
+                    self.plugin.logger.warning(
+                        "[LivingHello] 图片理解失败 state=%s err=%s:%s 来源=%s",
+                        state, type(exc).__name__, str(exc)[:80],
+                        " | ".join(parts) or "无")
+                except Exception:
+                    pass
                 if str(exc) not in {"image_budget_exceeded", "image_call_budget_exhausted",
                                     "image_policy_changed", "image_superseded",
                                     "image_download_unavailable"}:
@@ -654,8 +673,7 @@ class Understanding:
             try:
                 if visual:
                     # 各自覆盖优先，留空跟随共用项；视频不能借用图片理解的覆盖值。
-                    selected = effective_vision_provider(
-                        self.config, VIDEO_OVERRIDE_KEY if role == "video" else UNDERSTAND_OVERRIDE_KEY)
+                    selected = effective_vision_for(self.config, role)
                 else:
                     selected = self.config.get("understand_voice_provider_id", "")
                 provider, kwargs = await self.resolve(selected, event, "vision" if visual else role)

@@ -40,9 +40,9 @@ except ImportError:
     )
 
 try:
-    from ..images.guard_vision_choice import GATE_OVERRIDE_KEY, effective_vision_provider
+    from ..images.guard_vision_choice import effective_vision_for
 except ImportError:
-    from images.guard_vision_choice import GATE_OVERRIDE_KEY, effective_vision_provider
+    from images.guard_vision_choice import effective_vision_for
 
 try:
     from ..integrations.guard_livingemotion import is_state_line
@@ -753,8 +753,8 @@ class GateEngine:
         return ""
 
     def vision_label(self) -> str:
-        # 显式覆盖优先；留空跟随「视觉模型（共用）」；都为空时保持原逻辑。
-        return effective_vision_provider(self.config, GATE_OVERRIDE_KEY)
+        # 判定看图用视觉模型；留空时保持「跟随会话模型」的原逻辑。
+        return effective_vision_for(self.config, "gate")
 
     def vision_timeout(self) -> float:
         # 上限与页面/schema 同步放宽到 20 秒，避免保存后被这里静默夹回。

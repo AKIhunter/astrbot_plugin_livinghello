@@ -91,7 +91,7 @@ class FlowTest(unittest.TestCase):
     def make_plugin(self, text_values, vision_values, ttl=300):
         p = plugin(gate_config(
             classifier_provider_id="text::Qwen/Qwen3-8B",
-            vision_provider_id="vision::qwen3-vl-plus",
+            vision_shared_provider_id="vision::qwen3-vl-plus",
             gate_image_cache_ttl_seconds=ttl, gate_min_length=1))
         models = {"text": Provider(*text_values), "vision": Provider(*vision_values)}
         p.context = SimpleNamespace(get_provider_by_id=models.get)

@@ -4,9 +4,9 @@ from __future__ import annotations
 import copy
 
 try:
-    from ..images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+    from ..images.guard_vision_choice import effective_vision_for
 except ImportError:
-    from images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+    from images.guard_vision_choice import effective_vision_for
 
 GATE = [
     ("input", "候选输入", "取得当前消息、上一句、上下文；名单先于参与判断和观察模式生效。"),
@@ -89,8 +89,8 @@ def build_flow(config, native=None, decision=None, inputs=None, replay=None):
         固定人格=native.get("fixed_persona_id") or "尚未由此页固定",
         回退模型=values.get("fallback_provider_ids", []))
     plan["perception"]["evidence"].update(
-        # 展示实际生效值：显式覆盖优先，留空跟随「视觉模型（共用）」。
-        图片理解=effective_vision_provider(config, UNDERSTAND_OVERRIDE_KEY) or "跟随会话当前模型",
+        # 判定看图和图片理解共用视觉模型；留空即跟随会话当前模型。
+        图片理解=effective_vision_for(config, "image") or "跟随会话当前模型",
         说明="配套插件启用状态与具体工具结果需以实际会话记录为准")
     plan["emotion"]["evidence"]["LivingEmotion 开关"] = config.get("coupling_livingemotion_enabled", False)
     plan["retrieve"]["evidence"]["LivingMemory 开关"] = config.get("coupling_livingmemory_enabled", False)

@@ -46,7 +46,7 @@ class MultimodalTest(unittest.TestCase):
         images = [IMAGE] if images is None else images
         engine = GateEngine(gate_config(
             classifier_provider_id="text::Qwen/Qwen3-8B",
-            vision_provider_id="vision::qwen3-vl-plus", **config),
+            vision_shared_provider_id="vision::qwen3-vl-plus", **config),
             None, SimpleNamespace(debug=lambda *_: None))
 
         async def resolve_text():
@@ -289,7 +289,7 @@ class ImageSourceTest(unittest.TestCase):
     def test_event_pipeline_passes_images_to_classifier_and_reply(self):
         p = plugin(gate_config(
             classifier_provider_id="text::Qwen/Qwen3-8B",
-            vision_provider_id="vision::qwen3-vl-plus"))
+            vision_shared_provider_id="vision::qwen3-vl-plus"))
         text = Provider(NEED_IMAGE, model="Qwen/Qwen3-8B")
         vision = Provider(output())
         p.context = SimpleNamespace(get_provider_by_id=lambda name:
@@ -307,7 +307,7 @@ class ImageSourceTest(unittest.TestCase):
     def test_event_pipeline_does_not_send_on_visual_silence(self):
         p = plugin(gate_config(
             classifier_provider_id="text::Qwen/Qwen3-8B",
-            vision_provider_id="vision::qwen3-vl-plus"))
+            vision_shared_provider_id="vision::qwen3-vl-plus"))
         providers = {"text": Provider(NEED_IMAGE),
                      "vision": Provider(output("silent", 5, True, "no_value"))}
         p.context = SimpleNamespace(get_provider_by_id=providers.get)

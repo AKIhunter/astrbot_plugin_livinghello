@@ -167,7 +167,7 @@ flowchart TD
 - **参与判断图片**：只有图片内容决定“该不该接话”时才调用视觉判断。
 - **输入理解图片**：即使原生 @ 直接放行，也要让主回复知道当前或被引用图片的可见内容。
 
-LivingHello 使用自己的 `understand_image_provider_id` 执行输入图片理解。与配套插件联用时：
+LivingHello 使用自己的 `vision_shared_provider_id`（视觉模型）执行输入图片理解。与配套插件联用时：
 
 - 配套插件继续处理引用作者、文字、转发、卡片、语音、记忆和人格；
 - LivingHello 声明本轮图片所有权；

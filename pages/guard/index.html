@@ -2096,8 +2096,7 @@
     { key: "classifier_outage_self_heal_seconds", label: "故障自愈放行", type: "number", min: 0, max: 86400, step: 60, unit: "秒", advanced: true },
   ];
   const VISION_FIELDS = [
-    { key: "vision_shared_provider_id", label: "视觉模型（共用）", type: "provider" },
-    { key: "vision_provider_id", label: "判定看图模型（可选覆盖）", type: "provider" },
+    { key: "vision_shared_provider_id", label: "视觉模型", type: "provider" },
     { key: "gate_main_fallback_enabled", label: "主模型兜底", type: "bool" },
     { key: "gate_image_cache_ttl_seconds", label: "图片含义缓存", type: "number", min: 0, max: 1800, step: 1, unit: "秒", advanced: true },
     { key: "vision_timeout_seconds", label: "多模态超时", type: "number", min: 1, max: 20, step: 0.1, unit: "秒", advanced: true },
@@ -2148,12 +2147,11 @@
     { key: "understand_quote_depth", label: "引用链展开层数", type: "number", min: 0, max: 8, step: 1, unit: "层" },
     { key: "understand_card_parse", label: "解析卡片和小程序", type: "bool" },
     { key: "understand_image_enabled", label: "图片理解", type: "bool" },
-    { key: "understand_image_provider_id", label: "图片理解模型（可选覆盖）", type: "provider", role: "vision" },
     { key: "understand_gif_enabled", label: "动图按首帧理解", type: "bool" },
     { key: "understand_video_enabled", label: "视频理解", type: "bool" },
     { key: "understand_video_max_seconds", label: "视频最长处理时长", type: "number", min: 3, max: 120, step: 1, unit: "秒" },
     { key: "understand_video_frames", label: "视频抽帧张数", type: "number", min: 1, max: 12, step: 1, unit: "张" },
-    { key: "understand_video_provider_id", label: "视频理解模型（可选覆盖）", type: "provider", role: "vision" },
+    { key: "understand_video_provider_id", label: "视频理解模型", type: "provider", role: "vision" },
     { key: "understand_voice_enabled", label: "语音转文字理解", type: "bool" },
     { key: "understand_voice_provider_id", label: "语音理解模型", type: "provider", role: "speech" },
   ];
@@ -2207,8 +2205,7 @@
     classifier_provider_id: { desc: "负责先判断是否接话的文字小模型，不负责写回复。留空会跟随会话主模型。", ex: "选择「Qwen/Qwen3-8B（锁定上游）」：日常文字判断固定用它。" },
     classifier_timeout_seconds: { desc: "只限制一次文字判定的等待时间（1–15 秒），超时则静默。", ex: "设 10 秒：文字模型超过 10 秒还没返回，本次不主动回复。" },
     gate_min_length: { desc: "归一化后的文字太短就跳过判断；有可用图片的消息除外。设 0 关闭长度过滤。", ex: "设 2 字：「嗯」会被过滤，「怎么打」可以进入判断；纯图片仍可走看图流程。" },
-    vision_shared_provider_id: { desc: "判定看图、图片理解和视频理解默认都用这个模型。各自的模型项只做单独覆盖，填了就优先于本项；本项留空时，各项按自己的覆盖值或会话模型选择（判定看图仍按主模型兜底开关处理）。", ex: "三项都用同一个：只填本项，三个覆盖项留空；只有判定要换：再单独填「判定看图模型」。" },
-    vision_provider_id: { desc: "只覆盖判定看图的多模态小模型，同时给回复模型提供图片摘要；正常静默不会再兜底。留空跟随「视觉模型（共用）」；共用也为空时按主模型兜底开关处理。", ex: "选 qwen3-vl-plus：看图判断并提取摘要；摘要不足时回复仍需原图。留空则跟随共用视觉模型。" },
+    vision_shared_provider_id: { desc: "判定看图和图片理解统一用这个模型，图片侧没有单独的覆盖项。留空时两项各自跟随会话当前模型（判定看图仍按主模型兜底开关处理）。视频理解是独立的一项，不受这里影响。", ex: "选 qwen3-vl-plus：判定和图片理解都用它；不确定就留空，跟随会话当前模型。" },
     gate_image_cache_ttl_seconds: { desc: "同完整会话、同视觉配置的相同图片，可短时复用已有观察；每条新消息仍重新判断是否参与。0关闭。", ex: "设300秒：5分钟内再次聊到已识别的图，文字模型直接参考缓存摘要；命中不续期，改模型或重载后重新识别。" },
     vision_timeout_seconds: { desc: "只限制一次多模态判断（1–20 秒）；超时或调用失败时，才尝试已开启的主模型兜底。实际等待仍受整条判定时限截断。", ex: "设 15 秒：看图模型超过 15 秒未返回，再检查能否用会话主模型兜底。" },
     gate_main_fallback_enabled: { desc: "多模态模型异常时，让当前会话主模型再判断一次；主模型必须支持图片。", ex: "开启：多模态接口报错 → 主模型兜底；多模态正常说「不该回」就到此结束。" },
@@ -2272,7 +2269,6 @@
     understand_quote_depth: { desc: "引用链往上追几层；层数越多越看得懂「他在回谁」，也更费 token。", ex: "设 3 层：A 引用 B、B 引用 C，会读到 C；设 0 只看直接引用。" },
     understand_card_parse: { desc: "解析分享卡片和小程序链接的标题与简介，避免只看到一串 URL。", ex: "开启：B 站分享卡片能读到视频标题；关闭只剩链接。" },
     understand_image_enabled: { desc: "开启后在消息理解选择视觉模型；QQ图片刷新一次，平台OCR提供文字证据，视觉模型补充画面。下载单张最多8秒，失败保留已有证据；关闭后交给宿主或配套插件。", ex: "文字截图：先保留OCR文字，画面没读到时明确说明，不根据文字猜图。" },
-    understand_image_provider_id: { desc: "只覆盖回复前的图片理解，需支持图片输入。留空跟随「视觉模型（共用）」；共用也为空时跟随会话当前模型。", ex: "选 qwen3-vl-plus：图片理解固定用它；留空则与共用视觉模型一致。" },
     understand_voice_enabled: { desc: "是否把语音转成文字再判断；关闭则忽略语音内容。", ex: "开启：有人发语音时先转文字，再判断要不要接话。" },
     understand_voice_provider_id: { desc: "语音转写用的模型，需支持音频输入或原生 STT。清空并保存后跟随会话原生 STT；会话未配置 STT 时明确提示转写失败。", ex: "选原生 STT：用宿主语音识别转写。" },
     reply_recall_group: { desc: "群消息在判定或生成期间被撤回，就放弃这条回复。", ex: "开启：对方发完立刻撤回，机器人不再追着回。" },
@@ -2332,8 +2328,7 @@
     classifier_provider_id: "留空：不同会话会跟随各自主模型，成本和评分尺度可能随会话变化。",
     classifier_timeout_seconds: "设 1 秒：网络稍慢就会静默，适合低延迟优先但可能漏掉正常消息。",
     gate_min_length: "设 0：关闭短句过滤，「嗯」「好」也会进入模型判断，但不代表一定回复。",
-    vision_shared_provider_id: "留空：判定看图、图片理解和视频理解各自按覆盖值或会话模型选择；判定看图仍受主模型兜底开关控制。",
-    vision_provider_id: "留空并关闭主模型兜底：文字判断确认必须看图时，本次保持静默。",
+    vision_shared_provider_id: "留空：判定看图和图片理解各自跟随会话当前模型；判定看图仍受主模型兜底开关控制。",
     gate_image_cache_ttl_seconds: "设 0：相同图片每次都重新识别，模型调用更多，但不会复用旧摘要。",
     vision_timeout_seconds: "设 10 秒：给看图模型更多时间，代价是图片消息的判定等待更长。",
     gate_main_fallback_enabled: "关闭：多模态调用失败后直接静默，不再让会话主模型重复看图。",
@@ -2579,10 +2574,8 @@
       const select = document.createElement("select");
       const follow = document.createElement("option");
       follow.value = "";
-      follow.textContent = field.key === "vision_provider_id" || field.key === "understand_image_provider_id"
-        || field.key === "understand_video_provider_id"
-        ? "跟随「视觉模型（共用）」"
-        : field.key === "vision_shared_provider_id" ? "不共用（各自跟随会话当前模型）"
+      follow.textContent = field.key === "understand_video_provider_id"
+        ? "跟随「视觉模型」"
         : field.role === "tts" ? "跟随会话原生TTS"
         : field.role === "speech" ? "跟随会话原生STT"
         : "跟随会话当前模型";
@@ -2590,8 +2583,7 @@
       const candidates = (state.data.providers || []).filter(p =>
         field.role === "tts" ? p.role === "tts"
         : field.role === "speech" ? p.supports_audio === true
-        : field.role === "vision" || field.key === "vision_provider_id"
-          || field.key === "vision_shared_provider_id" ? p.supports_images === true
+        : field.role === "vision" || field.key === "vision_shared_provider_id" ? p.supports_images === true
         : !p.role || p.role === "chat");
       // 显示用户自己给上游起的名字（name），不暴露 provider:upstream_N 这种内部标识；
       // 原生 provider 与路由上游分组展示，两类都能直接选。
@@ -2655,10 +2647,9 @@
       const initial = value || "";
       const paint = () => {
         tip.textContent = select.value ? "当前选择：" + select.options[select.selectedIndex]?.textContent
-          : field.key === "vision_shared_provider_id" ? "未共用；各项按自己的覆盖值或会话模型选择。"
-          : field.key === "vision_provider_id" || field.key === "understand_image_provider_id"
-            || field.key === "understand_video_provider_id"
-            ? "未覆盖；跟随共用视觉模型，共用为空时跟随会话模型。"
+          : field.key === "vision_shared_provider_id" ? "未选；判定看图和图片理解跟随会话当前模型。"
+          : field.key === "understand_video_provider_id"
+            ? "未选；跟随视觉模型，视觉模型也为空时跟随会话模型。"
           : providerHint("");
         if (select.value !== initial) {
           // 分数尺度是跟模型走的，换模型不重标定等于沿用别人的阈值。
@@ -2991,7 +2982,6 @@
       empty_mention_persona_prompt: currentConfig("empty_mention_mode") === "persona",
       gate_main_fallback_timeout_seconds: currentConfig("gate_main_fallback_enabled") === true,
       reply_typing_chars_per_second: currentConfig("expression_takeover_enabled") === true,
-      understand_image_provider_id: currentConfig("expression_takeover_enabled") === true && currentConfig("understand_image_enabled") === true,
       understand_voice_provider_id: currentConfig("expression_takeover_enabled") === true && currentConfig("understand_voice_enabled") === true,
       reply_quote_enabled: currentConfig("expression_takeover_enabled") === true,
       expression_private_reuse: currentConfig("expression_takeover_enabled") === true,

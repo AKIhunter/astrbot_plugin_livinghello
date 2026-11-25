@@ -181,13 +181,6 @@
     "description": "图片理解",
     "hint": "开启后在LivingHello控制台「消息理解」选择视觉模型；QQ图片刷新一次并读取平台OCR文字，下载单张最多8秒，画面继续由视觉模型理解。失败保留已有文字证据。关闭后不运行本链路，交给宿主或配套插件。"
   },
-  "understand_image_provider_id": {
-    "type": "string",
-    "default": "",
-    "description": "图片理解模型（可选覆盖）",
-    "editor_mode": "select_provider",
-    "hint": "只覆盖回复前的图片理解。留空跟随「视觉模型（共用）」；共用项也为空时跟随支持图片的会话模型。"
-  },
   "understand_gif_enabled": {
     "type": "bool",
     "default": true,
@@ -225,9 +218,9 @@
   "understand_video_provider_id": {
     "type": "string",
     "default": "",
-    "description": "视频理解模型（可选覆盖）",
+    "description": "视频理解模型",
     "editor_mode": "select_provider",
-    "hint": "只覆盖视频抽帧后的描述模型；留空跟随「视觉模型（共用）」，共用项也为空时跟随支持图片的会话模型。清空并保存即可移除视频覆盖，不受图片模型覆盖值影响。"
+    "hint": "视频抽帧后的描述模型，独立于「视觉模型」。留空跟随视觉模型，视觉模型也为空时跟随支持图片的会话模型。"
   },
   "understand_voice_enabled": {
     "type": "bool",
@@ -315,16 +308,10 @@
     "hint": "范围10-300秒。补答会重放原请求上下文，超时视为补答失败，不阻断原响应流程。"
   },
   "vision_shared_provider_id": {
-    "description": "视觉模型（共用）",
+    "description": "视觉模型",
     "type": "string",
     "default": "",
-    "hint": "判定看图、图片理解和视频理解默认都用这个模型。各自的模型项只用于单独覆盖：留空跟随共用项，填了就以覆盖值为准。本项留空时，各项按自己的覆盖值或会话模型选择（判定看图仍按主模型兜底开关处理）。"
-  },
-  "vision_provider_id": {
-    "description": "判定看图模型（可选覆盖）",
-    "type": "string",
-    "default": "",
-    "hint": "只覆盖文字层需要看图时调用的多模态小模型，同时返回图片摘要和不确定点供回复参考。仅列出可确认图片能力的候选；摘要不足时仍需原图。留空跟随「视觉模型（共用）」；共用项也为空时按主模型兜底开关处理。"
+    "hint": "判定看图和图片理解统一用这个模型。留空时两项各自跟随会话当前模型（判定看图仍按主模型兜底开关处理）。仅列出可确认图片能力的候选；视频理解是独立的一项，不受这里影响。"
   },
   "gate_image_cache_ttl_seconds": {
     "description": "图片观察缓存时间（秒）",
