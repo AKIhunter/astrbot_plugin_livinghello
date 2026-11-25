@@ -1943,11 +1943,18 @@ class Main(Star):
         return ""
 
     def _note_proactive_skip(self, event: AstrMessageEvent, reason: str) -> None:
-        """记录「这条群消息为什么没补判定」。同群同原因 10 秒内只打一条。"""
+        """记录「这条消息为什么没补判定」。同会话同原因 10 秒内只打一条。"""
         try:
             group_key = self._group_key(event)
         except Exception:
             group_key = "?"
+        # 私聊也会走到这里（reason=not_group_message），按会话类型选词，
+        # 否则日志会印成「群消息未补判定 gid=...FriendMessage...」自相矛盾。
+        try:
+            kind = ("群消息" if event.get_message_type() == MessageType.GROUP_MESSAGE
+                    else "私聊消息")
+        except Exception:
+            kind = "消息"
         cache = getattr(self, "_proactive_skip_seen", None)
         if cache is None:
             cache = self._proactive_skip_seen = {}
@@ -1961,8 +1968,8 @@ class Main(Star):
                 cache.pop(key, None)
         try:
             self.logger.warning(
-                "[LivingHello] 群消息未补判定 gid=%s reason=%s explicit=%s targets=%s",
-                group_key, reason,
+                "[LivingHello] %s未补判定 key=%s reason=%s explicit=%s targets=%s",
+                kind, group_key, reason,
                 bool(getattr(event, "is_at_or_wake_command", False)),
                 len(self._mention_targets(event)),
             )

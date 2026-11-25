@@ -1,6 +1,7 @@
 """普通群消息主动判定（proactive_group_judge）的离线回归。"""
 import time
 import unittest
+from unittest.mock import Mock
 
 from astrbot.api.message_components import At, Plain
 from input.guard_fragments import FragmentWait
@@ -85,6 +86,24 @@ class ProactiveGroupJudgeTest(unittest.IsolatedAsyncioTestCase):
 
         private = JudgeEvent("这个任务怎么做", group="")
         self.assertEqual(await self.trigger(private), [])
+
+    async def test_skip_log_wording_follows_session_kind(self):
+        # 私聊也会走「未补判定」，日志用词必须跟着会话类型，别印成「群消息」。
+        self.guard.logger = Mock()
+        await self.trigger(JudgeEvent("这个任务怎么做", group=""))
+        args = self.guard.logger.warning.call_args[0]
+        self.assertIn("未补判定", args[0])
+        self.assertIn("key=", args[0])
+        self.assertEqual(args[1], "私聊消息")
+        self.assertEqual(args[3], "not_group_message")
+
+        self.guard = plugin(group_config(message_whitelist_groups=["2002"]), self.provider)
+        self.guard.logger = Mock()
+        await self.trigger(JudgeEvent("这个任务怎么做", group="1001"))
+        args = self.guard.logger.warning.call_args[0]
+        self.assertEqual(args[1], "群消息")
+        # 1001 不在白名单 2002 里，原因要落成名单拒绝而不是「非群消息」。
+        self.assertEqual(args[3], "policy_outside_whitelist")
 
     async def test_off_mode_keeps_host_only_behavior(self):
         self.guard = plugin(group_config(proactive_group_judge="off"), self.provider)
