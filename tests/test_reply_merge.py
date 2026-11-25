@@ -11,7 +11,7 @@ from astrbot.core.agent.message import TextPart
 from prompt_bundle import offer
 from reply import guard_prompt_injection as prompt
 from reply.guard_native_reply import managed_regex
-from reply.guard_reply_merge import merge_text_parts
+from reply.guard_reply_merge import deduplicate_text_chain, merge_text_parts
 from reply.guard_segments import ReplySegments
 
 
@@ -19,6 +19,8 @@ from reply.guard_segments import ReplySegments
 PRE_TOOL = "原来的设置保留。开启新功能的时候，会自动刷新，不用手动操作。\n\n设置已确认。按这个方案执行～"
 POST_TOOL = "原来的设置保留。开启新功能后，会自动刷新，不用手动操作。\n\n设置已确认。按这个方案执行～"
 DELTA = "开启新功能后，会自动刷新，不用手动操作。"
+PUNCT_PRE = "记下了，以后新功能都自动刷新。"
+PUNCT_POST = "记下了。以后新功能，都自动刷新。"
 
 
 class Event:
@@ -122,6 +124,40 @@ class ReplyMergeTests(unittest.TestCase):
         for _ in range(2):
             self.assertEqual(merge_text_parts(["正文。", "正文。"]), "正文。")
 
+    def test_punctuation_and_whitespace_only_changes_are_duplicates(self):
+        for second in (PUNCT_POST, "记下了 以后新功能都自动刷新",
+                       " 记下了。\t以后新功能， 都自动刷新！\n"):
+            with self.subTest(second=second):
+                self.assertEqual(merge_text_parts([PUNCT_PRE, second]), PUNCT_PRE)
+
+    def test_changed_sentence_boundaries_still_keep_new_tail(self):
+        for second in (PUNCT_POST + "另有补充。",
+                       "记下了！以后新功能都自动刷新。\n\n另有补充。"):
+            with self.subTest(second=second):
+                self.assertEqual(merge_text_parts([PUNCT_PRE, second]),
+                                 PUNCT_PRE + "\n\n另有补充。")
+
+    def test_duplicate_sentence_keeps_original_first_wording(self):
+        self.assertEqual(merge_text_parts(["已确认！", "已 确认。还有补充。"]),
+                         "已确认！\n\n还有补充。")
+        self.assertEqual(merge_text_parts(["已确认。", "已确认还有补充。"]),
+                         "已确认。已确认还有补充。")
+
+    def test_single_body_and_punctuation_only_parts_remain_untouched(self):
+        text = PUNCT_PRE + PUNCT_POST
+        self.assertEqual(merge_text_parts([text]), text)
+        self.assertEqual(merge_text_parts(["！？", "！！"]), "！？！！")
+
+    def test_words_numbers_and_quoted_variants_are_not_normalized_away(self):
+        for first, second in (
+            (PUNCT_PRE, "记下了。以后新功能都手动刷新。"),
+            ("数值是 1.25。", "数值是 12.5。"),
+            ("他说「已确认。」", "他说「已确认！」"),
+            ("curl https://example.invalid/a.b", "curl https://example.invalid/ab"),
+        ):
+            with self.subTest(first=first):
+                self.assertEqual(merge_text_parts([first, second]), first + second)
+
 
 class SegmentMergeTests(unittest.TestCase):
     def prepare(self, components, *, streaming=False, **raw):
@@ -203,6 +239,39 @@ class SegmentMergeTests(unittest.TestCase):
         ):
             self.assertFalse(ReplySegments(guard(**raw)).prepare(Event(), result))
             self.assertEqual(texts(result), ["重复", "重复"])
+
+    def test_early_merge_keeps_first_component_and_new_content(self):
+        first = Plain(PUNCT_PRE)
+        result = Chain([first, Plain(PUNCT_POST + "另有补充。")])
+        segments, event = ReplySegments(guard()), Event()
+        self.assertTrue(segments.deduplicate(event, result))
+        self.assertIs(result.chain[0], first)
+        self.assertFalse(segments.deduplicate(event, result))
+        self.assertTrue(segments.prepare(event, result))
+        self.assertEqual(texts(result), [PUNCT_PRE, "另有补充。"])
+
+    def test_early_merge_does_not_change_nonduplicates_or_media(self):
+        first, second = Plain("新"), Plain("内容")
+        chain = [first, second]
+        self.assertFalse(deduplicate_text_chain(chain))
+        self.assertEqual(chain, [first, second])
+        image = Image.fromURL("https://example.invalid/media")
+        chain = [Plain(PUNCT_PRE), image, Plain(PUNCT_POST), Plain(PUNCT_PRE)]
+        self.assertTrue(deduplicate_text_chain(chain))
+        self.assertIs(chain[1], image)
+        self.assertEqual([c.text for c in chain if isinstance(c, Plain)],
+                         [PUNCT_PRE, PUNCT_POST])
+
+    def test_early_merge_leaves_single_body_and_host_managed_result_alone(self):
+        text = PUNCT_PRE + PUNCT_POST
+        for result, raw in (
+            (Chain([Plain(text)]), {}),
+            (Chain([Plain(PUNCT_PRE), Plain(PUNCT_POST)], llm=False), {}),
+            (Chain([Plain(PUNCT_PRE), Plain(PUNCT_POST)]), {"regex": "(?s).+"}),
+        ):
+            before = list(result.chain)
+            self.assertFalse(ReplySegments(guard(**raw)).deduplicate(Event(), result))
+            self.assertEqual(result.chain, before)
 
 
 class ToolReplyPromptTests(unittest.TestCase):

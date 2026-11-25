@@ -2,7 +2,7 @@
 
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
-[![Version](https://img.shields.io/badge/version-2.10.0-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.10.1-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -62,5 +62,5 @@ Private image prompts, mapping files and learned data remain local.
 Classifier, vision, TTS and image requests can incur provider charges.
 Developer: [AKIhunter](https://github.com/AKIhunter). Feedback QQ group: 991350637.
 
-Version **2.10.0** adds a diagnostic ZIP download at the top of `guard` for the last 72 hours. Independent records are capped at 32 MiB with 1 MiB files and automatic expiry cleanup every minute. Export makes no model calls and requires no configuration migration. LivingEmotion 0.8.0 provides its own export; each plugin works independently. See the [diagnostic guide](docs/diagnostics.md).
+Version **2.10.1** removes repeated pre-tool and post-tool text even when chat punctuation differs. Deduplication runs before other plugins fold text components, retaining the first wording and new content; LE closing text still reaches final segmentation. No new settings or configuration migration are required. See [reply deduplication](docs/reply-merge-dedup.md). The last-72-hour diagnostic export remains available; see the [diagnostic guide](docs/diagnostics.md).
 See the [fallback guide](docs/reply_fallback.md) and [changelog](CHANGELOG.md).

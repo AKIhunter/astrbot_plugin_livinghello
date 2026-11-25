@@ -3,7 +3,7 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.10.0-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.10.1-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -116,4 +116,4 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 判定、图片理解、文字试跑、TTS和生图可能产生所选Provider费用。
 离线测试使用假模型和假发送，不代表真实模型效果或平台最终送达。
 
-当前版本 **2.10.0** 可在 `guard` 页面顶部一键导出近3天的脱敏诊断包。独立记录最多32 MiB，单文件1 MiB，每分钟自动清理过期文件；导出不调用模型，无需迁移配置。配套 LE 0.8.0 提供各自诊断入口，两个插件均可独立导出。详见[诊断日志](docs/diagnostics.md)和[更新日志](CHANGELOG.md)。
+当前版本 **2.10.1** 修复工具前后正文仅标点不同仍重复发送的问题：在其他插件合并文本前去重，保留首份正文和后续新增内容，LE 追加的晚安仍参与最终分段。无需新增设置或迁移配置。详见[回复去重](docs/reply-merge-dedup.md)和[更新日志](CHANGELOG.md)；近3天诊断导出继续可用，见[诊断日志](docs/diagnostics.md)。

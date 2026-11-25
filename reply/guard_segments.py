@@ -12,7 +12,7 @@ try:
                                        punct_space_mode, preserve_punctuation)
     from .guard_native_reply import managed_options, second_period_regex
     from .guard_prompt_injection import preset_text, request_config
-    from .guard_reply_merge import merge_text_parts
+    from .guard_reply_merge import deduplicate_text_chain, merge_text_parts
     from ..observability.guard_request_trace import emit
     from .guard_thinking_filter import strip_thinking
 except ImportError:
@@ -21,7 +21,7 @@ except ImportError:
                                           punct_space_mode, preserve_punctuation)
     from reply.guard_native_reply import managed_options, second_period_regex
     from reply.guard_prompt_injection import preset_text, request_config
-    from reply.guard_reply_merge import merge_text_parts
+    from reply.guard_reply_merge import deduplicate_text_chain, merge_text_parts
     from observability.guard_request_trace import emit
     from reply.guard_thinking_filter import strip_thinking
 
@@ -54,6 +54,16 @@ class ReplySegments:
 
     def active(self, event):
         return managed_options(self.config(event)) is not None
+
+    def deduplicate(self, event, result):
+        if (not self.active(event) or result is None
+                or not result.is_llm_result() or not result.chain):
+            return False
+        before = len(result.chain)
+        changed = deduplicate_text_chain(result.chain)
+        if changed:
+            emit(event, "reply_merge", "success", before=before, after=len(result.chain))
+        return changed
 
     @staticmethod
     def structured(text):

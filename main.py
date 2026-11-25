@@ -3187,6 +3187,12 @@ class Main(Star):
             event.set_extra("_livinghello_reply_approved", True)
             self._reply_health().watch(event, expected=True)
 
+    @filter.on_decorating_result(priority=maxsize)
+    async def deduplicate_before_decoration(self, event: AstrMessageEvent):
+        # 表情等插件会合并相邻 Plain；必须在来源边界消失前比较本轮正文。
+        # 这里只去重，分段仍在最终复核处执行，以包含 LE 追加的晚安。
+        self.segments.deduplicate(event, event.get_result())
+
     @filter.on_decorating_result(priority=-maxsize)
     async def recheck_before_send(self, event: AstrMessageEvent):
         reason = self._policy_send_reason(event)

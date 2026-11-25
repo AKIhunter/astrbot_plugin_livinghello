@@ -928,7 +928,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     mark("最近判定")
 
     data = {
-        "version": "2.10.0",
+        "version": "2.10.1",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
         "config": config,

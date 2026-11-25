@@ -25,7 +25,7 @@ from test_reply_delivery import Chain, Event, recall
 SOURCE = Path(os.environ.get("ASTRBOT_NATIVE_SOURCE", "/nonexistent-astrbot-source"))
 
 
-def stages(guard):
+def stages(guard, intermediate_decorator=None):
     def bounded_text(value, maximum):
         raw = str(value or "").encode("utf-8")
         return raw[:maximum].decode("utf-8", errors="ignore")
@@ -54,6 +54,10 @@ def stages(guard):
         star_map={"at_guard": SimpleNamespace(name="at_guard")},
         EventType=SimpleNamespace(OnDecoratingResultEvent="decorate", OnAfterMessageSentEvent="after"),
         star_handlers_registry=SimpleNamespace(get_handlers_by_event_type=lambda *a, **kw: [
+            SimpleNamespace(handler_module_path="at_guard", handler_name="reply_merge",
+                            handler=guard.deduplicate_before_decoration),
+            *([SimpleNamespace(handler_module_path="at_guard", handler_name="peer_decoration",
+                               handler=intermediate_decorator)] if intermediate_decorator else []),
             SimpleNamespace(handler_module_path="at_guard", handler_name="reply_modes",
                             handler=guard.recheck_before_send)]),
         SessionServiceManager=SimpleNamespace(should_process_tts_request=AsyncMock(return_value=True)),
@@ -111,7 +115,7 @@ class NativePipelineTests(unittest.IsolatedAsyncioTestCase):
     async def run_pipeline(self, text="第一句。第二句！", segments=None, platform="test",
                            native_quote=True, native_mention=True, quote=True, mention=True,
                            media=False, tts=False, t2i=False, cancel="", streaming=False,
-                           punctuation=False):
+                           punctuation=False, components=None, intermediate_decorator=None):
         guard = plugin(gate_config(expression_takeover_enabled=True, reply_quote_enabled=quote,
                                    reply_mention_enabled=mention, reply_typing_chars_per_second=2.5,
                                    expression_punct_cleanup=punctuation))
@@ -126,7 +130,8 @@ class NativePipelineTests(unittest.IsolatedAsyncioTestCase):
         event.result.result_content_type = "llm"
         event.result.is_model_result = lambda: True
         event.result.get_plain_text = lambda: "".join(c.text for c in event.result.chain if isinstance(c, Plain))
-        event.result.chain = [Plain(text)] + ([Image.fromURL("https://example.invalid/media")] if media else [])
+        event.result.chain = (components if components is not None else
+                              [Plain(text)] + ([Image.fromURL("https://example.invalid/media")] if media else []))
         event.result.use_t2i_ = t2i
         await guard._delivery().prepare(event)
         guard._delivery().typing_pause = AsyncMock(return_value=True)
@@ -144,7 +149,7 @@ class NativePipelineTests(unittest.IsolatedAsyncioTestCase):
                 yield Chain([Plain(text[:len(text)//2])])
                 yield Chain([Plain(text[len(text)//2:])])
             event.result.async_stream = chunks()
-        namespace = stages(guard)
+        namespace = stages(guard, intermediate_decorator)
         native = copy.deepcopy(NATIVE)
         native.update(enable=True, interval="0,0")
         native.update(segments or {})
@@ -172,6 +177,24 @@ class NativePipelineTests(unittest.IsolatedAsyncioTestCase):
                 event.result.result_content_type = "llm"
                 await respond.process(event)
         return event, guard, sleep
+
+    async def test_deduplication_runs_before_peer_folds_plain_and_keeps_closing(self):
+        async def peer(event):
+            # 外部装饰会丢失 Plain 来源边界，并追加本轮晚安。
+            result = event.get_result()
+            result.chain = [Plain("".join(c.text for c in result.chain))]
+            result.chain.append(Plain("晚安。"))
+
+        first = "记下了，以后新功能都自动刷新。"
+        second = "记下了。以后新功能，都自动刷新。"
+        event, _, _ = await self.run_pipeline(
+            components=[Plain(first), Plain(second)],
+            intermediate_decorator=peer, native_quote=False, native_mention=False,
+            quote=False, mention=False, punctuation=True,
+            segments={"regex": managed_regex(), "only_llm_result": True})
+        self.assertEqual(len(event.sent), 1)
+        text = "".join(c.text for c in event.sent[0].chain if isinstance(c, Plain))
+        self.assertEqual(re.sub(r"[\s，。]", "", text), "记下了以后新功能都自动刷新晚安")
 
     async def test_actual_stages_split_once_with_all_head_switch_combinations(self):
         for native_quote in (False, True):
