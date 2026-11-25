@@ -6,7 +6,7 @@ desc: >-
   支持碎片合并、回复兜底与可视化追踪，兼顾聊天自然度、调用成本和故障排查。
 author: AKIhunter
 repo: https://github.com/AKIhunter/astrbot_plugin_livinghello
-version: 2.10.1
+version: 2.10.2
 astrbot_version: ">=4.29.1"
 # 核心消息链路支持；平台专属功能与验证范围见 README「支持平台」。
 support_platforms:

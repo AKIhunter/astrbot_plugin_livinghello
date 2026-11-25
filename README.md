@@ -3,7 +3,7 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.10.1-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.10.2-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -116,4 +116,4 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 判定、图片理解、文字试跑、TTS和生图可能产生所选Provider费用。
 离线测试使用假模型和假发送，不代表真实模型效果或平台最终送达。
 
-当前版本 **2.10.1** 修复工具前后正文仅标点不同仍重复发送的问题：在其他插件合并文本前去重，保留首份正文和后续新增内容，LE 追加的晚安仍参与最终分段。无需新增设置或迁移配置。详见[回复去重](docs/reply-merge-dedup.md)和[更新日志](CHANGELOG.md)；近3天诊断导出继续可用，见[诊断日志](docs/diagnostics.md)。
+当前版本 **2.10.2** 修复视频模型选择未生效及视频/语音模型无法清空的问题：视频独立于图片开关，按视频覆盖、共用视觉、会话模型依次选择。补齐视频模型能力校验和超时耗时统计，无需迁移配置。用法见[视频模型与清空选择](docs/configuration.md#视频模型与清空选择)和[更新日志](CHANGELOG.md)；回复去重与近3天诊断导出继续可用。

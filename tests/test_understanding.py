@@ -331,6 +331,164 @@ class UnderstandingTest(unittest.IsolatedAsyncioTestCase):
         provider.set_model.assert_not_called()
         self.assertIn("可见文字", observation.text)
 
+    async def test_video_selection_works_without_images_and_follows_shared_or_session(self):
+        for selected, shared, expected in (
+            ("video-vl", "shared-vl", "video-vl"),
+            ("", "shared-vl", "shared-vl"),
+            ("", "", "session-vl"),
+        ):
+            with self.subTest(selected=selected, shared=shared):
+                event = Event()
+                event.message_obj.message = [component("Video", url="clip.mp4")]
+                provider = SimpleNamespace(
+                    get_model=lambda: "qwen3-vl",
+                    provider_config={"modalities": ["image"]},
+                    text_chat=AsyncMock(return_value=SimpleNamespace(completion_text="人物正在走路")),
+                )
+                context = SimpleNamespace(
+                    get_provider_by_id=Mock(return_value=provider),
+                    get_using_provider_async=AsyncMock(return_value=provider),
+                )
+                self.guard.context = context
+                self.guard.config.update(
+                    understand_image_enabled=False, understand_video_enabled=True,
+                    understand_image_provider_id="image-vl",
+                    understand_video_provider_id=selected, vision_shared_provider_id=shared,
+                )
+                observation = await self.reader.parse(event)
+                self.assertEqual(observation.images, [])
+                with patch("images.guard_video.frames_from_video",
+                           AsyncMock(return_value=["frame.jpg"])) as extract:
+                    await self.reader.enrich(event, observation)
+                    await self.reader.enrich(event, observation)
+                extract.assert_awaited_once_with("clip.mp4", max_seconds=15, count=5)
+                provider.text_chat.assert_awaited_once()
+                self.assertEqual(provider.text_chat.await_args.kwargs["image_urls"], ["frame.jpg"])
+                if selected or shared:
+                    context.get_provider_by_id.assert_called_once_with(expected)
+                    context.get_using_provider_async.assert_not_awaited()
+                else:
+                    context.get_provider_by_id.assert_not_called()
+                    context.get_using_provider_async.assert_awaited_once_with(event.unified_msg_origin)
+                self.assertIn("人物正在走路", observation.prompt)
+                self.assertGreater(event.get_extra("_at_guard_understand_seconds", 0), 0)
+
+    async def test_video_and_image_use_their_own_locked_router_upstreams(self):
+        clients = {
+            name: SimpleNamespace(
+                get_model=lambda name=name: name, provider_config={},
+                text_chat=AsyncMock(return_value=SimpleNamespace(completion_text=name)),
+            )
+            for name in ("image-vl", "video-vl")
+        }
+        router = SimpleNamespace(
+            upstreams=[SimpleNamespace(client=client, api_type="multimodal")
+                       for client in clients.values()],
+            text_chat=AsyncMock(),
+        )
+        self.guard.context = SimpleNamespace(get_provider_by_id=Mock(return_value=router))
+        observation = await self.parse(
+            [Image(url="image.png"), component("Video", url="clip.mp4")],
+            understand_image_enabled=True, understand_video_enabled=True,
+            understand_image_provider_id="router::image-vl",
+            understand_video_provider_id="router::video-vl",
+        )
+        with patch("images.guard_image_budget.fit_sync", return_value=(["image.png"], [])), \
+                patch("images.guard_video.frames_from_video", AsyncMock(return_value=["frame.jpg"])):
+            await self.reader.enrich(self.event, observation)
+        router.text_chat.assert_not_awaited()
+        for name, url in (("image-vl", "image.png"), ("video-vl", "frame.jpg")):
+            clients[name].text_chat.assert_awaited_once()
+            self.assertEqual(clients[name].text_chat.await_args.kwargs["model"], name)
+            self.assertEqual(clients[name].text_chat.await_args.kwargs["image_urls"], [url])
+        self.assertEqual(self.event.get_extra("_livinghello_vision_batch_calls"), 2)
+
+    async def test_video_failures_keep_text_and_mark_attachment_as_error(self):
+        for frames, response, expected_calls in (
+            ([], "unused", 0), (["frame.jpg"], "", 1), (["frame.jpg"], RuntimeError("offline"), 1),
+        ):
+            with self.subTest(frames=frames, response=response):
+                event = Event()
+                event.message_obj.message = [Plain("原文保留"), component("Video", url="clip.mp4")]
+                self.guard.config.update(understand_video_enabled=True,
+                                         understand_video_provider_id="video-vl")
+                call = AsyncMock(side_effect=response) if isinstance(response, Exception) else \
+                    AsyncMock(return_value=SimpleNamespace(completion_text=response))
+                provider = SimpleNamespace(get_model=lambda: "qwen3-vl",
+                                           provider_config={"modalities": ["image"]}, text_chat=call)
+                self.guard.context = SimpleNamespace(get_provider_by_id=Mock(return_value=provider))
+                req = SimpleNamespace(extra_user_content_parts=[])
+                with patch("images.guard_video.frames_from_video", AsyncMock(return_value=frames)):
+                    await self.reader.attach(event, req)
+                observation = event.get_extra("_at_guard_understanding")
+                self.assertIn("原文保留", observation.prompt)
+                self.assertIn("不要猜测内容", observation.prompt)
+                self.assertTrue(observation.errors)
+                self.assertEqual(call.await_count, expected_calls)
+                self.assertEqual(event.get_extra("_at_guard_input_timings")["input_vision"]["status"], "error")
+                self.assertEqual(event.get_extra("_at_guard_input_timings")["input_vision"]["calls"], expected_calls)
+                self.assertEqual(len(req.extra_user_content_parts), 1)
+                self.assertFalse(event.stopped)
+
+    async def test_video_hard_timeout_cancels_model_and_counts_preparation_once(self):
+        import time
+        self.guard.config.update(understand_image_enabled=True, understand_video_enabled=True,
+                                 understand_image_provider_id="image-vl",
+                                 understand_video_provider_id="video-vl")
+        self.event.message_obj.message = [Image(url="image.png"), component("Video", url="clip.mp4")]
+        cancelled = asyncio.Event()
+
+        async def blocked(**_):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        async def image_done(*_):
+            await asyncio.sleep(0.12)
+            return "success", 1
+
+        provider = SimpleNamespace(get_model=lambda: "qwen3-vl",
+                                   provider_config={"modalities": ["image"]},
+                                   text_chat=AsyncMock(side_effect=blocked))
+        self.guard.context = SimpleNamespace(get_provider_by_id=Mock(return_value=provider))
+        started = time.monotonic()
+        with patch("input.guard_understanding.number", return_value=0.6), \
+                patch.object(self.reader, "_enrich_images", image_done), \
+                patch("images.guard_video.frames_from_video", AsyncMock(return_value=["frame.jpg"])):
+            observation = await self.reader._observe_source(self.event)
+        elapsed = time.monotonic() - started
+        self.assertTrue(cancelled.is_set())
+        self.assertIn("vision:HardTimeout", observation.errors)
+        self.assertLess(self.event.get_extra("_at_guard_understand_seconds"), elapsed + 0.05)
+
+    async def test_video_switch_and_role_filter_do_not_extract_or_call_models(self):
+        for enabled, roles in ((False, None), (True, ("stt",))):
+            with self.subTest(enabled=enabled, roles=roles):
+                event = Event()
+                event.message_obj.message = [component("Video", url="clip.mp4")]
+                self.guard.config.update(understand_video_enabled=enabled)
+                self.reader.resolve = AsyncMock()
+                observation = await self.reader.parse(event)
+                with patch("images.guard_video.frames_from_video", AsyncMock()) as extract:
+                    await self.reader.enrich(event, observation, roles=roles)
+                extract.assert_not_awaited()
+                self.reader.resolve.assert_not_awaited()
+
+    async def test_missing_video_pin_does_not_fallback_or_extract_frames(self):
+        router = SimpleNamespace(upstreams=[], text_chat=AsyncMock())
+        self.guard.context = SimpleNamespace(get_provider_by_id=Mock(return_value=router))
+        observation = await self.parse(
+            [component("Video", url="clip.mp4")], understand_video_enabled=True,
+            understand_video_provider_id="router::removed-model",
+        )
+        with patch("images.guard_video.frames_from_video", AsyncMock()) as extract:
+            await self.reader.enrich(self.event, observation)
+        extract.assert_not_awaited()
+        router.text_chat.assert_not_awaited()
+        self.assertTrue(observation.errors)
+        self.assertIn("视频理解失败", observation.prompt)
+
     async def test_hy4_declared_multimodal_reaches_locked_client_and_attaches_observation(self):
         client = SimpleNamespace(
             get_model=lambda: "hy4-preview-f", provider_config={},

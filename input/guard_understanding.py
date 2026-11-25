@@ -23,13 +23,13 @@ try:
     from ..reply.guard_expression import takeover
     from ..images.guard_media import image_target
     from ..reply.guard_reply_delivery import number
-    from ..images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+    from ..images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, VIDEO_OVERRIDE_KEY, effective_vision_provider
 except ImportError:
     from reply.guard_reply_health import report_model_fault
     from reply.guard_expression import takeover
     from images.guard_media import image_target
     from reply.guard_reply_delivery import number
-    from images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, effective_vision_provider
+    from images.guard_vision_choice import UNDERSTAND_OVERRIDE_KEY, VIDEO_OVERRIDE_KEY, effective_vision_provider
 
 
 def read(value, *names, default=""):
@@ -85,7 +85,7 @@ class Understanding:
     async def _enrich_videos(self, event, observation, provider, kwargs):
         """视频抽帧后交给视觉模型描述；失败只写「未能分析」，不让模型猜。"""
         if not observation.videos:
-            return
+            return "skipped", 0
         try:
             from ..images.guard_video import frames_from_video
         except ImportError:
@@ -93,6 +93,7 @@ class Understanding:
         max_seconds = int(self.config.get("understand_video_max_seconds", 15) or 15)
         frame_count = int(self.config.get("understand_video_frames", 5) or 5)
         blocks = []
+        calls = successes = 0
         for index, url in enumerate(observation.videos[:2], 1):
             try:
                 frames = await asyncio.wait_for(
@@ -101,10 +102,16 @@ class Understanding:
                 frames = []
             if not frames:
                 blocks.append(f"[视频{index}] 未能取得画面，不要猜测内容")
+                observation.errors.append("video:FrameUnavailable")
                 continue
             text = ""
             try:
                 async with self._vision_slots:
+                    if self.plugin._policy_send_reason(event) or event.get_extra("_at_guard_superseded"):
+                        raise ValueError("video_policy_changed")
+                    calls += 1
+                    event.set_extra("_livinghello_vision_batch_calls",
+                                    event.get_extra("_livinghello_vision_batch_calls", 0) + 1)
                     response = await asyncio.wait_for(self._call_locked_upstream(
                         provider,
                         prompt=f"这是原消息里视频{index}按时间顺序抽取的 {len(frames)} 帧。"
@@ -115,16 +122,25 @@ class Understanding:
                         max_tokens=512, request_max_retries=1, **kwargs,
                     ), 25)
                 text = str(getattr(response, "completion_text", "") or "").strip()
-            except Exception:
+                if not text:
+                    observation.errors.append("video:EmptyResponse")
+            except Exception as exc:
+                observation.errors.append("video:" + type(exc).__name__)
                 text = ""
+            if text:
+                successes += 1
             blocks.append(f"[视频{index}] {text[:1500]}" if text
                           else f"[视频{index}] 分析失败，不要猜测内容")
         if not blocks:
-            return
+            return "skipped", calls
         block = "\n".join(blocks)
         observation.vision_summary = (observation.vision_summary + "\n" + block).strip()
         observation.text += "\n[视频理解] " + block
         observation.prompt += "\n[视频理解] " + block
+        if successes < len(blocks):
+            observation.vision_unresolved = True
+        return ("success" if successes == len(blocks) else
+                "partial" if successes else "failed"), calls
 
     async def _enrich_images(self, event, observation, provider, kwargs):
         """每批两张、最多十二张；独立保存已完成批次，超时不抹掉观察。"""
@@ -611,11 +627,18 @@ class Understanding:
             return
         event.set_extra("_at_guard_understanding_enriched", True)
         selected_roles = set(roles or ("vision", "stt"))
-        for role, urls in (("vision", observation.images), ("stt", observation.voices[:4])):
-            if role not in selected_roles:
+        # 视频独立于图片开关与图片模型；仍属于 vision 角色，遵守同一角色过滤与硬预算。
+        for role, urls in (("vision", observation.images), ("video", observation.videos),
+                           ("stt", observation.voices[:4])):
+            if ("vision" if role == "video" else role) not in selected_roles:
                 continue
-            switch = "understand_image_enabled" if role == "vision" else "understand_voice_enabled"
-            feature = "input_vision" if role == "vision" else "speech_to_text"
+            visual = role in {"vision", "video"}
+            switch = ("understand_image_enabled" if role == "vision" else
+                      "understand_video_enabled" if role == "video" else "understand_voice_enabled")
+            feature = "input_vision" if visual else "speech_to_text"
+            # 未启用或没有视频时，不覆盖已有图片理解的 trace 状态。
+            if role == "video" and (not self.config.get(switch, False) or not urls):
+                continue
             if not self.config.get(switch, role == "vision") or not urls:
                 emit(event, feature, "disabled" if not self.config.get(switch, role == "vision") else "skipped",
                      calls=0, source="livinghello",
@@ -624,24 +647,26 @@ class Understanding:
             started = time.monotonic()
             emit(event, feature, "running", source="livinghello")
             state = "success"
-            calls = 0 if role == "vision" else 1
+            calls = 0 if visual else 1
+            if role == "video":
+                event.set_extra("_livinghello_vision_batch_calls",
+                                event.get_extra("_livinghello_vision_batch_calls", 0))
             try:
-                if role == "vision":
-                    # 图片理解：显式覆盖优先；留空跟随「视觉模型（共用）」，都空时跟随会话模型。
-                    selected = effective_vision_provider(self.config, UNDERSTAND_OVERRIDE_KEY)
+                if visual:
+                    # 各自覆盖优先，留空跟随共用项；视频不能借用图片理解的覆盖值。
+                    selected = effective_vision_provider(
+                        self.config, VIDEO_OVERRIDE_KEY if role == "video" else UNDERSTAND_OVERRIDE_KEY)
                 else:
                     selected = self.config.get("understand_voice_provider_id", "")
-                provider, kwargs = await self.resolve(selected, event, role)
-                if role == "vision":
+                provider, kwargs = await self.resolve(selected, event, "vision" if visual else role)
+                if visual:
                     target = image_target(provider, selected)
                     provider = target.provider
                     kwargs["model"] = target.model
-                    state, calls = await self._enrich_images(event, observation, provider, kwargs)
-                    try:
-                        if self.config.get("understand_video_enabled", False):
-                            await self._enrich_videos(event, observation, provider, kwargs)
-                    except Exception:
-                        pass
+                    if role == "video":
+                        state, calls = await self._enrich_videos(event, observation, provider, kwargs)
+                    else:
+                        state, calls = await self._enrich_images(event, observation, provider, kwargs)
                     text = ""
                 elif callable(getattr(provider, "get_text", None)):
                     text = "\n".join([str(await asyncio.wait_for(provider.get_text(url), 12)) for url in urls])
@@ -681,13 +706,15 @@ class Understanding:
                 else:
                     state = "failed"
                 observation.errors.append(role + ":" + type(exc).__name__)
-                report_model_fault(
-                    self.plugin,
-                    "understand_image" if role == "vision" else "understand_voice",
-                    state, self._fault_detail(exc, selected, role), event)
-                if role == "vision":
+                if role != "video":
+                    report_model_fault(
+                        self.plugin,
+                        "understand_image" if role == "vision" else "understand_voice",
+                        state, self._fault_detail(exc, selected, role), event)
+                if visual:
                     observation.vision_unresolved = True
-                observation.prompt += "\n[图片理解失败，勿猜测内容]" if role == "vision" else "\n[语音转写失败，勿猜测内容]"
+                label = "视频理解" if role == "video" else "图片理解" if visual else "语音转写"
+                observation.prompt += f"\n[{label}失败，勿猜测内容]"
             _elapsed = max(0.0, time.monotonic() - started)
             # 理解耗时属于「准备」：从回复有效期扣除，避免正常看图被误判过期。
             try:
@@ -695,8 +722,7 @@ class Understanding:
                 event.set_extra("_at_guard_understand_seconds", _prev_u + _elapsed)
             except (TypeError, ValueError, OverflowError):
                 pass
-            observation.timings["input_vision" if role == "vision" else "speech_to_text"] = round(
-                _elapsed * 1000)
+            observation.timings[feature] = observation.timings.get(feature, 0) + round(_elapsed * 1000)
             emit(event, feature, state, source="livinghello", calls=calls,
                  ms=round((time.monotonic() - started) * 1000, 2))
 
@@ -724,26 +750,28 @@ class Understanding:
         # parse可能在消息钩子已完成并缓存；仍计入原解析耗时，不能重获整份预算。
         parse_seconds = float(observation.timings.get("input_parse", 0) or 0) / 1000
         remaining = budget - max(time.monotonic() - started, parse_seconds)
+        timeout_label = "视频理解" if observation.videos and not observation.images else "图片理解"
         if remaining <= 0.5:
             observation.vision_unresolved = True
             observation.errors.append("vision:ParseBudgetExhausted")
-            observation.prompt += "\n[图片理解超时，勿猜测内容]"
+            observation.prompt += f"\n[{timeout_label}超时，勿猜测内容]"
             emit(source, "input_vision", "timeout", calls=0,
                  reason="parse_budget_exhausted")
             source.set_extra("_at_guard_understanding", observation)
             return observation
         enrich_started = time.monotonic()
+        understand_seconds_before = float(source.get_extra("_at_guard_understand_seconds", 0) or 0)
         try:
             await asyncio.wait_for(self.enrich(source, observation, roles=roles),
                                    remaining)
         except asyncio.TimeoutError:
             elapsed = time.monotonic() - enrich_started
-            source.set_extra("_at_guard_understand_seconds", float(
-                source.get_extra("_at_guard_understand_seconds", 0) or 0) + elapsed)
+            # 硬超时的 elapsed 已包含完成的图片/视频阶段，不能再次累加阶段耗时。
+            source.set_extra("_at_guard_understand_seconds", understand_seconds_before + elapsed)
             observation.timings["input_vision"] = round(elapsed * 1000)
             observation.vision_unresolved = True
             observation.errors.append("vision:HardTimeout")
-            observation.prompt += "\n[图片理解超时，勿猜测内容]"
+            observation.prompt += f"\n[{timeout_label}超时，勿猜测内容]"
             emit(source, "input_vision", "timeout",
                  calls=source.get_extra("_livinghello_vision_batch_calls", 0),
                  ms=round((time.monotonic() - started) * 1000, 2),
@@ -826,6 +854,7 @@ class Understanding:
             if (
                 observation.prompt != original
                 or observation.images
+                or observation.videos
                 or observation.voices
             ):
                 texts.append(observation.prompt)
@@ -837,7 +866,7 @@ class Understanding:
                                     source.get_extra("_livinghello_vision_batch_calls", 1)
                                     if key == "input_vision" else 1),
                                 "status": "error" if any(key.startswith("speech") and e.startswith("stt")
-                                  or key == "input_vision" and e.startswith("vision") for e in observation.errors)
+                                  or key == "input_vision" and e.startswith(("vision", "video")) for e in observation.errors)
                                   else "ok"}
             event.set_extra("_at_guard_input_timings", timings)
         if not texts:

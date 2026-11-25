@@ -41,6 +41,39 @@ class SaveReceiptTest(unittest.IsolatedAsyncioTestCase):
             result = await self.save({"vision_provider_id": ""})
         self.assertEqual(result["status"], "ok")
 
+    async def test_video_and_voice_clear_are_persisted_and_returned_without_directory(self):
+        for key in ("understand_video_provider_id", "understand_voice_provider_id"):
+            with self.subTest(key=key):
+                self.guard.config[key] = "old-model"
+                before = dict(self.guard.config)
+                with patch.object(self.guard.config, "save_config") as write, \
+                        patch.object(guard_webui, "_providers",
+                                     AsyncMock(side_effect=AssertionError("models"))):
+                    result = await self.save({key: ""})
+                self.assertEqual(result["status"], "ok")
+                self.assertEqual(result["data"]["config"], {key: ""})
+                self.assertEqual(self.guard.config[key], "")
+                self.assertEqual({k: v for k, v in self.guard.config.items() if k != key},
+                                 {k: v for k, v in before.items() if k != key})
+                write.assert_called_once()
+
+    async def test_video_selection_validates_model_before_saving_any_field(self):
+        models = [{"id": "text", "supports_images": False},
+                  {"id": "video-vl", "supports_images": True}]
+        for selected, error in (("missing", "不在可用列表"), ("text", "无法确认支持图片")):
+            with self.subTest(selected=selected), \
+                    patch.object(guard_webui, "_providers", AsyncMock(return_value=models)), \
+                    patch.object(self.guard.config, "save_config") as write:
+                before = dict(self.guard.config)
+                result = await self.save({"understand_video_provider_id": selected,
+                                          "fragment_wait_seconds": 4})
+                self.assertIn(error, result)
+                self.assertEqual(dict(self.guard.config), before)
+                write.assert_not_called()
+        with patch.object(guard_webui, "_providers", AsyncMock(return_value=models)):
+            result = await self.save({"understand_video_provider_id": "video-vl"})
+        self.assertEqual(result["data"]["config"], {"understand_video_provider_id": "video-vl"})
+
     async def test_nonempty_model_still_checks_availability_and_capability(self):
         models = AsyncMock(return_value=[{"id": "text", "supports_images": False}])
         with patch.object(guard_webui, "_providers", models):

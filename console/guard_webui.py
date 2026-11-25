@@ -928,7 +928,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     mark("最近判定")
 
     data = {
-        "version": "2.10.1",
+        "version": "2.10.2",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
         "config": config,
@@ -1133,7 +1133,7 @@ async def handle_config(plugin: Any):
 
     model_fields = ("classifier_provider_id", "vision_shared_provider_id",
                     "vision_provider_id", "understand_image_provider_id",
-                    "understand_voice_provider_id")
+                    "understand_video_provider_id", "understand_voice_provider_id")
     # 普通参数和清空模型选择无需读取目录；非空模型仍必须经过可用性校验。
     providers = await _providers(plugin) if any(updates.get(key) for key in model_fields) else []
     known = {item["id"] for item in providers}
@@ -1142,7 +1142,7 @@ async def handle_config(plugin: Any):
         if provider_id and provider_id not in known:
             return _failure(f"模型 {provider_id} 不在可用列表中")
         if key in {"vision_shared_provider_id", "vision_provider_id",
-                   "understand_image_provider_id"} and provider_id and not any(
+                   "understand_image_provider_id", "understand_video_provider_id"} and provider_id and not any(
             item["id"] == provider_id and item.get("supports_images") for item in providers
         ):
             return _failure(f"模型 {provider_id} 无法确认支持图片，请选择视觉模型")
