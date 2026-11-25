@@ -175,7 +175,10 @@ class IndependenceSourceTests(unittest.TestCase):
         for path in root.rglob("*"):
             if not path.is_file() or path.suffix not in {".py", ".js", ".mjs", ".md", ".html", ".json", ".yaml", ".yml"}:
                 continue
-            if path.name == "CHANGELOG.md" or any(p.startswith(".") for p in path.relative_to(root).parts):
+            parts = path.relative_to(root).parts
+            # 变更日志与部署时留下的旧快照都允许保留历史名字，不属于现役代码。
+            if path.name == "CHANGELOG.md" or parts[0] == "backups" or any(
+                    p.startswith(".") for p in parts):
                 continue
             text = path.read_text(encoding="utf-8-sig").casefold()
             if any(token in text for token in tokens):
