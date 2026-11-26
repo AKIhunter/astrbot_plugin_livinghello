@@ -71,6 +71,40 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await other.get(old))["state"], "merged")
         await other.close()
 
+    async def test_confirmed_delivery_closes_pending_without_inventing_other_results(self):
+        event = Event()
+        rid = self.service.begin(event)
+        emit(event, "delivery", "running", reason="final_send_not_observed")
+        emit(event, "main_model", "pending", ms=12)
+        self.service.finish(event, "completed", "final_delivery_confirmed")
+        row = await self.service.get(rid)
+        self.assertEqual(row["features"]["delivery"]["status"], "success")
+        self.assertEqual(row["features"]["delivery"]["reason"], "final_delivery_confirmed")
+        self.assertEqual(row["features"]["main_model"]["status"], "incomplete")
+        self.assertEqual(row["features"]["main_model"]["ms"], 12)
+        self.assertEqual(row["events"][-1]["feature"], "lifecycle")
+
+    async def test_terminal_pending_states_remain_truthful_live_and_on_disk(self):
+        for state, reason, expected in (
+            ("completed", "", "incomplete"),
+            ("cancelled", "message_recalled", "cancelled"),
+            ("silent", "others_talking", "skipped"),
+            ("failed", "send_unknown", "incomplete"),
+            ("incomplete", "completion_timeout", "incomplete"),
+        ):
+            event = Event(mid=state)
+            rid = self.service.begin(event)
+            # 模拟旧版只记录 lifecycle，缺少功能收尾回调。
+            emit(event, "delivery", "pending", ms=21)
+            self.service.rows[rid]["state"] = state
+            emit(event, "lifecycle", state, reason=reason)
+            row = await self.service.get(rid)
+            self.assertEqual(row["features"]["delivery"]["status"], expected)
+            self.assertEqual(self.service.rows[rid]["features"]["delivery"]["status"], "pending")
+            await self.service._drain()
+            disk = self.service._read([rid])[rid]
+            self.assertEqual(disk["features"]["delivery"]["status"], expected)
+
     async def test_snapshot_is_bounded_retains_start_and_last_outcome(self):
         event = Event()
         rid = self.service.begin(event)

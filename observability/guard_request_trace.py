@@ -258,6 +258,25 @@ class RequestTrace:
     # （例如「已判 message_expired 并清空」不该被健康层改写成 final_message_missing）。
     _LOCKED_STATES = {"cancelled", "completed", "silent", "merged"}
 
+    @staticmethod
+    def _settled_feature(row, key, feature):
+        """终态只按已确认的收尾原因归并，不把缺失的回调当成功。"""
+        if row.get("state") not in TERMINAL or feature.get("status") not in {
+                "running", "active", "pending", "awaiting_delivery"}:
+            return feature
+        reason = row.get("features", {}).get("lifecycle", {}).get("reason", "")
+        status = "incomplete"
+        if key == "delivery" and row.get("state") == "completed" and reason in {
+                "final_delivery_confirmed", "final_send_observed",
+                "tool_delivery_confirmed"}:
+            status = "success"
+        elif row.get("state") == "cancelled":
+            status = "cancelled"
+        elif row.get("state") in {"silent", "merged"}:
+            status = "skipped"
+        return {**feature, "status": status,
+                "reason": reason if status != "incomplete" else "end_status_missing"}
+
     def finish(self, event, state, reason=""):
         row = self.rows.get(event.get_extra(ID_KEY))
         if not row:
@@ -268,6 +287,13 @@ class RequestTrace:
             self.record(event, "lifecycle", "noted", reason=f"late:{state}:{reason}"[:120])
             return
         row["state"] = state
+        # 最终发送已确认也要关闭 delivery；其他未完成节点保留未知结果。
+        settlement = {"state": state, "features": {"lifecycle": {"reason": reason}}}
+        for key, feature in list(row["features"].items()):
+            settled = self._settled_feature(settlement, key, feature)
+            if settled != feature:
+                self.record(event, key, settled["status"],
+                            **{k: v for k, v in settled.items() if k != "status"})
         self.record(event, "lifecycle", state, reason=reason)
 
     def merge(self, event, sources):
@@ -317,6 +343,10 @@ class RequestTrace:
     def _snapshot(self, row):
         result = {key: copy.deepcopy(value) for key, value in row.items()
                   if key not in {"spans", "next_span"}}
+        result["features"] = {
+            key: self._settled_feature(result, key, feature)
+            for key, feature in result["features"].items()
+        }
         if len(result["events"]) > self.MAX_EVENTS:
             result["events"] = result["events"][:1] + result["events"][-(self.MAX_EVENTS - 1):]
             result["truncated"] = True
@@ -399,7 +429,8 @@ class RequestTrace:
                 if row.get("state") not in TERMINAL and row.get("instance_id") != self.instance_id:
                     row["state"] = "incomplete"
                     row["completion_note"] = "结束状态未采集"
-                found[key] = row
+                # 历史数据只修正读取视图，不回写业务记录。
+                found[key] = self._snapshot(row)
             return found
 
     async def batch(self, ids):

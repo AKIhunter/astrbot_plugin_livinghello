@@ -492,7 +492,7 @@ class ConsolePageContractTest(unittest.TestCase):
         self.assertIn("旧记录未能自动分段", page)
         copy_handler = page[
             page.index('copyButton.addEventListener("click"'):
-            page.index("inputHead.append(inputNotice,copyButton)")
+            page.index('const rulesButton=document.createElement("button")')
         ]
         self.assertIn("inputData.middle_input", copy_handler)
         self.assertNotIn("inputData.opening_rules", copy_handler)

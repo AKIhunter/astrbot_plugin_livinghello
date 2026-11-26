@@ -102,7 +102,10 @@ def install_framework_stubs():
     web = mod("astrbot.api.web")
     web.request = types.SimpleNamespace()
     web.json_response = lambda data: data
-    web.error_response = lambda message, **_: message
+    # 宿主错误响应保留 status/message；路由用例不能收到裸字符串。
+    web.error_response = lambda message, status_code=400, **_: {
+        "status": "error", "message": message, "status_code": status_code,
+    }
 
 
 def main():

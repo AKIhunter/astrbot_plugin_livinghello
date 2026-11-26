@@ -1,10 +1,30 @@
 import unittest
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from gate.guard_engine import Decision
 from console.guard_flow import build_flow
+from console import guard_webui
 
 
 class FlowTests(unittest.TestCase):
+    def test_flow_exposes_current_fixed_rules_without_changing_saved_config(self):
+        config = {"gate_mode": "enforce"}
+        native = SimpleNamespace(read=lambda _: {})
+        with patch.object(guard_webui, "_native_settings", return_value=native), \
+                patch.object(guard_webui, "request", SimpleNamespace(query={})):
+            result = asyncio.run(guard_webui.handle_flow(SimpleNamespace(config=config)))
+        rules = result["data"]["classifier_rules"]
+        self.assertIn("当前版本", rules["notice"])
+        self.assertIn("历史请求未保存", rules["notice"])
+        self.assertEqual([stage["id"] for stage in rules["stages"]], ["text", "vision"])
+        for stage in rules["stages"]:
+            opening, ending = guard_webui._system_prompt_sections(stage["id"])
+            self.assertIn(opening, stage["opening_rules"])
+            self.assertIn(ending, stage["ending_requirements"])
+        self.assertEqual(config, {"gate_mode": "enforce"})
+
     def nodes(self, decision, mode="enforce"):
         flow=build_flow({"gate_mode":mode}, decision=decision, inputs={"消息":"测试"})
         return {n["id"]:n for n in flow["gate"]["nodes"]},flow

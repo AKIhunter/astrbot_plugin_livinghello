@@ -3,7 +3,7 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.10.2-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.10.3-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -93,6 +93,7 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 | 图片映射、重试和成功用词 | [映射说明](docs/image-prompt-mapping.md) |
 | 图片回执与原事项结算 | [回执契约](docs/image-delivery-receipts.md) |
 | 一键导出近3天的脱敏诊断包 | [诊断日志](docs/diagnostics.md) |
+| 判断详情、自动刷新、原样复制与判定规则 | [详情与复验](docs/decision-details.md) |
 | 开发、测试与接口 | [开发维护](docs/development.md) |
 | 全部当前文档 | [文档索引](docs/README.md) |
 | 历史变更 | [更新日志](CHANGELOG.md) |
@@ -116,4 +117,4 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 判定、图片理解、文字试跑、TTS和生图可能产生所选Provider费用。
 离线测试使用假模型和假发送，不代表真实模型效果或平台最终送达。
 
-当前版本 **2.10.2** 修复视频模型选择未生效及视频/语音模型无法清空的问题：视频独立于图片开关，按视频覆盖、共用视觉、会话模型依次选择。补齐视频模型能力校验和超时耗时统计，无需迁移配置。用法见[视频模型与清空选择](docs/configuration.md#视频模型与清空选择)和[更新日志](CHANGELOG.md)；回复去重与近3天诊断导出继续可用。
+当前版本 **2.10.3** 精简判断详情：主节点、功能明细与模型上下文分别展示，运行中自动刷新，复制复验内容常显；固定判定规则移到“流程与试跑”。修复投递确认后功能仍等待，以及独立离线测试错误响应契约。无需迁移配置，详见[详情与复验](docs/decision-details.md)和[更新日志](CHANGELOG.md)。

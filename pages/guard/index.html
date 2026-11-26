@@ -571,6 +571,7 @@
   .timing-cell { padding: 9px 12px; border: 1px solid var(--line); border-radius: 6px; }
   .timing-cell b { display: block; }
   .timing-cell small { color: var(--muted); }
+  .decision-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .trace-id { display: flex; align-items: start; gap: 5px; font-size: 11px; margin: 4px 0; min-width: 0; }
   .trace-id .id-value { min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, monospace; user-select: text; }
   .trace-id button { flex: none; padding: 1px 5px; border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 3px; cursor: pointer; font-size: 10px; }
@@ -1034,6 +1035,11 @@
 </div>
 <p class="msg" id="flowStatus" role="status">读取中…</p>
 <div class="flow-note" id="flowModeSummary" aria-live="polite"></div>
+<section class="card" id="classifierRules" tabindex="-1">
+  <h2>判定模型规则</h2>
+  <p class="sub" id="classifierRulesNotice">读取当前版本的固定规则…</p>
+  <div id="classifierRulesContent"></div>
+</section>
 <section class="card">
   <h2 id="gateFlowTitle">判定逻辑</h2>
   <p class="sub" id="gateFlowSub">本地规则 → 文字判断 → 按需补足证据 → 语义否决 → 阈值。</p>
@@ -1654,6 +1660,21 @@
       : "本地参与规则 → 文字判断 → 按需补足证据 → 语义否决 → 阈值；静默时停止生成。";
     drawFlow("gate",data.gate); drawFlow("generate",data.generate);
     el("flowStatus").textContent=data.note;
+    const rules=data.classifier_rules;
+    el("classifierRulesNotice").textContent=rules?.notice||"当前接口未提供判定规则。";
+    const rulesHost=el("classifierRulesContent");rulesHost.replaceChildren();
+    (rules?.stages||[]).forEach(stage=>{
+      const disclosure=document.createElement("details");disclosure.className="trace-details";
+      const label=document.createElement("summary");label.textContent=stage.title;
+      disclosure.appendChild(label);
+      [["开头规则",stage.opening_rules],["结尾要求",stage.ending_requirements]].forEach(([title,value])=>{
+        const part=document.createElement("section");part.className="classifier-input-part";
+        const heading=document.createElement("h5");heading.textContent=title;
+        const text=document.createElement("pre");text.textContent=value||"未提供";
+        part.append(heading,text);disclosure.appendChild(part);
+      });
+      rulesHost.appendChild(disclosure);
+    });
   }
   async function loadFlow() {
     const sequence = ++flowSequence;
@@ -3417,10 +3438,14 @@
   }
 
   let traceSequence=0;
+  let traceRefreshTimer=null;
+  function stopTraceRefresh() {
+    clearTimeout(traceRefreshTimer);traceRefreshTimer=null;
+  }
   const TRACE_STATUS={registered:"已注册",unregistered:"未注册",unsupported:"宿主不支持",unverified:"无法核实",
     running:"执行中",success:"成功",failed:"失败",timeout:"超时",cancelled:"已取消",disabled:"未开启",
     skipped:"未调用 / 跳过",uncollected:"未采集",completed:"已完成",awaiting_delivery:"等待最终投递",
-    active:"进行中",incomplete:"结束状态未采集",interrupted:"已中断",silent:"已静默",observed:"仅记录",merged:"已合并"};
+    active:"进行中",pending:"等待中",unknown:"结果未确认",incomplete:"结束状态未采集",interrupted:"已中断",silent:"已静默",observed:"仅记录",merged:"已合并"};
   const LISTENER_STATUS={registered:"正常",unregistered:"未注册",unsupported:"宿主不支持",unverified:"无法核实"};
   const TRACE_NAMES={livingemotion:"LivingEmotion 接入",livingmemory:"LivingMemory 接入",message_policy:"消息名单",message_policy_archive:"归档后名单",message_policy_request:"请求名单",
     receive:"消息接收",input_parse:"输入解析",fragments:"碎片合并",recall:"撤回保护",
@@ -3433,13 +3458,13 @@
     image_delivery:"图片投递",tool_delivery:"工具送达",segments:"分段",expression:"排版 / 引用 / @",typing:"打字等待",
     native_tts:"语音组件投递",native_text_image:"文本转图来源",context_revision:"上下文版本",
     delivery:"最终投递",lifecycle:"请求状态",llm_request:"回复请求入口",decision_attempt:"判定尝试"};
-  const TRACE_PRIORITY=["failed","timeout","cancelled","incomplete","running","awaiting_delivery","active",
+  const TRACE_PRIORITY=["failed","timeout","cancelled","incomplete","running","pending","awaiting_delivery","active",
     "observed","success","completed","registered",
     "silent","skipped","disabled","uncollected"];
   const TRACE_TONES={
     normal:new Set(["registered","success","completed","silent"]),
     abnormal:new Set(["unregistered","failed","timeout","cancelled","incomplete","interrupted"]),
-    observe:new Set(["observed","running","awaiting_delivery","active"]),
+    observe:new Set(["observed","running","pending","awaiting_delivery","active"]),
   };
   function traceTone(status) {
     if(TRACE_TONES.normal.has(status)) return "normal";
@@ -3456,16 +3481,20 @@
     const text=String(value ? (REASON_LABEL[value]||value) : "").trim();
     return text.length>42 ? text.slice(0,41)+"…" : text;
   }
-  // 请求已到终止态，但内部某个步骤还停在 running/active：
-  // 那一轮不可能再往下走了（进程退出、服务重启或请求被丢弃），
-  // 留着「执行中」会让人一直等一个永远不会来的结果。
+  // 老数据没有功能终态时按请求结果收尾；缺少证据不推断成功或重启。
   const TRACE_TERMINAL=new Set(["completed","silent","merged","incomplete","cancelled","failed"]);
-  function settleStatus(trace, status) {
-    if((status==="running" || status==="active") && TRACE_TERMINAL.has(trace.state)) return "interrupted";
+  function settleStatus(trace, status, key="") {
+    if(["running","active","pending","awaiting_delivery"].includes(status) && TRACE_TERMINAL.has(trace.state)) {
+      if(key==="delivery" && trace.state==="completed" &&
+        ["final_delivery_confirmed","final_send_observed","tool_delivery_confirmed"].includes(trace.features?.lifecycle?.reason)) return "success";
+      if(trace.state==="cancelled") return "cancelled";
+      if(["silent","merged"].includes(trace.state)) return "skipped";
+      return "incomplete";
+    }
     return status;
   }
   function traceStage(trace, keys, fallback) {
-    const states=keys.map(key=>trace.features?.[key]?.status).filter(Boolean);
+    const states=keys.map(key=>settleStatus(trace,trace.features?.[key]?.status,key)).filter(Boolean);
     const rank=status=>{
       const index=TRACE_PRIORITY.indexOf(status);
       return index<0 ? TRACE_PRIORITY.length : index;
@@ -3520,7 +3549,14 @@
     return "最终未发送："+name+(detail ? "。"+detail : "")+"。";
   }
   async function loadRequestTrace(row, host, sequence, outcomeHost) {
-    host.textContent="正在读取请求追踪…";
+    if(sequence!==traceSequence || !host.isConnected) return;
+    const firstLoad=!host.children.length;
+    if(firstLoad) host.textContent="正在读取请求追踪…";
+    const schedule=()=>{
+      if(sequence!==traceSequence || !host.isConnected) return;
+      stopTraceRefresh();
+      traceRefreshTimer=setTimeout(()=>loadRequestTrace(row,host,sequence,outcomeHost),2000);
+    };
     try {
       // 桥通道被其它慢请求占住时首次会超时；退一步重试一次，别直接判成失败。
       let trace;
@@ -3531,6 +3567,8 @@
         trace=await apiGet("console/request-trace",{request_id:row.request_id});
       }
       if(sequence!==traceSequence || !host.isConnected) return;
+      const expanded=new Set([...host.querySelectorAll("details[open]")].map(node=>node.dataset.traceFold));
+      const scrollTop=el("rawModalBody").scrollTop;
       host.innerHTML="";
       const title=document.createElement("h4");title.className="modal-sec";title.textContent="判断流程";host.appendChild(title);
       const intro=document.createElement("p");intro.textContent="按实际处理顺序展示主要节点。";host.appendChild(intro);
@@ -3548,9 +3586,9 @@
       const toolStatus=toolCalls===0 ? "skipped" :
         settleStatus(trace,traceStage(trace,["tools","image_tool","image_preflight","image_quota","image_api",
           "image_download","image_delivery"],"uncollected"));
-      const sendStatus=trace.state==="completed" ? "success" :
+      const sendStatus=["active","awaiting_delivery"].includes(trace.state) ? "awaiting_delivery" :
         trace.state==="silent" ? "skipped" :
-        settleStatus(trace,traceStage(trace,["delivery","send","lifecycle"],trace.state||"uncollected"));
+        traceStage(trace,["delivery","send"],trace.state==="completed"?"incomplete":trace.state||"uncollected");
       const stages=[
         ["接收消息",traceStage(trace,["receive","input_parse","fragments"],"uncollected"),
           trace.features?.fragments?.status==="success"?"已完成碎片整理":"消息进入处理链路"],
@@ -3560,7 +3598,7 @@
           : row.action==="reply"?"放行，允许进入回复生成":
             "静默 · "+traceReason(row.reason||decisionData(row).model_reason||"")],
         ["生成回复",modelStatus,modelStatus==="skipped"?"判断静默，未进入回复生成":
-          modelStatus==="interrupted"?"主模型生成期间进程退出或被重启，本轮没有写完":
+          modelStatus==="incomplete"?"本轮已结束，未采集到生成结束状态":
           traceReason(trace.features?.main_model?.reason)||"主模型生成与Agent完成状态"],
         ["执行工具",toolStatus,(toolCalls??"未采集")+" 次工具调用 · "+
           (trace.summary?.image_api_calls??"未采集")+" 次绘图API"],
@@ -3586,13 +3624,14 @@
         outcomeHost.replaceChildren();
         if(outcomeText) {
           const outcome=document.createElement("p");
-          outcome.className="send-outcome "+(outcomeText.startsWith("最终发送：已发出")?"ok":"stop");
+          outcome.className="send-outcome "+(outcomeText.startsWith("最终发送：已")?"ok":"stop");
           outcome.textContent=outcomeText;
           outcomeHost.appendChild(outcome);
         }
       }
 
       const technical=document.createElement("details");technical.className="trace-details";
+      technical.dataset.traceFold="features";
       const technicalSummary=document.createElement("summary");technicalSummary.textContent="展开请求标识、监听与功能明细";
       technical.appendChild(technicalSummary);
       const identity=document.createElement("div");
@@ -3622,13 +3661,14 @@
       const keys=[...new Set([...Object.keys(trace.features||{}),"native_tts","native_text_image"])];
       keys.forEach(key=>{
         const feature=trace.features?.[key]||{status:"uncollected"};
+        const status=settleStatus(trace,feature.status,key);
         const cell=document.createElement("div");
-        cell.className="trace-compact-cell trace-tone-"+traceTone(feature.status);
+        cell.className="trace-compact-cell trace-tone-"+traceTone(status);
         const b=document.createElement("b");b.textContent=TRACE_NAMES[key]||key;
-        const parts=[TRACE_STATUS[feature.status]||feature.status];
+        const parts=[TRACE_STATUS[status]||status];
         if(typeof feature.ms==="number") parts.push(feature.ms+" ms");
         if(typeof feature.calls==="number") parts.push(feature.calls+" 次");
-        const reason=shortTraceReason(feature.reason);
+        const reason=shortTraceReason(status==="incomplete"?"":feature.reason==="end_status_missing"?"":feature.reason);
         if(reason) parts.push(reason);
         const small=document.createElement("small");small.textContent=parts.join(" · ");
         cell.append(b,small);grid.appendChild(cell);
@@ -3636,6 +3676,7 @@
       host.appendChild(technical);
 
       const eventsDisclosure=document.createElement("details");eventsDisclosure.className="trace-details";
+      eventsDisclosure.dataset.traceFold="events";
       const eventsSummary=document.createElement("summary");eventsSummary.textContent="展开完整工具与发送事件";
       eventsDisclosure.appendChild(eventsSummary);
       const events=document.createElement("ol");events.className="trace-list";
@@ -3655,14 +3696,23 @@
         eventsDisclosure.appendChild(empty);
       }
       host.appendChild(eventsDisclosure);
-      const refresh=document.createElement("button");refresh.className="raw-open";refresh.textContent="刷新追踪";
-      refresh.addEventListener("click",()=>loadRequestTrace(row,host,++traceSequence));host.appendChild(refresh);
+      host.querySelectorAll("details").forEach(node=>{node.open=expanded.has(node.dataset.traceFold);});
+      const refreshNote=document.createElement("p");refreshNote.className="chat-meta";
+      refreshNote.textContent=TRACE_TERMINAL.has(trace.state)?"请求已结束。":"每 2 秒自动更新追踪。";
+      host.appendChild(refreshNote);
+      if(!firstLoad) el("rawModalBody").scrollTop=scrollTop;
+      if(!TRACE_TERMINAL.has(trace.state)) schedule();
     } catch(err) {
       if(sequence!==traceSequence || !host.isConnected) return;
-      host.textContent="本次生成/发送追踪未采集或暂不可读："+err.message;
+      if(firstLoad) host.replaceChildren();
+      let notice=host.querySelector(".trace-read-error");
+      if(!notice) {notice=document.createElement("p");notice.className="trace-read-error chat-meta";host.appendChild(notice);}
+      notice.textContent="追踪暂不可读："+err.message+"；正在自动重试。";
+      schedule();
     }
   }
   function openRawModal(row) {
+    stopTraceRefresh();
     const sequence=++traceSequence;
     // 先开窗再填内容：中途任何一步出错，用户至少能看到弹窗和错误，而不是点了毫无反应。
     toggleDialog("rawModal", true);
@@ -3700,6 +3750,7 @@
     const request=document.createElement("div");
     request.innerHTML=idLine("request_id",row.request_id,"旧记录未采集请求ID");
     summary.appendChild(request);bindIdCopy(request);
+    const outcomeHost=document.createElement("div");summary.appendChild(outcomeHost);
     body.appendChild(summary);
     const traceHost=document.createElement("div");body.appendChild(traceHost);
     if(!row.request_id) traceHost.textContent="旧记录未采集生成/发送追踪。";
@@ -3707,7 +3758,7 @@
     const detailDisclosure=document.createElement("details");
     detailDisclosure.className="record-disclosure";
     const detailSummary=document.createElement("summary");
-    detailSummary.textContent="展开判定依据、上下文与原始资料";
+    detailSummary.textContent="展开判定依据与模型上下文";
     const detailBody=document.createElement("div");
     detailDisclosure.append(detailSummary,detailBody);body.appendChild(detailDisclosure);
     const section=(title, text)=>{
@@ -3737,36 +3788,6 @@
       "判断结论只用于记录，线上继续主回复。"+
       (observationRules.length ? " 未拦截的本地规则："+observationRules.map(
         rule=>REASON_LABEL[rule]||rule).join("、")+"。" : " 本次没有命中额外本地参与规则。"));
-    section("能力耗时", "文字复判累计计入文字判断。记忆交互总耗时包含向量化、检索与文档读取；并发分支可能重叠，不能相加作为总耗时。");
-    const grid=document.createElement("div");grid.className="timing-grid";
-    const metrics = row.timings || {};
-    const capabilities = [
-      ["text","文字判断"],["vision","识图判断"],["main_fallback","图片主模型兜底"],
-      ["memory","记忆交互（总）"],["embedding","向量化 / 等待向量"],
-      ["vector_index","向量索引检索"],["memory_read","记忆文档读取"],
-      ["input_parse","转发 / 引用 / 卡片解析"],["input_vision","输入图片理解"],["speech_to_text","语音转写"],
-    ];
-    Object.keys(metrics).filter(k=>k.startsWith("retrieval_") || k==="vector_adapter")
-      .forEach(k=>capabilities.push([k, k==="vector_adapter"?"兼容向量检索（含向量化）":
-        "检索分支 · "+k.slice(10)]));
-    capabilities.forEach(([key,label])=>{
-      const cell=document.createElement("div");cell.className="timing-cell";
-      const b=document.createElement("b");b.textContent=label;
-      const metric=metrics[key];
-      // 旧日志可从真实模型尝试还原模型耗时；细分检索未采集时不能写成0。
-      const legacy=(row.attempts || []).filter(a=>a.stage===key && typeof a.ms==="number" &&
-        (a.called || ["ok","timeout","error","parse_error"].includes(a.status)));
-      const value=metric && typeof metric.ms==="number" ? metric :
-        legacy.length ? {ms:legacy.reduce((n,a)=>n+a.ms,0),calls:legacy.length,status:"旧记录"} : null;
-      const missing = metrics.version && ["text","vision","main_fallback","memory"].includes(key)
-        ? "未调用（此判定分支）" : "未采集";
-      const small=document.createElement("small");
-      small.textContent=value ? value.ms+" ms · "+value.calls+" 次 · "+
-        (STATUS_LABEL[value.status] || ({empty:"无可用记忆",cancelled:"已取消"})[value.status] || value.status)
-        : missing;
-      cell.append(b,small);grid.appendChild(cell);
-    });
-    detailBody.appendChild(grid);
     if(row.corrected) section("分数修正", "模型原始给分 "+row.raw_score+
       "，与静默或未理解状态矛盾；插件保留否决，参与适合度修正为 "+row.score+"。");
     const attempts=Array.isArray(row.attempts)?row.attempts:[];
@@ -3814,7 +3835,7 @@
       });
     }
     const judged = judgedMessage(row);
-    if(judged) {
+    if(judged && !chat?.current_message) {
       section("本次判定的消息",
         "这一轮判定实际处理的就是下面这条。判定模型不可用时也会记录，便于回溯是哪条消息受影响。");
       const box = document.createElement("div");
@@ -3841,9 +3862,6 @@
     section("参与判断的消息", contextNote(row)+"。"+(chat?.not_sent ?
       "本次没有发送模型请求，下面仅显示被规则过滤或取模型失败的候选消息。" :
       "下面是本次判定实际参考的内容，序号按输入顺序排列；当前消息单列，不代表它一定晚于等待期间的新消息。"));
-    // 发送结果要读 trace（异步），这里只留占位；trace 到位后由 loadRequestTrace 回填。
-    const outcomeHost = document.createElement("div");
-    detailBody.appendChild(outcomeHost);
     if(chat) {
       const lines=Array.isArray(chat.reference_messages_old_to_new)
         ? chat.reference_messages_old_to_new
@@ -3886,11 +3904,12 @@
       p.textContent=row.ctx || "原记录未保存上下文；规则过滤或调用失败时可能没有发送判定请求。";
       detailBody.appendChild(p);
     }
-    section("模型原始输出");
+    const original=document.createElement("details");original.className="trace-details";
+    const originalTitle=document.createElement("summary");originalTitle.textContent="展开判定原始输入与输出";
+    original.appendChild(originalTitle);
+    const rawHeading=document.createElement("h4");rawHeading.className="modal-sec";rawHeading.textContent="模型原始输出";
     const modelRaw=document.createElement("pre");modelRaw.className="model-raw-output";
-    modelRaw.textContent=row.raw||"未记录";detailBody.appendChild(modelRaw);
-
-    section("判定原始输入");
+    modelRaw.textContent=row.raw||"未记录";original.append(rawHeading,modelRaw);
     const inputData=row.classifier_input||{
       segmented:false,
       notice:"旧记录未能自动分段",
@@ -3899,10 +3918,10 @@
       ending_requirements:"",
     };
     const inputBox=document.createElement("div");inputBox.className="classifier-input";
-    const inputHead=document.createElement("div");inputHead.className="classifier-input-head";
+    const inputHead=document.createElement("div");inputHead.className="decision-actions";
     const inputNotice=document.createElement("span");inputNotice.className="classifier-input-notice";
     inputNotice.textContent=inputData.notice||(
-      inputData.source==="chat_data" ? "中间输入来自本次保存的结构化 chat_data。" : "按原记录展示。"
+      inputData.source==="chat_data" ? "上下文来自本次保存的模型输入。" : "按原记录展示。"
     );
     if(!inputData.segmented) inputNotice.classList.add("warn");
     const copyButton=document.createElement("button");copyButton.type="button";copyButton.className="btn";
@@ -3926,7 +3945,16 @@
       }
       copyButton.textContent=copied?"已复制中间输入":"复制失败，请手动选择";
     });
-    inputHead.append(inputNotice,copyButton);inputBox.appendChild(inputHead);
+    const rulesButton=document.createElement("button");rulesButton.type="button";rulesButton.className="btn";
+    rulesButton.textContent="查看判定规则";
+    rulesButton.addEventListener("click",()=>{
+      closeRawModal();selectPage("flow");
+      el("classifierRules").scrollIntoView({block:"start"});
+      el("classifierRules").focus({preventScroll:true});
+    });
+    // 复制与规则入口常显；上下文与原文按需展开。
+    inputHead.append(copyButton,rulesButton);summary.appendChild(inputHead);
+    detailBody.appendChild(inputNotice);
     const inputPart=(title,value)=>{
       const part=document.createElement("section");part.className="classifier-input-part";
       const heading=document.createElement("h5");heading.textContent=title;
@@ -3934,18 +3962,17 @@
       part.append(heading,pre);inputBox.appendChild(part);
     };
     if(inputData.segmented) {
-      inputPart("开头规则",inputData.opening_rules);
-      inputPart("中间输入",inputData.middle_input);
-      inputPart("结尾要求",inputData.ending_requirements);
+      inputPart("复验输入",inputData.middle_input);
     } else {
       inputPart("完整原文",inputData.middle_input);
     }
-    detailBody.appendChild(inputBox);
+    original.appendChild(inputBox);detailBody.appendChild(original);
     // 放到最后：outcomeHost 此时已定义；trace 异步加载，不影响弹窗先显示。
     if(row.request_id) loadRequestTrace(row,traceHost,sequence,outcomeHost);
   }
 
   function closeRawModal() {
+    stopTraceRefresh();
     traceSequence++;
     toggleDialog("rawModal", false);
   }

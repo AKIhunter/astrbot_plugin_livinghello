@@ -301,6 +301,13 @@
   };
   const flow = {
     note: "纯合成流程；模型调用 0，消息发送 0。",
+    classifier_rules: {
+      notice: "当前版本的固定判定规则；历史请求未保存系统规则快照，复验使用当前规则。",
+      stages: [
+        { id: "text", title: "文字判断", opening_rules: "OPENING-ONLY\n文字角色与评分口径", ending_requirements: "ENDING-ONLY\n只输出一行 JSON" },
+        { id: "vision", title: "识图判断 / 主模型兜底", opening_rules: "VISION-OPENING\n图像证据规则", ending_requirements: "VISION-ENDING\n图像结果 JSON" },
+      ],
+    },
     mode: {
       id: "enforce", title: "硬闸门", summary: "判断结论控制生成",
       decision_effect: "合成判断仅用于 UI 验证。", probe_note: "fixture 禁止真实模型调用。",
@@ -343,6 +350,8 @@
         return ok({ decisions: [structuredDecision, legacyDecision], retained: 2, limit: 100 });
       }
       if (path === "console/request-trace") {
+        if (query.get("trace_error") === "once" && calls.filter(call=>call.path === path).length === 1)
+          return fail("合成暂时读取失败");
         if (params.request_id === requestId) return ok(trace);
         if (params.request_id === legacyRequestId) return ok(legacyTrace);
         return fail("未找到合成追踪");
@@ -406,6 +415,7 @@
       middleInput,
       legacyFull,
       requestId,
+      setTrace(value) { Object.assign(trace, clone(value)); },
       setOutageState(value) { outageState = value; },
       setConnected(kind, value) { connected[kind] = value; },
       get modelCalls() { return modelCalls; },

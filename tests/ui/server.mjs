@@ -34,6 +34,10 @@ export async function startServer(port = 0) {
       } else if (pathname === "/tests/ui/fixture-bridge.js") {
         response.setHeader("Content-Type", "text/javascript; charset=utf-8");
         response.end(await readFile(bridgePath));
+      } else if (["/tests/ui/diagnostics.mjs", "/pages/guard/diagnostics.mjs"].includes(pathname)) {
+        // fixture 与真实页面都要加载原有诊断模块，避免相对路径产生假 404。
+        response.setHeader("Content-Type", "text/javascript; charset=utf-8");
+        response.end(await readFile(path.join(root, "pages/guard/diagnostics.mjs")));
       } else {
         response.writeHead(404);
         response.end("Not found");

@@ -16,7 +16,11 @@ const { server, url } = await startServer();
 const evidenceUrl = new URL("./evidence/", import.meta.url);
 await mkdir(evidenceUrl, { recursive: true });
 
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({
+  headless: true,
+  ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
+    ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}),
+});
 const productStates = ["disabled", "healthy", "cooling", "probing", "recovering", "needs_attention"];
 const expectedState = {
   disabled: ["已关闭", "功能关闭；文字判定失败继续按现有规则静默"],
@@ -62,7 +66,7 @@ async function caseRun(name, task) {
   }
 }
 
-async function open(options = {}, suffix = "") {
+async function open(options = {}, suffix = "", initScript = null) {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
     colorScheme: "light",
@@ -71,6 +75,7 @@ async function open(options = {}, suffix = "") {
   });
   const origin = new URL(url).origin;
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
+  if(initScript) await context.addInitScript(initScript);
   const page = await context.newPage();
   page.on("pageerror", error => report.pageErrors.push({ suffix, message: error.message }));
   page.on("console", message => {
@@ -271,27 +276,37 @@ try {
     await context.close();
   });
 
-  await caseRun("三段式原始输入、复制仅中间内容并可粘贴到文字试跑", async () => {
+  await caseRun("判断上下文去重、复制保真、规则一步直达且不自动试跑", async () => {
     const { context, page } = await open({ viewport: { width: 1280, height: 900 }, colorScheme: "dark" }, "?outage=healthy");
     await ready(page);
     await page.locator(".decision-action").first().click();
     await page.locator("#rawModal.show").waitFor();
+    assert.equal(await page.getByRole("button", { name: "复制复验内容" }).isVisible(), true);
     await page.locator(".record-disclosure > summary").click();
-    const headings = await page.locator(".classifier-input-part h5").allTextContents();
-    assert.deepEqual(headings, ["开头规则", "中间输入", "结尾要求"]);
+    assert.equal(await page.getByText("能力耗时", { exact: true }).count(), 0);
+    assert.equal(await page.getByText("本次判定的消息", { exact: true }).count(), 0);
+    assert.equal(await page.locator(".chat-messages .current").count(), 1);
+    await page.getByText("展开判定原始输入与输出", { exact: true }).click();
+    // 流程页也有规则，限定详情内部。
+    assert.deepEqual(await page.locator("#rawModal .classifier-input-part h5").allTextContents(), ["复验输入"]);
     assert.equal(await page.locator(".model-raw-output").evaluate((raw, input) => input.contains(raw), await page.locator(".classifier-input").elementHandle()), false);
-    const parts = await page.locator(".classifier-input-part pre").allTextContents();
-    assert.match(parts[0], /OPENING-ONLY/);
-    assert.match(parts[1], /MIDDLE-ONLY/);
-    assert.match(parts[2], /ENDING-ONLY/);
+    const parts = await page.locator("#rawModal .classifier-input-part pre").allTextContents();
+    assert.match(parts[0], /MIDDLE-ONLY/);
+    assert.doesNotMatch(await page.locator("#rawModalBody").textContent(), /OPENING-ONLY|ENDING-ONLY/);
     await page.getByRole("button", { name: "复制复验内容" }).click();
     const copied = await page.evaluate(() => navigator.clipboard.readText());
     const expected = await page.evaluate(() => window.__fixture.middleInput);
     assert.equal(copied, expected);
     assert.doesNotMatch(copied, /OPENING-ONLY|ENDING-ONLY/);
     await shot(page, "1280-dark-structured-input.png");
-    await page.keyboard.press("Escape");
-    await page.getByRole("tab", { name: "流程与试跑" }).click();
+    await page.getByRole("button", { name: "查看判定规则" }).click();
+    assert.equal(await page.locator("#rawModal").getAttribute("class"), "modal-mask");
+    assert.equal(await page.locator("#panel-flow").getAttribute("hidden"), null);
+    assert.equal(await page.evaluate(()=>document.activeElement.id), "classifierRules");
+    assert.match(await page.locator("#classifierRulesNotice").textContent(), /当前版本.*历史请求/);
+    await page.locator("#classifierRulesContent > details").first().locator("summary").click();
+    assert.match(await page.locator("#classifierRulesContent").textContent(), /OPENING-ONLY.*文字角色/s);
+    await shot(page,"1280-dark-rules.png");
     await page.locator("#probeText").focus();
     await page.keyboard.press(process.platform === "darwin" ? "Meta+V" : "Control+V");
     assert.equal(await page.locator("#probeText").inputValue(), expected);
@@ -306,14 +321,97 @@ try {
     await page.locator(".decision-action").nth(1).click();
     await page.locator("#rawModal.show").waitFor();
     await page.locator(".record-disclosure > summary").click();
+    await page.getByText("展开判定原始输入与输出", { exact: true }).click();
     assert.equal((await page.locator(".classifier-input-notice").textContent()).trim(), "旧记录未能自动分段");
-    assert.deepEqual(await page.locator(".classifier-input-part h5").allTextContents(), ["完整原文"]);
+    assert.deepEqual(await page.locator("#rawModal .classifier-input-part h5").allTextContents(), ["完整原文"]);
     const expected = await page.evaluate(() => window.__fixture.legacyFull);
-    assert.equal(await page.locator(".classifier-input-part pre").textContent(), expected);
+    assert.equal(await page.locator("#rawModal .classifier-input-part pre").textContent(), expected);
     await page.getByRole("button", { name: "复制复验内容" }).click();
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expected);
     assert.equal(await page.locator(".model-raw-output").evaluate((raw, input) => input.contains(raw), await page.locator(".classifier-input").elementHandle()), false);
     await shot(page, "320-light-legacy-fallback.png");
+    await context.close();
+  });
+
+  await caseRun("追踪自动刷新保留展开/滚动，读取重试，终态与关闭后停止", async () => {
+    const { context, page } = await open({}, "?trace_error=once", () => {
+      const original=window.setTimeout.bind(window);
+      window.setTimeout=(callback, timeout, ...args)=>original(callback,
+        timeout===2000?120:timeout===600?20:timeout,...args);
+    });
+    await ready(page);
+    await page.evaluate(()=>window.__fixture.setTrace({
+      state:"awaiting_delivery",
+      features:{
+        receive:{status:"success"}, text:{status:"success"},
+        main_model:{status:"success",ms:128},
+        delivery:{status:"pending",reason:"final_send_not_observed"},
+        send:{status:"success",source:"early_ack"},
+      },
+      summary:{tool_calls:0,image_api_calls:0,sent_packets:1},
+    }));
+    await page.locator(".decision-action").first().click();
+    await page.getByText("每 2 秒自动更新追踪。", {exact:true}).waitFor();
+    assert.equal(await page.locator(".request-flow .flow-status").nth(4).textContent(),"等待最终投递");
+    await page.getByText("展开请求标识、监听与功能明细", {exact:true}).click();
+    await page.evaluate(()=>{document.querySelector("#rawModalBody").scrollTop=80;});
+    const before=await page.evaluate(()=>({
+      calls:window.__fixture.calls.filter(call=>call.path==="console/request-trace").length,
+      top:document.querySelector("#rawModalBody").scrollTop,
+    }));
+    assert.ok(before.calls>=2,"首次读取失败应自动重试");
+    await page.waitForFunction(count=>window.__fixture.calls.filter(call=>call.path==="console/request-trace").length>count,before.calls);
+    assert.equal(await page.locator('[data-trace-fold="features"]').getAttribute("open"),"");
+    assert.equal(await page.locator("#rawModalBody").evaluate(node=>node.scrollTop),before.top);
+    await page.evaluate(()=>window.__fixture.setTrace({
+      state:"completed",
+      features:{
+        receive:{status:"success"}, main_model:{status:"pending"},
+        delivery:{status:"running",reason:"final_send_not_observed"},
+        lifecycle:{status:"completed",reason:"final_delivery_confirmed"},
+      },
+      summary:{sent_packets:1,tool_calls:0,image_api_calls:0},
+    }));
+    await page.getByText("请求已结束。",{exact:true}).waitFor();
+    const delivery=page.locator(".feature-grid .trace-compact-cell").filter({has:page.locator("b",{hasText:"最终投递"})});
+    assert.match(await delivery.textContent(),/成功/);
+    const model=page.locator(".feature-grid .trace-compact-cell").filter({has:page.locator("b",{hasText:"主模型"})});
+    assert.match(await model.textContent(),/结束状态未采集/);
+    assert.doesNotMatch(await page.locator(".feature-grid").textContent(),/执行中|等待中|进程退出|重启/);
+    let calls=await page.evaluate(()=>window.__fixture.calls.filter(call=>call.path==="console/request-trace").length);
+    await page.waitForTimeout(400); // 跨三个轮询周期，证明终态不再调度。
+    assert.equal(await page.evaluate(()=>window.__fixture.calls.filter(call=>call.path==="console/request-trace").length),calls);
+    await page.keyboard.press("Escape");
+    await page.evaluate(()=>window.__fixture.setTrace({state:"active"}));
+    await page.locator(".decision-action").first().click();
+    await page.getByText("每 2 秒自动更新追踪。",{exact:true}).waitFor();
+    await page.keyboard.press("Escape");
+    calls=await page.evaluate(()=>window.__fixture.calls.filter(call=>call.path==="console/request-trace").length);
+    await page.waitForTimeout(400);
+    assert.equal(await page.evaluate(()=>window.__fixture.calls.filter(call=>call.path==="console/request-trace").length),calls);
+    assert.equal(await page.evaluate(()=>window.__fixture.modelCalls),0);
+    await context.close();
+  });
+
+  await caseRun("终态无回执不伪装成功，取消与静默分别收尾", async () => {
+    const { context, page }=await open();
+    await ready(page);
+    for(const [state,reason,expected] of [
+      ["completed","", "结束状态未采集"],
+      ["cancelled","message_recalled","已取消"],
+      ["silent","others_talking","未调用 / 跳过"],
+    ]) {
+      await page.evaluate(({state,reason})=>window.__fixture.setTrace({
+        state,features:{delivery:{status:"pending"},lifecycle:{status:state,reason}},
+        summary:{tool_calls:0,sent_packets:0},
+      }),{state,reason});
+      await page.locator(".decision-action").first().click();
+      await page.getByText("请求已结束。",{exact:true}).waitFor();
+      await page.getByText("展开请求标识、监听与功能明细",{exact:true}).click();
+      const delivery=page.locator(".feature-grid .trace-compact-cell").filter({has:page.locator("b",{hasText:"最终投递"})});
+      assert.match(await delivery.textContent(),new RegExp(expected));
+      await page.keyboard.press("Escape");
+    }
     await context.close();
   });
 

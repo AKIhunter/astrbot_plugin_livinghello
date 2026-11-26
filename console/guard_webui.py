@@ -927,7 +927,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     mark("最近判定")
 
     data = {
-        "version": "2.10.2",
+        "version": "2.10.3",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
         "config": config,
@@ -1358,7 +1358,19 @@ async def handle_save_image_settings(plugin):
 async def handle_flow(plugin):
     try:
         native = _native_settings(plugin).read(request.query.get("config_id", "default"))
-        return _response(build_flow(plugin.config, native))
+        flow = build_flow(plugin.config, native)
+        flow["classifier_rules"] = {
+            "notice": "当前版本的固定判定规则；历史请求未保存系统规则快照，复验使用当前规则。",
+            "stages": [
+                {
+                    "id": stage, "title": title,
+                    "opening_rules": "\n\n".join((_system_prompt_sections(stage)[0], _CHAT_INPUT_INTRO)),
+                    "ending_requirements": "\n\n".join((_CHAT_INPUT_END, _system_prompt_sections(stage)[1])),
+                }
+                for stage, title in (("text", "文字判断"), ("vision", "识图判断 / 主模型兜底"))
+            ],
+        }
+        return _response(flow)
     except NativeReplyError as exc:
         return _failure(str(exc), exc.status)
 

@@ -2,7 +2,7 @@
 
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
-[![Version](https://img.shields.io/badge/version-2.10.2-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.10.3-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -62,5 +62,5 @@ Private image prompts, mapping files and learned data remain local.
 Classifier, vision, TTS and image requests can incur provider charges.
 Developer: [AKIhunter](https://github.com/AKIhunter). Feedback QQ group: 991350637.
 
-Version **2.10.2** fixes video model selection and clearing video or speech model overrides. Video processing works independently of the image switch and selects the video override, shared vision provider, then the session model. Video capability validation and timeout accounting are aligned with the console. No configuration migration is required. See [video model settings](docs/configuration.md#视频模型与清空选择). Reply deduplication and the last-72-hour diagnostic export remain available.
+Version **2.10.3** simplifies decision details into main stages, feature execution and model context, with automatic trace updates and direct replay copying. Fixed classifier rules now appear on the flow and probe page. Confirmed delivery closes waiting trace states, while missing outcomes remain unknown. The standalone offline error-response fixture is corrected. No configuration migration is required. See [decision details and replay](docs/decision-details.md).
 See the [fallback guide](docs/reply_fallback.md) and [changelog](CHANGELOG.md).
