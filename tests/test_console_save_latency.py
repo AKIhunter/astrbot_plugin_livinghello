@@ -1,5 +1,6 @@
 """保存确认与读取解耦、模型目录缓存回归；均为内存替身。"""
 import asyncio
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -140,6 +141,25 @@ class ProviderCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(row[0]["id"] == "text" for row in rows))
         rows[0][0]["id"] = "mutated"
         self.assertEqual((await guard_webui._providers(self.guard))[0]["id"], "text")
+
+    async def test_sync_catalog_query_leaves_event_loop_free(self):
+        loop = asyncio.get_running_loop()
+        release = threading.Event()
+
+        def models():
+            loop.call_soon_threadsafe(self.started.set)
+            if not release.wait(timeout=2):
+                raise TimeoutError("event loop was unable to release the provider")
+            return ["sync-model"]
+
+        self.provider.get_models = models
+        task = asyncio.create_task(guard_webui._providers(self.guard))
+        try:
+            await asyncio.wait_for(self.started.wait(), timeout=4)
+        finally:
+            release.set()
+        rows = await asyncio.wait_for(task, timeout=2)
+        self.assertEqual(rows[0]["upstreams"], ["sync-model"])
 
     async def test_plain_parameter_save_and_existing_model_selection_reuse_cache(self):
         await guard_webui._providers(self.guard)

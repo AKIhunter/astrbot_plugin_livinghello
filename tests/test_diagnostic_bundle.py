@@ -2,7 +2,6 @@
 import importlib.util
 import asyncio
 import json
-import logging
 import os
 from pathlib import Path
 import sqlite3
@@ -249,23 +248,6 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertFalse(list((self.recorder.directory / "exports").glob("*.zip")))
 
-    def test_log_handler_filters_other_plugins_and_detaches(self):
-        logger = logging.getLogger("isolated-diagnostics")
-        self.recorder.install(logger)
-        self.recorder.install(logger)
-        self.assertEqual(len(logger.handlers), 1)
-        for file in (SOURCE, Path(self.folder.name) / "other_plugin.py"):
-            record = logging.LogRecord(logger.name, logging.ERROR, str(file), 42, "upstream failed", (), None)
-            record.created = self.now - 1
-            logger.handle(record)
-        self.assertTrue(self.recorder.flush())
-        bundle = self.bundle()
-        content = self.read(bundle)
-        self.assertEqual(json.loads(content["manifest.json"])["files"]["runtime.jsonl"]["records"], 1)
-        bundle.close()
-        self.recorder.close()
-        self.assertEqual(logger.handlers, [])
-
     def test_symlink_log_is_not_exported(self):
         path = Path(self.folder.name) / "external"
         path.write_text(json.dumps({"at": self.now - 1, "detail": "not-our-source"}))
@@ -275,23 +257,15 @@ class BundleTests(unittest.TestCase):
         self.assertNotIn("not-our-source", self.read(bundle)["runtime.jsonl"])
         bundle.close()
 
-    def test_dynamic_credentials_and_unstructured_log_body_are_omitted(self):
+    def test_dynamic_credentials_are_omitted(self):
         credentials = ["first-synthetic-credential"]
         self.recorder.redactor = module.Redactor("salt", lambda: credentials)
         credentials[:] = ["second-synthetic-credential"]
-        logger = logging.getLogger("private-runtime-diagnostics")
-        self.recorder.install(logger)
-        for message, args in (("message sent: %s", ("private-body-sentinel",)),
-                              ("generated private-body-sentinel", ())):
-            record = logging.LogRecord(logger.name, logging.ERROR, str(SOURCE), 10, message, args, None)
-            record.created = self.now - 1
-            logger.handle(record)
         self.recorder.record("failure", {"at": self.now - 1, "detail": credentials[0]})
         bundle = self.bundle()
         content = "\n".join(self.read(bundle).values())
-        self.assertNotIn("private-body-sentinel", content)
         self.assertNotIn(credentials[0], content)
-        self.assertIn("message sent: %s", content)
+        self.assertEqual(json.loads(self.read(bundle)["runtime.jsonl"])["detail"], "[secret]")
         bundle.close()
 
     def test_sqlite_wal_snapshot_consistent_during_concurrent_commit(self):

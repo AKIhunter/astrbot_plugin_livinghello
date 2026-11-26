@@ -5,7 +5,7 @@
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.10.4-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.10.5-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -115,4 +115,4 @@ Developer: [AKIhunter](https://github.com/AKIhunter). Feedback QQ group: 9913506
 
 ## 📜 Release notes
 
-**2.10.4** adds seven Quick Start steps with 24 shortcuts. Decision details collapse listener coverage, show recorded feature timestamps, and display the retained classifier input and output. No configuration migration is needed. See [decision details and replay](docs/decision-details.md) and the [changelog](CHANGELOG.md).
+**2.10.5** records structured diagnostics for slow console calls and exceptions, and moves synchronous model list queries off the event loop. No configuration migration is needed. See [diagnostic export](docs/diagnostics.md) and the [changelog](CHANGELOG.md).

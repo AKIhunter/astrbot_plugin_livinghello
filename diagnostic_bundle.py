@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import asyncio
 import json
-import logging
 import math
 import os
 import platform
@@ -19,7 +18,6 @@ import sqlite3
 import tempfile
 import threading
 import time
-import traceback
 import zipfile
 from pathlib import Path
 
@@ -207,35 +205,6 @@ def require_admin(context, request):
         raise PermissionError("unauthorized") from None
 
 
-class _LogHandler(logging.Handler):
-    def __init__(self, recorder):
-        super().__init__(logging.INFO)
-        self.recorder = recorder
-
-    def emit(self, record):
-        try:
-            # A fallback global logger is acceptable only with this source filter.
-            path = Path(record.pathname).resolve()
-            if not path.is_relative_to(self.recorder.plugin_root):
-                return
-            # Arbitrary log arguments and f-strings can contain chat/prompt bodies.
-            # Retain a format template, source location and exception type instead.
-            message = str(record.msg)[:1024] if record.args else "runtime log"
-            if record.exc_info:
-                # Exception frame locations help debugging; omit source-code/body lines.
-                message += "\n" + "".join(
-                    f"{Path(frame.filename).name}:{frame.lineno} {frame.name}\n"
-                    for frame in traceback.extract_tb(record.exc_info[2])
-                ) + type(record.exc_info[1]).__name__
-            self.recorder.record("runtime", {
-                "at": record.created, "level": record.levelname,
-                "module": record.module, "line": record.lineno,
-                "detail": message,
-            })
-        except Exception:
-            self.recorder.dropped += 1
-
-
 def runtime_environment(host, plugin_version, settings):
     """Read local metadata only: never enumerate models or contact providers."""
     try:
@@ -342,7 +311,6 @@ class DiagnosticRecorder:
         self._io_lock = threading.Lock()
         self._bundles = set()
         self._bundle_lock = threading.Lock()
-        self._handlers = []
         self._worker = None
         self._active = None
         self._active_hour = None
@@ -393,17 +361,6 @@ class DiagnosticRecorder:
             self._worker = threading.Thread(
                 target=self._run, name=f"{plugin_name}-diagnostics", daemon=True)
             self._worker.start()
-
-    def install(self, sink):
-        if self._stop.is_set() or self._handlers:
-            return
-        handler = _LogHandler(self)
-        try:
-            sink.addHandler(handler)
-            self._handlers.append((sink, handler))
-        except (AttributeError, TypeError):
-            handler.close()
-            self.dropped += 1
 
     def record(self, operation, value):
         if self._stop.is_set():
@@ -641,10 +598,6 @@ class DiagnosticRecorder:
     def close(self):
         if self._stop.is_set():
             return
-        for sink, handler in self._handlers:
-            sink.removeHandler(handler)
-            handler.close()
-        self._handlers.clear()
         with self._bundle_lock:
             self._stop.set()
             bundles = list(self._bundles)

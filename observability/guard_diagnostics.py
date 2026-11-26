@@ -40,7 +40,6 @@ def start(plugin):
         return credentials_from(plugin.context.get_config()) + credentials_from(plugin.config)
     recorder = DiagnosticRecorder(plugin.data_dir, "astrbot_plugin_LivingHello",
                                   Path(__file__).resolve().parents[1], credentials=credentials)
-    recorder.install(plugin.logger)
     recorder.record("lifecycle", {"status": "loaded"})
     plugin.engine.log.diagnostics = lambda row: recorder.record("decision", decision_record(row))
     return recorder

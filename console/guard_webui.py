@@ -191,17 +191,39 @@ def _failure(message: str, status_code: int = 400):
 SLOW_ENDPOINT_MS = 120.0
 
 
+def _record_console_runtime(plugin: Any, event: str, endpoint: str, *,
+                            duration_ms: int | None = None, exception_type: str | None = None) -> None:
+    # 只记固定事件与元数据；宿主日志和异常正文可能含聊天或凭据。
+    recorder = getattr(plugin, "diagnostics", None)
+    if recorder is None:
+        return
+    row: dict[str, str | int] = {"event": event, "endpoint": endpoint}
+    if duration_ms is not None:
+        row["duration_ms"] = duration_ms
+    if exception_type is not None:
+        row["exception_type"] = exception_type
+    recorder.record("runtime", row)
+
+
 def _bind(plugin: Any, handler: Handler):
+    endpoint = handler.__name__.removeprefix("handle_")
+
     async def bound_handler():
         started = time.perf_counter()
+        exception_type = None
         try:
             return await handler(plugin)
+        except Exception as exc:
+            exception_type = type(exc).__name__
+            raise
         finally:
             used = (time.perf_counter() - started) * 1000.0
             if used >= SLOW_ENDPOINT_MS:
-                logger.warning(
-                    f"[LivingHello] 控制台慢接口 {handler.__name__.replace('handle_', '')} "
-                    f"{used:.0f}ms"
+                logger.warning(f"[LivingHello] 控制台慢接口 {endpoint} {used:.0f}ms")
+            if exception_type is not None or used >= SLOW_ENDPOINT_MS:
+                _record_console_runtime(
+                    plugin, "console_handler_failed" if exception_type else "console_slow",
+                    endpoint, duration_ms=round(used), exception_type=exception_type,
                 )
 
     bound_handler.__name__ = f"at_guard_{handler.__name__}"
@@ -427,9 +449,13 @@ async def _build_providers(plugin: Any) -> list[dict[str, Any]]:
                 get_models = getattr(provider, "get_models", None)
                 if callable(get_models):
                     try:
-                        result = get_models()
-                        if inspect.isawaitable(result):
-                            result = await result
+                        # 兼容同步 Provider；真实 HTTP 请求不能占住宿主事件循环。
+                        if inspect.iscoroutinefunction(get_models):
+                            result = await get_models()
+                        else:
+                            result = await asyncio.to_thread(get_models)
+                            if inspect.isawaitable(result):
+                                result = await result
                         if isinstance(result, (list, tuple)):
                             names = [
                                 str(item).strip()
@@ -927,7 +953,7 @@ async def _state(plugin: Any) -> dict[str, Any]:
     mark("最近判定")
 
     data = {
-        "version": "2.10.4",
+        "version": "2.10.5",
         "mode": engine.mode(),
         "modeLabels": MODE_LABELS,
         "config": config,
@@ -1510,7 +1536,11 @@ async def handle_diagnostics_export(plugin):
         return _failure("登录已失效或无权限。", 403 if str(exc) == "forbidden" else 401)
     except DiagnosticBusy:
         return _failure("诊断包正在打包或下载，请稍后重试。", 409)
-    except Exception:
+    except Exception as exc:
+        _record_console_runtime(
+            plugin, "diagnostics_export_failed", "diagnostics_export",
+            exception_type=type(exc).__name__,
+        )
         return _failure("诊断包导出失败，请稍后重试。", 503)
     finally:
         if bundle is not None:
