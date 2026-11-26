@@ -239,6 +239,22 @@ try {
     assert.match(nodes[3].tone, /trace-tone-abnormal/);
     assert.ok(nodes.every(item => item.noteLines <= 1));
     await page.getByText("展开请求标识、监听与功能明细", { exact: true }).click();
+    const coverage=page.locator('[data-trace-fold="coverage"] > summary');
+    assert.equal(await coverage.textContent(),"监听覆盖 · 2/5 正常");
+    assert.equal(await page.locator(".trace-grid").isVisible(),false);
+    await coverage.focus();
+    await page.keyboard.press("Enter");
+    assert.equal(await page.locator(".trace-grid").isVisible(),true);
+    assert.equal(await page.getByText("展开完整工具与发送事件",{exact:true}).count(),0);
+    const sends=page.locator('[data-trace-fold="node:send"]');
+    const stamp=seconds=>new Date(seconds*1000).toISOString();
+    assert.equal(await sends.locator("summary time").getAttribute("datetime"),stamp(1793949001));
+    await sends.locator("summary").click();
+    assert.deepEqual(await sends.locator("li time").evaluateAll(nodes=>nodes.map(n=>n.dateTime)),
+      [stamp(1793949000),stamp(1793949001)]);
+    assert.match(await sends.locator("li").nth(1).textContent(),/image/);
+    const missing=page.locator(".feature-grid .trace-compact-cell").filter({has:page.locator("b",{hasText:"消息接收"})});
+    assert.match(await missing.textContent(),/时间未采集/);
     const compact = await page.evaluate(() => {
       const read = selector => [...document.querySelectorAll(selector)].map(node => ({
         name: node.querySelector("b").textContent,
@@ -288,16 +304,22 @@ try {
     assert.equal(await page.locator(".chat-messages .current").count(), 1);
     await page.getByText("展开判定原始输入与输出", { exact: true }).click();
     // 流程页也有规则，限定详情内部。
-    assert.deepEqual(await page.locator("#rawModal .classifier-input-part h5").allTextContents(), ["复验输入"]);
-    assert.equal(await page.locator(".model-raw-output").evaluate((raw, input) => input.contains(raw), await page.locator(".classifier-input").elementHandle()), false);
-    const parts = await page.locator("#rawModal .classifier-input-part pre").allTextContents();
-    assert.match(parts[0], /MIDDLE-ONLY/);
+    assert.deepEqual(await page.locator("#rawModal .classifier-input-part h5").allTextContents(), ["判定请求文本（日志）"]);
+    const stored = await page.evaluate(() => ({
+      input: window.__fixture.recordedPrompt, output: window.__fixture.state.decisions[0].raw,
+    }));
+    const original = page.locator("#rawModal .classifier-input-part pre");
+    assert.equal(await original.textContent(),stored.input);
+    assert.equal(await original.locator("tag").count(),0);
+    assert.equal(await page.locator(".model-raw-output").textContent(),stored.output);
+    assert.doesNotMatch(await page.locator("#rawModalBody").textContent(), /MIDDLE-ONLY/);
     assert.doesNotMatch(await page.locator("#rawModalBody").textContent(), /OPENING-ONLY|ENDING-ONLY/);
     await page.getByRole("button", { name: "复制复验内容" }).click();
     const copied = await page.evaluate(() => navigator.clipboard.readText());
     const expected = await page.evaluate(() => window.__fixture.middleInput);
     assert.equal(copied, expected);
     assert.doesNotMatch(copied, /OPENING-ONLY|ENDING-ONLY/);
+    await original.scrollIntoViewIfNeeded();
     await shot(page, "1280-dark-structured-input.png");
     await page.getByRole("button", { name: "查看判定规则" }).click();
     assert.equal(await page.locator("#rawModal").getAttribute("class"), "modal-mask");
@@ -323,13 +345,28 @@ try {
     await page.locator(".record-disclosure > summary").click();
     await page.getByText("展开判定原始输入与输出", { exact: true }).click();
     assert.equal((await page.locator(".classifier-input-notice").textContent()).trim(), "旧记录未能自动分段");
-    assert.deepEqual(await page.locator("#rawModal .classifier-input-part h5").allTextContents(), ["完整原文"]);
+    assert.deepEqual(await page.locator("#rawModal .classifier-input-part h5").allTextContents(), ["判定请求文本（日志）"]);
     const expected = await page.evaluate(() => window.__fixture.legacyFull);
     assert.equal(await page.locator("#rawModal .classifier-input-part pre").textContent(), expected);
     await page.getByRole("button", { name: "复制复验内容" }).click();
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expected);
     assert.equal(await page.locator(".model-raw-output").evaluate((raw, input) => input.contains(raw), await page.locator(".classifier-input").elementHandle()), false);
     await shot(page, "320-light-legacy-fallback.png");
+    await context.close();
+  });
+
+  await caseRun("显式唤醒没有判定模型输入和输出，复验资料仍可复制", async () => {
+    const {context,page}=await open({}, "?decision=bypass");
+    await ready(page);
+    await page.locator(".decision-action").first().click();
+    await page.locator(".record-disclosure > summary").click();
+    await page.getByText("展开判定原始输入与输出",{exact:true}).click();
+    assert.equal(await page.getByText("本次未调用判定模型。",{exact:true}).isVisible(),true);
+    assert.equal(await page.locator("#rawModal .classifier-input-part pre").textContent(),"无判定请求");
+    assert.equal(await page.locator(".model-raw-output").textContent(),"无判定模型返回");
+    await page.getByRole("button",{name:"复制复验内容"}).click();
+    const copied=await page.evaluate(async()=>[await navigator.clipboard.readText(),window.__fixture.middleInput]);
+    assert.equal(copied[0],copied[1]);
     await context.close();
   });
 
@@ -354,6 +391,8 @@ try {
     await page.getByText("每 2 秒自动更新追踪。", {exact:true}).waitFor();
     assert.equal(await page.locator(".request-flow .flow-status").nth(4).textContent(),"等待最终投递");
     await page.getByText("展开请求标识、监听与功能明细", {exact:true}).click();
+    await page.locator('[data-trace-fold="coverage"] > summary').click();
+    await page.locator('[data-trace-fold="node:send"] > summary').click();
     await page.evaluate(()=>{document.querySelector("#rawModalBody").scrollTop=80;});
     const before=await page.evaluate(()=>({
       calls:window.__fixture.calls.filter(call=>call.path==="console/request-trace").length,
@@ -362,6 +401,9 @@ try {
     assert.ok(before.calls>=2,"首次读取失败应自动重试");
     await page.waitForFunction(count=>window.__fixture.calls.filter(call=>call.path==="console/request-trace").length>count,before.calls);
     assert.equal(await page.locator('[data-trace-fold="features"]').getAttribute("open"),"");
+    assert.equal(await page.locator('[data-trace-fold="coverage"]').getAttribute("open"),"");
+    assert.equal(await page.locator('[data-trace-fold="node:send"]').getAttribute("open"),"");
+    assert.equal(await page.evaluate(()=>document.activeElement.closest("details")?.dataset.traceFold),"node:send");
     assert.equal(await page.locator("#rawModalBody").evaluate(node=>node.scrollTop),before.top);
     await page.evaluate(()=>window.__fixture.setTrace({
       state:"completed",
@@ -506,6 +548,94 @@ try {
     await page.locator("#saveMsg").filter({ hasText: "回复参数已保存" }).waitFor();
     assert.equal(await page.evaluate(() => window.__fixture.state.config.reply_fallback_enabled), false);
     assert.equal(await page.evaluate(() => window.__fixture.modelCalls), 0);
+    await context.close();
+  });
+
+  await caseRun("快速开始：配置入口逐项直达，回到原步骤，草稿只在确认保存后提交", async () => {
+    const { context, page } = await open({}, "?native=local");
+    await ready(page);
+    const guide = page.getByRole("dialog", { name: "快速开始" });
+    const openGuide = () => page.getByRole("button", { name: "快速开始", exact: true }).click();
+    const targets = [
+      [["闸门模式", "#gateModes"], ["判定模型与阈值", "#participation"],
+        ["上下文与记忆", "#context", true], ["预算与判定时限", "#budget", true]],
+      [["黑白灰名单", "#messagePolicy"], ["群消息主动判定", "#field-proactive_group_judge"],
+        ["称呼、空 @ 与私聊", "#mentions"]],
+      [["AstrBot 配置与人格", "#nativePersonaConfig"], ["主模型与回退模型", '[data-group="模型"]'],
+        ["分段回复", "#nativeSegmentOptions", true], ["语音回复", '[data-group="语音回复"]', true],
+        ["文本排版转图", '[data-group="文本排版转图"]', true]],
+      [["回复方式", "#expression"], ["回复节奏", "#rhythm"], ["撤回保护", "#recall"]],
+      [["图片判定与主模型兜底", "#vision"], ["内容理解", "#understanding"], ["AI 生图", "#imageGeneration"]],
+      [["功能耦合", "#integration"], ["断线恢复与兜底回复", "#outageRecovery"], ["提示词注入", "#promptInjection"]],
+      [["定位保存按钮", "#saveBtn"], ["查看最近判定", "#records"], ["文字试跑", "#probeCard", true]],
+    ];
+    const posts = () => page.evaluate(() => window.__fixture.calls.filter(call =>
+      call.method === "POST" && call.path !== "console/native-profile"));
+    await openGuide();
+    for (const [index, step] of targets.entries()) {
+      for (const [name, selector, optional] of step) {
+        assert.equal((await page.locator("#introCount").textContent()).trim(), `${index + 1} / 7`);
+        if (optional && !(await guide.locator("details").getAttribute("open") === "")) {
+          await guide.getByText("更多可选设置", { exact: true }).click();
+        }
+        await guide.getByRole("button", { name: new RegExp(`^${name}`) }).click();
+        await page.waitForFunction(css => document.querySelector(css)?.contains(document.activeElement), selector);
+        assert.equal(await guide.isVisible(), false);
+        if (selector === "#mentions") await page.locator("#field-apply_to_private").check();
+        await openGuide();
+      }
+      if (index < targets.length - 1) await guide.getByRole("button", { name: "下一步" }).click();
+    }
+    assert.deepEqual(await posts(), []);
+    await guide.getByRole("button", { name: "完成引导" }).click();
+    assert.equal(await page.locator("#panel-flow").isVisible(), true);
+    await openGuide();
+    assert.equal((await page.locator("#introCount").textContent()).trim(), "1 / 7");
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#introBtn").evaluate(node => node === document.activeElement), true);
+    await page.locator("#saveBarSave").click();
+    await page.locator("#saveMsg").filter({ hasText: "回复参数已保存" }).waitFor();
+    const saved = await posts();
+    assert.deepEqual(saved.map(call => call.path), ["console/message-policy/validate", "console/config"]);
+    assert.deepEqual(saved[1].payload, { apply_to_private: true });
+    assert.equal(await page.evaluate(() => window.__fixture.state.config.apply_to_private), true);
+    assert.equal(await page.evaluate(() => window.__fixture.modelCalls), 0);
+    await context.close();
+  });
+
+  await caseRun("快速开始：窄屏滚动、键盘焦点与外部 Agent 原生入口降级", async () => {
+    const { context, page } = await open({ viewport: { width: 320, height: 480 }, colorScheme: "dark" });
+    await ready(page);
+    const guide = page.getByRole("dialog", { name: "快速开始" });
+    await page.getByRole("button", { name: "快速开始", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await page.locator("#introNext").evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press("Enter");
+    assert.equal(await page.locator("#introStepTitle").evaluate(node => node === document.activeElement), true);
+    await guide.getByRole("button", { name: /^群消息主动判定/ }).click();
+    await page.waitForFunction(() => document.activeElement.id === "field-proactive_group_judge");
+    const spacing = await page.evaluate(() => document.activeElement.getBoundingClientRect().top
+      - document.getElementById("replySubTabs").getBoundingClientRect().bottom);
+    assert.ok(spacing >= 0, "群消息主动判定控件不应被粘顶子栏目挡住");
+    await page.getByRole("button", { name: "快速开始", exact: true }).click();
+    await guide.getByRole("button", { name: "下一步" }).click();
+    await guide.getByText("更多可选设置", { exact: true }).click();
+    const layout = await guide.evaluate(node => {
+      const box = node.getBoundingClientRect();
+      const body = document.getElementById("introBody");
+      const footer = document.getElementById("introNext").getBoundingClientRect();
+      return {
+        fits: box.left >= 0 && box.right <= innerWidth && footer.bottom <= innerHeight,
+        scrolledBody: body.scrollHeight > body.clientHeight,
+        horizontalOverflow: body.scrollWidth > body.clientWidth,
+      };
+    });
+    assert.deepEqual(layout, { fits: true, scrolledBody: true, horizontalOverflow: false });
+    await shot(page, "320-dark-quick-start.png");
+    await guide.getByRole("button", { name: /^主模型与回退模型/ }).click();
+    await page.waitForFunction(() => document.getElementById("nativePersonaConfig").contains(document.activeElement));
+    assert.equal(await page.getByText("当前配置使用外部Agent，主模型与人格需在对应Agent中设置。").isVisible(), true);
     await context.close();
   });
 

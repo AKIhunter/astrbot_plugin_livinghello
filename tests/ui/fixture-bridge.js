@@ -24,6 +24,7 @@
     "}",
   ].join("\n");
   const legacyFull = "LEGACY-FULL-ONLY\n旧格式正文 {不完整\n仍需完整保留";
+  const recordedPrompt = "RECORDED-PROMPT\n判定请求  <tag>\n只输出 JSON。";
 
   function outage(state = outageState) {
     const active = !["disabled", "healthy"].includes(state);
@@ -117,7 +118,7 @@
     mdl: "fixture-text-small",
     stage: "text",
     raw: '{"act":"silent","conf":22,"understood":true,"reason":"others_talking","ground":"none"}',
-    ctx: "旧 ctx 不应成为新记录复制内容",
+    ctx: recordedPrompt,
     understood: true,
     model_reason: "others_talking",
     attempts: [{
@@ -209,6 +210,8 @@
     summary: { tool_calls: 1, image_api_calls: 1, sent_packets: 1 },
     events: [
       { at: 1793949000, feature: "image_api", status: "failed", reason: "fixture_failure", span_id: "fixture-span" },
+      { at: 1793949000, feature: "send", status: "success", types: ["plain"] },
+      { at: 1793949001, feature: "send", status: "success", types: ["image"] },
       { at: 1793949001, feature: "delivery", status: "success" },
       { at: 1793949002, feature: "lifecycle", status: "completed" },
     ],
@@ -265,7 +268,9 @@
         current: { threshold: 50, rate: 50 }, model: "fixture-text-small",
         models: { "fixture-text-small": 2 }, excluded: 0, mixed: false, suggestions: [],
       },
-      decisions: [structuredDecision, legacyDecision],
+      decisions: query.get("decision") === "bypass"
+        ? [{...structuredDecision, src:"bypass", reason:"gray_explicit", action:"reply", ctx:"", raw:""}]
+        : [structuredDecision, legacyDecision],
       listeners: trace.coverage,
     };
   }
@@ -287,13 +292,18 @@
       content_cleanup_rule: "",
     },
   };
+  const localNative = query.get("native") === "local";
   const nativeSettings = {
     config_id: "default",
     revision: "fixture-settings-1",
-    local_runner: false,
-    fields: [],
-    values: { tts_enabled: false },
-    providers: [],
+    local_runner: localNative,
+    fields: localNative ? [
+      { key: "provider_id", group: "模型", title: "主对话模型", kind: "provider" },
+      { key: "tts_enabled", group: "语音回复", title: "使用语音回复", kind: "bool" },
+      { key: "t2i", group: "文本排版转图", title: "启用文本排版转图", kind: "bool" },
+    ] : [],
+    values: { provider_id: localNative ? "fixture-provider" : "", tts_enabled: false, t2i: false },
+    providers: localNative ? [{ id: "fixture-provider", display: "合成主模型", role: "chat" }] : [],
     personas: [],
     persona_fixed: false,
     fixed_persona_id: "",
@@ -414,6 +424,7 @@
       calls,
       middleInput,
       legacyFull,
+      recordedPrompt,
       requestId,
       setTrace(value) { Object.assign(trace, clone(value)); },
       setOutageState(value) { outageState = value; },
