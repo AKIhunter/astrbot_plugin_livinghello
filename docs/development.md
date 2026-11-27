@@ -124,7 +124,7 @@ git archive --format=zip HEAD -o /tmp/livinghello-release.zip
 | participation_stats.json | 累计参与次数、分布等 | 判定口径变更后核对解释；不自动清零 |
 | native_persona_pins.json | 各原生配置的固定人格 | 人格修改、删除、损坏或重载 |
 | image_generation.json | 独立生图公开配置，不含连接密钥 | 生图设置保存、模型变更 |
-| image_generation_quota.sqlite3 | 每日共享额度与散列请求状态 | 请求预占、完成或结果未知；重载不清零 |
+| image_generation_quota.sqlite3 | 每日共享发图额度与散列请求状态 | 临时留位和确认发送分表记录；重载不清零 |
 | Decision.timings | 参与判定阶段能力等待，含失败 | 能力、并发、配套采集接口变化 |
 
 `DecisionLog` 在 `decisions.jsonl` 超过 1 MiB 时轮转到时间戳归档，不覆盖已有归档；兼容旧 `.1`。启动倒序扫描多个文件，分块读取恢复最近 600 条有效 JSON，忽略坏行。默认/搜索最多返回 100 条，不承诺全历史搜索。退出或热重载强制保存当日计数，避免写盘节流遗漏最后计数。

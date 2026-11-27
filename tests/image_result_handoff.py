@@ -40,7 +40,7 @@ class ImageResultHandoffTests(unittest.IsolatedAsyncioTestCase):
         event.get_extra = lambda key, default=None: event.extra.get(key, default)
         event.get_messages = lambda: []
         event.chain_result = lambda chain: SimpleNamespace(chain=chain)
-        event.send = AsyncMock()
+        event.send = AsyncMock(return_value=True)
         await self.app.on_message(event)
         return event
 

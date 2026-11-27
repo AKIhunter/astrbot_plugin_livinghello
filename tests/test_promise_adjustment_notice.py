@@ -36,7 +36,7 @@ class AdjustmentNoticeTests(unittest.IsolatedAsyncioTestCase):
                              for word in ("任务", "接口", "待办", "服务")))
         # 明确拒绝保留初次请求+2次原句重试；只验证假服务的调用计数。
         self.assertEqual(self.service._request.await_count, 3)
-        self.assertEqual(self.service.used(), 1)
+        self.assertEqual(self.service.used(), 0)
 
     async def test_question_still_exists_when_le_unavailable(self):
         event = fixtures.Event()

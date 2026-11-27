@@ -14,6 +14,7 @@
 | 独立、记忆、情绪、双接入 | [集成组合](integrations-and-flow.md) | 各方公开契约 |
 | 生图映射、长度与学习 | [提示词映射](image-prompt-mapping.md) | ImagePromptMapping、LE修复契约 |
 | 映射加载、校验与生效状态交互示例 | [映射HTML](image-mapping-flow/index.html) | 离线夹具；六种加载状态与六种替换案例 |
+| QQ 私聊即时单图 | [工具回复与生图](tool-turn-output.md) | 预检、承接语补写、先发文字再发图 |
 | 生图回执与原事项结算 | [发送回执](image-delivery-receipts.md) | SQLite回执、image-result.v1 |
 | 图片预算与技术正文保护 | [资源边界](boundary-safety.md) | 解码、OCR、分段与正文保护 |
 | 失败通知和需用户调整 | [通知](image-failure-notice.md)、[失败交接](image-failure-followup.md) | 失败类别、唯一通知与恢复 |

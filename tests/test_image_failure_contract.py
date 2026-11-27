@@ -209,4 +209,4 @@ class ImageFailureHttpTests(unittest.IsolatedAsyncioTestCase):
         # 两个协议×三个回合，明确内容拒绝每回合按原描述最多请求三次。
         self.assertEqual(len(self.received), 18)
         # 每个任务只预占一次本地额度。
-        self.assertEqual(self.service.used(), 6)
+        self.assertEqual(self.service.used(), 0)

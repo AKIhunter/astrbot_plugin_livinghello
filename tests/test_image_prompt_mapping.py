@@ -335,7 +335,7 @@ class MappingGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.prompt_policy()["learned_count"], 1)
         pending = event.get_extra("_livinghello_pending_image")
         self.assertEqual((pending["original_prompt"], pending["effective_prompt"]), ("blue blouse", "blue shirt"))
-        self.assertEqual(self.service.used(), 1)
+        self.assertEqual(self.service.used(), 0)
 
     async def test_style_total_limit_keeps_entire_description(self):
         self.service.values["style_prompt"] = "风" * 1000
@@ -356,7 +356,7 @@ class MappingGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({k: entries[0][k] for k in ("desc_len", "style_len", "time_len", "total_len")},
                          {"desc_len": 500, "style_len": 399, "time_len": 0, "total_len": 900})
         self.assertNotIn("prompt", entries[0])
-        self.assertEqual(self.service.used(), 1)
+        self.assertEqual(self.service.used(), 0)
 
     async def test_time_overhead_reduces_shortening_budget_before_quota(self):
         self.service.values["follow_server_time"] = True
@@ -377,7 +377,7 @@ class MappingGenerationTests(unittest.IsolatedAsyncioTestCase):
         retry.set_extra("_livinghello_image_prompt_repair", recipe)
         await self.service.generate(retry, "猫" * 100, _execute=True)
         self.assertEqual(len(retry.get_extra("_livinghello_prompt_guard")["styled_prompt"]), 100)
-        self.assertEqual(self.service.used(), 1)
+        self.assertEqual(self.service.used(), 0)
 
     async def test_retry_config_has_same_save_and_load_limits(self):
         for value in (-1, 11, True, 1.5):

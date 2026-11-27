@@ -1,23 +1,20 @@
 # 图片回执与原事项结算
 
-适用LH2.9.6 / LE0.7.1，2026-11-23核对。来源：
-[图片服务](../images/guard_image_settings.py)、[LE桥](../integrations/guard_livingemotion.py)与真实门面测试。
+来源：[图片服务](../images/guard_image_settings.py)、[图片投递](../images/guard_image_delivery.py)、
+[LE桥](../integrations/guard_livingemotion.py)与离线门面测试。
 
 ## 生成与发送事实
 
-工具先预检；prepared不请求上游、不代表送达。主回复发送后启动生成，
-沿用会话、消息、描述与参考图开关计算的request_id。
-image_generation_quota.sqlite3新增image_receipts表，记录generating、generated、sent、
-明确失败、取消和未知结果。旧额度计算不改变，sent永不被晚到失败降级。
+工具先预检；`prepared` 不请求生图接口。QQ 私聊即时单图在准备后并行启动文字和生图，其他路径沿用原先的发送顺序。同一图片沿用会话、消息、描述与参考图开关计算的 `request_id`。
 
-同步、后台、延迟图共用交付事实。原生event.send正常返回None按宿主受理处理，
-显式False、异常或计划失败不能算成功；context.send_message必须明确True。
-sent只表示发送调用受理，不表示用户已读。
+普通、后台和定时发送共用同一账本。QQ 只认该图片发送动作返回的非零 `message_id`；AstrBot 的 `Context.send_message=True` 只说明找到平台。其他适配器需要明确返回发送成功才确认。`sent` 表示平台受理，用户是否已读未知；无回执或发送结果未知时不自动重发，同一 `request_id` 的成功回执只结算一次。
+
+`image_quota_slots` 分开记录临时留位与 `sent_day`，按服务器本地确认发送的日期统计；留位跨午夜时仍防止并发超量。失败、取消和结果未知不计为已发送；异常退出残留的留位到期释放。旧 `calls` 行保留防重，旧回执保留历史，不回填未按新口径确认的发送。`image_receipts` 保存交付事实，晚到失败不覆盖成功。
 
 下一轮读取同会话、用户、人格及修订的最近5条、七天内事实，临时注入模型上下文。
 关闭新生图或用尽额度仍能读历史成功；没有可靠人格时不查询其他身份。
 需求和上游revised_prompt注明来源，不当作视觉观察。
-重启后失去本地执行归属的generating/generated转为未知，不自动重画或重发。
+重启后失去本地执行归属的 `generating` / `generated` 历史显示结果未知，不自动重画或重发。仅凭历史状态对账不会释放可能仍由其他执行方持有的留位。
 
 ## 按原promise_id执行
 

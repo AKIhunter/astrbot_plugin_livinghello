@@ -155,14 +155,29 @@ class PromptTests(unittest.IsolatedAsyncioTestCase):
                          OLD_GENERAL)
 
     def test_image_builtin_migration_keeps_custom_and_disabled_text(self):
-        advice = ("prompt 参数建议控制在 60～110 字，优先写「谁、穿什么、在哪、什么姿势」，"
-                  "按用户需求保留必要细节，不堆砌无关修饰；长度不保证通过上游审核。\n")
-        old_order = prompt.IMAGE_CONTRACT.replace(advice, "")
-        new_retry = ("有每日共享额度；工具内部会按原描述有限重试，模型不要重复调用。"
-                     "最终失败或结果未知后，遵循返回的处理决定，不得自行重画。")
-        old_description = prompt.IMAGE_DESCRIPTION.replace(new_retry, "有每日共享额度，失败或结果未知不能自动重试。")
+        old_order = (
+            "生图需求必须先调用livinghello_generate_image取得本轮决定，然后才给承接或婉拒的文字；工具决定前不要承诺会画。\n"
+            "调用工具时，prompt 参数只是内部生图说明，绝不会展示给用户；不要把 prompt 或其中任何姿势、穿搭、画面细节复述到给用户的正文。\n"
+            "prompt 参数建议控制在 60～110 字，优先写「谁、穿什么、在哪、什么姿势」，"
+            "按用户需求保留必要细节，不堆砌无关修饰；长度不保证通过上游审核。\n"
+            "调用后正文只允许一句 8～20 字的自然承接，例如「行 等我一下」「好 给你看」「躺好了」；不描述画面，不报进度，不说已经画好，不重复用户需求。"
+        )
+        old_description = (
+            "根据本次用户请求生成或编辑一张图片，图片会自动跟上；根据当前语境、人设和情绪，用一句简短自然的话承接需求，不套用固定话术。\n"
+            "prompt 参数是内部说明，不要把它或其中任何姿势、穿搭、画面细节复述到给用户的正文；正文只说一句 8～20 字的承接。\n"
+            "不要提后台生成、生成过程或进度，也不要描述画面细节或声称看不到图、发不了图。\n"
+            "用户说「画一张」「拍一张」、描述某个画面长什么样、或让你以某个形象出镜时都可以调用；图生图必须使用本次消息或引用中的图片。"
+            "有每日共享额度；工具内部会按原描述有限重试，模型不要重复调用。最终失败或结果未知后，遵循返回的处理决定，不得自行重画。"
+            "须遵守当前关系许可，拒绝后不能用定时任务绕过。"
+        )
+        old_prepared = (
+            "生图已准备，尚未请求上游。正文现在只回一句 8～20 字的自然承接，例如「行 等我一下」「好 给你看」；"
+            "不要复述 prompt、用户需求或画面细节，不要描述姿势、穿搭或进度，也不要说图片已经画好；"
+            "图片会在你这句话之后自动跟上，请勿再调用本工具。"
+        )
         for stem, old in (("prompt_image_order", old_order),
-                          ("prompt_image_description", old_description)):
+                          ("prompt_image_description", old_description),
+                          ("prompt_image_prepared", old_prepared)):
             with self.subTest(stem=stem):
                 import hashlib
                 self.assertIn(hashlib.sha256(old.encode()).hexdigest(), prompt.LEGACY_IMAGE_HASHES[stem])

@@ -30,7 +30,8 @@ class ImageIssueTests(unittest.IsolatedAsyncioTestCase):
                 with patch("images.guard_image_settings.asyncio.sleep", new=AsyncMock()):
                     await self.service.generate(event, "cat", _execute=True)
                 self.assertEqual(self.service._request.await_count, attempts)
-                self.assertEqual(self.service.used(), index + 1)
+                self.assertEqual(self.service.used(), 0)
+                self.assertIsNone(self.service.quota_reason())
                 event.send.assert_not_awaited()
                 self.assertIsNone(event.get_extra("_livinghello_pending_image"))
 
@@ -44,9 +45,11 @@ class ImageIssueTests(unittest.IsolatedAsyncioTestCase):
         with patch("images.guard_image_settings.asyncio.sleep", new=AsyncMock()):
             await self.service.generate(event, "cat", _execute=True)
         self.assertEqual(self.service._request.await_count, 5)
-        self.assertEqual(self.service.used(), 1)
+        self.assertEqual(self.service.used(), 0)
         self.assertIsNotNone(event.get_extra("_livinghello_pending_image"))
         self.assertIsNone(event.get_extra("_livinghello_image_failure"))
+        await fixtures.ImageGenerationTests.deliver(self, event)
+        self.assertEqual(self.service.used(), 1)
 
     async def test_cancel_propagates_without_retry(self):
         self.service._request.side_effect = asyncio.CancelledError()

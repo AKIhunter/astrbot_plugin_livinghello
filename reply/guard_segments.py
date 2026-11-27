@@ -94,7 +94,7 @@ class ReplySegments:
                 parts.extend(chunk.strip() for chunk in chunks if chunk.strip())
         return parts
 
-    def prepare(self, event, result, *, streaming=False):
+    def prepare(self, event, result, *, streaming=False, single_bubble=False):
         raw = self.config(event)
         options = managed_options(raw)
         if options is None or (not streaming and not result.is_llm_result()):
@@ -103,7 +103,7 @@ class ReplySegments:
             return False
         if getattr(result, "_at_guard_segments_prepared", False):
             return True
-        split = raw.get("enable") is True
+        split = raw.get("enable") is True and not single_bubble
         options["split_words"] = raw.get("split_words", [])
         chain = []
         before = len(result.chain or [])

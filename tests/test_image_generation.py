@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 from astrbot.api.message_components import Image, Plain
 from main import Main
 from images.guard_image_settings import (DEFAULTS, MAX_PROMPT_CHARS, STYLE_MAX_CHARS,
-                                         ImageSettings, MAX_IMAGE_BYTES)
+                                         ImageQuotaError, ImageSettings, MAX_IMAGE_BYTES)
 from reply.guard_native_reply import NativeReplyError
 
 
@@ -24,7 +24,7 @@ class Event:
         self.message_obj=SimpleNamespace(message_id=mid)
         self.extra={}
         self.images=images or []
-        self.send=AsyncMock()
+        self.send=AsyncMock(return_value=True)
     def get_extra(self,key,default=None):return self.extra.get(key,default)
     def set_extra(self,key,value):self.extra[key]=value
     def get_sender_id(self):return "user-one"
@@ -70,6 +70,7 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(event.get_extra("_livinghello_pending_image"))
         event.send.assert_not_awaited()
         Main.complete_deferred_image(self.plugin, result["request_id"], "sent")
+        self.assertEqual(self.service.used(), 0)
         with self.service._connect() as db:
             self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0], "sent")
 
@@ -467,10 +468,16 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_concurrent_calls_respect_global_daily_limit(self):
         self.service.values["daily_limit"]=1
-        results=await asyncio.gather(*(self.service.generate(Event(str(i)),"画猫") for i in range(8)))
+        events = [Event(str(i)) for i in range(8)]
+        results=await asyncio.gather(*(self.service.generate(event,"画猫") for event in events))
         self.assertEqual(sum("图片已生成" in r for r in results),1)
         self.assertEqual(self.service._request.await_count,1)
+        self.assertEqual(self.service.used(),0)
+        self.assertEqual(self.service.quota_reason(),"quota_busy")
+        winner = next(event for event in events if event.get_extra("_livinghello_pending_image"))
+        await self.deliver(winner)
         self.assertEqual(self.service.used(),1)
+        self.assertEqual(self.service.quota_reason(),"quota_exhausted")
 
     async def test_pending_image_waits_for_last_text_and_is_sent_once(self):
         event=Event()
@@ -494,7 +501,7 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         await self.deliver(event)
         event.send.assert_not_awaited()
         self.assertIsNone(event.get_extra("_livinghello_pending_image"))
-        self.assertEqual(self.service.used(),1)
+        self.assertEqual(self.service.used(),0)
 
     async def test_pending_image_send_error_does_not_retry(self):
         event=Event()
@@ -507,7 +514,7 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(event.send.await_args_list[0].args[0].chain[0], Image)
         self.assertIsInstance(event.send.await_args_list[1].args[0].chain[0], Plain)
         self.assertIsNone(event.get_extra("_livinghello_pending_image"))
-        self.assertEqual(self.service.used(),1)
+        self.assertEqual(self.service.used(),0)
 
     async def test_image_job_send_exception_stops_resend_and_notifies_unknown(self):
         event=Event()
@@ -559,24 +566,47 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(ImageSettings.revised(
             {"data":[{"revised_prompt":"猫"*1000}]})),600)
 
-    def test_ledger_shared_across_instances_and_reload(self):
+    async def test_ledger_shared_across_instances_and_rolls_over_on_send_day(self):
         self.service.values["daily_limit"]=1
-        self.service.reserve(Event("first"),"画猫",False)
+        first = Event("first")
+        await self.service.generate(first, "画猫")
         new=ImageSettings(self.plugin)
         new.values.update(daily_limit=1)
-        self.assertEqual(new.used(),1)
-        with self.assertRaises(NativeReplyError):
+        self.assertEqual(new.used(),0)
+        with self.assertRaises(ImageQuotaError) as busy:
             new.reserve(Event("second"),"画狗",False)
-        with patch.object(new,"today",return_value="2099-01-01"):
-            self.assertEqual(new.used(),0)
-            self.assertTrue(new.reserve(Event("tomorrow"),"画猫",False))
+        self.assertEqual(busy.exception.kind, "quota_busy")
+        with patch.object(ImageSettings, "today", return_value="2099-01-01"):
+            self.assertEqual(new.quota_reason(), "quota_busy")
+            await self.deliver(first)
+            self.assertEqual(new.used(), 1)
+            self.assertEqual(new.quota_reason(), "quota_exhausted")
+        self.assertEqual(new.used(), 0)
+        self.assertTrue(new.reserve(Event("another"), "画猫", False))
 
-    async def test_upstream_failure_keeps_quota_and_retries_locally(self):
+    def test_old_rows_do_not_count_and_expired_holds_cannot_send_past_cap(self):
+        self.service.values["daily_limit"] = 1
+        with self.service._connect() as db:
+            db.execute("INSERT INTO calls VALUES ('legacy', ?, 'sent', 0)", (self.service.today(),))
+        first = self.service.reserve(Event("stale"), "画猫", False)
+        with self.service._connect() as db:
+            db.execute("UPDATE image_quota_slots SET lease_until=0 WHERE request_id=?", (first,))
+        current = self.service.reserve(Event("current"), "画猫", False)
+        with self.assertRaises(ImageQuotaError) as busy:
+            self.service.renew_reservation(first, sending=True)
+        self.assertEqual(busy.exception.kind, "quota_busy")
+        self.service.mark(current, "cancelled")
+        self.assertTrue(self.service.renew_reservation(first, sending=True))
+        self.assertEqual(self.service.used(), 0)
+
+    async def test_upstream_failure_releases_quota_and_retries_locally(self):
+        self.service.values["daily_limit"]=1
         self.service._request.side_effect=TimeoutError("secret-marker")
         result=await self.service.generate(Event(),"画猫")
         self.assertNotIn("secret-marker",result)
-        self.assertEqual(self.service.used(),1)
-        # 超时在同一个请求号内按原描述重试，最多 3 次；额度只计一次。
+        self.assertEqual(self.service.used(),0)
+        self.assertIsNone(self.service.quota_reason())
+        # 超时在同一个请求号内按原描述重试，最多 3 次。
         self.assertEqual(self.service._request.await_count,3)
 
     async def test_missing_reference_never_requests_or_consumes(self):
@@ -599,7 +629,7 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.service._request.side_effect=generate
         self.assertIn("未发送",await self.service.generate(event,"画猫"))
         event.send.assert_not_awaited()
-        self.assertEqual(self.service.used(),1)
+        self.assertEqual(self.service.used(),0)
 
     async def test_disabled_and_zero_limit_make_no_request(self):
         self.service.values["enabled"]=False
@@ -616,9 +646,9 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.service._request.side_effect=generate
         self.assertIn("未发送",await self.service.generate(event,"画猫"))
         event.send.assert_not_awaited()
-        self.assertEqual(self.service.used(),1)
+        self.assertEqual(self.service.used(),0)
 
-    async def test_shutdown_cancels_inflight_without_refunding_or_sending(self):
+    async def test_shutdown_cancels_inflight_without_charging_or_sending(self):
         event=Event()
         started=asyncio.Event()
         async def generate(*_):
@@ -629,7 +659,7 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         await started.wait()
         await self.service.close()
         self.assertTrue(task.cancelled())
-        self.assertEqual(self.service.used(),1)
+        self.assertEqual(self.service.used(),0)
         event.send.assert_not_awaited()
 
     async def test_pre_cancel_and_corrupt_quota_fail_closed(self):
@@ -768,6 +798,6 @@ class ImageHttpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(row["features"]["image_download"]["status"], "failed")
             self.assertEqual(row["summary"]["image_api_calls"], 1)
             self.assertNotIn("image_delivery", row["features"])
-            self.assertEqual(self.service.used(), 2)
+            self.assertEqual(self.service.used(), 0)
         finally:
             await trace.close()

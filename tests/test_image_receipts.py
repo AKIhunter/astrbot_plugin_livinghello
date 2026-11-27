@@ -36,7 +36,7 @@ class ImageReceiptTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(pending["request_id"], text)
             self.assertIn("一只橙色猫", text)
             self.assertIn("未经视觉检查", text)
-            self.assertTrue(req.extra_user_content_parts[0].no_save)
+            self.assertTrue(req.extra_user_content_parts[0].model_dump_for_context()["_no_save"])
         self.service._request.assert_awaited_once()
 
     async def test_background_success_updates_actual_trace(self):
@@ -79,6 +79,8 @@ class ImageReceiptTests(unittest.IsolatedAsyncioTestCase):
         pending = await self.sent(event)
         self.service.save_receipt(event, pending, "failed")
         self.service.mark(pending["request_id"], "unknown")
+        self.assertEqual(self.service.used(), 1)
+        self.assertEqual(event.get_extra("_livinghello_image_result")["status"], "sent")
         self.assertEqual(self.service.receipts(event)[0]["status"], "sent")
         with self.service._connect() as db:
             self.assertEqual(db.execute("SELECT status FROM calls").fetchone()[0], "sent")
@@ -125,6 +127,7 @@ class ImageReceiptTests(unittest.IsolatedAsyncioTestCase):
         await self.service.generate(event, "猫")
         pending = dict(event.get_extra("_livinghello_pending_image"), promise_id="original")
         with patch("images.guard_image_settings.image_result", AsyncMock(return_value=None)):
+            self.assertTrue(await self.service._deliver_image(event, pending))
             await self.service.finish_image(event, pending, "sent")
         restarted = ImageSettings(self.plugin)
         callback = AsyncMock(return_value={"status": "sent"})
@@ -133,7 +136,7 @@ class ImageReceiptTests(unittest.IsolatedAsyncioTestCase):
             await restarted.reconcile_receipts(self.event("next2"))
         callback.assert_awaited_once()
         self.service._request.assert_awaited_once()
-        event.send.assert_not_awaited()
+        event.send.assert_awaited_once()
 
     async def test_unbound_success_does_not_settle_other_tasks(self):
         with patch("images.guard_image_settings.image_result", AsyncMock()) as hook:
@@ -148,6 +151,20 @@ class ImageReceiptTests(unittest.IsolatedAsyncioTestCase):
         result = await fixtures.Main.deliver_deferred_image(self.plugin, event, artifact)
         self.assertEqual(result["status"], "sent")
         self.assertEqual(self.service.receipts(event)[0]["status"], "sent")
+
+    async def test_missing_deferred_file_releases_hold_without_a_send(self):
+        event = self.event()
+        self.service.values["daily_limit"] = 1
+        self.plugin.get_deferred_image_contract = lambda: fixtures.Main.get_deferred_image_contract(self.plugin)
+        artifact = await fixtures.Main.generate_deferred_image(self.plugin, event, "猫")
+        self.assertEqual(self.service.quota_reason(), "quota_busy")
+        self.context.send_message = AsyncMock(return_value=True)
+        self.service.directory.joinpath("generated.png").unlink()
+        result = await fixtures.Main.deliver_deferred_image(self.plugin, event, artifact)
+        self.assertEqual(result["reason"], "file_missing")
+        self.assertIsNone(self.service.quota_reason())
+        self.assertEqual(self.service.used(), 0)
+        self.context.send_message.assert_not_awaited()
 
     async def test_sync_second_picture_is_not_generated(self):
         event = self.event()

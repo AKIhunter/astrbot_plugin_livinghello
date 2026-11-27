@@ -29,6 +29,7 @@ try:
     from ..reply.guard_reply_health import report_model_fault
     from ..integrations.guard_livingemotion import image_permission, image_followup, image_prompt_retry_ready, image_result
     from .guard_image_failure import describe_failure, http_failure, payload_failure, REASONS
+    from .guard_image_delivery import send_event_image
     from .guard_image_prompt import ImagePromptMapping, PromptReviewError
 except ImportError:
     from reply.guard_native_reply import NativeReplyError, revision
@@ -38,15 +39,48 @@ except ImportError:
     from reply.guard_reply_health import report_model_fault
     from integrations.guard_livingemotion import image_permission, image_followup, image_prompt_retry_ready, image_result
     from images.guard_image_failure import describe_failure, http_failure, payload_failure, REASONS
+    from images.guard_image_delivery import send_event_image
     from images.guard_image_prompt import ImagePromptMapping, PromptReviewError
 
 TOOL_NAME = "livinghello_generate_image"
+IMAGE_INTENT = "_livinghello_immediate_image"
+QUOTA_MARKER = "<!--livinghello:image-availability-->"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_PROMPT_CHARS = 4000
 STYLE_MAX_CHARS = 1000
+
+
+def valid_image_parameters(prompt, use_reference):
+    return (isinstance(prompt, str) and 1 <= len(prompt.strip()) <= MAX_PROMPT_CHARS
+            and type(use_reference) is bool)
+
+
+class ImageQuotaError(NativeReplyError):
+    def __init__(self, kind):
+        self.kind = kind
+        super().__init__(REASONS[kind], 429)
+
+
+def image_unavailable_instruction(reason):
+    fact = {
+        "quota_exhausted": "今天可发送的新图片已达上限，不能再拍或画。可以按人设自然说今天先不拍，不报额度数字。",
+        "quota_busy": "图片暂时接不了；剩余位置被正在处理的图片暂占，不要说今天已经用完。",
+        "reference_missing": "缺本轮必要的参考图，或参考图无法读取，请自然请对方发图。",
+        "refused": "这次不能接受生图请求，按人设自然婉拒。",
+        "prompt_too_long": "当前画面描述过长，请自然请对方简化需求。",
+        "prompt_adjustment_required": "当前画面需要先确认调整，请自然问对方能否调整描述。",
+    }.get(reason, "这次暂时无法开始生图，按人设自然回应。")
+    return (f"本轮生图状态：{fact} 仅当对方确实要本轮出图才用这条信息。"
+            "不调用或重试生图工具，不承诺立即或以后补图，不报技术状态；有其他问题仍正常回答。")
+
+
 # 同一张已生成的图最多投递两次；重试不重新请求上游，也不重复计额度。
 DELIVERY_ATTEMPTS = 2
 DELIVERY_RETRY_SECONDS = 1.0
+# The AstrBot 4.29.1 QQ adapter allows 180 seconds for OneBot actions.
+# Leave a short margin for the host send hook before dropping a waiting image.
+TEXT_DELIVERY_TIMEOUT = 185.0
+REFERENCE_PREFLIGHT_TIMEOUT = 15.0
 # 同一任务内按原描述有限重试；本地额度不等同于上游HTTP计费。
 IMAGE_REQUEST_ATTEMPTS = 3
 IMAGE_RETRY_BASE_SECONDS = 1.5
@@ -59,15 +93,15 @@ FIELDS = {
     "provider_id": ("生图模型 / 路由上游", "provider", "复用AstrBot已注册模型或多API路由的具体上游连接，不读取BiliBot。所选API必须实际支持生图。"),
     "model": ("生图模型名称（可选）", "string", "留空使用所选模型名；同一API的生图模型名可在此指定。不会更改主对话模型。"),
     "protocol": ("生图接口", "protocol", "标准图片接口使用images/generations和images/edits；对话生图接口使用chat/completions的image模态。"),
-    "daily_limit": ("每日生图次数上限", "int", "全插件共用，按服务器本地自然日重置。每个生图任务计一次，本地失败重试不重复计数；0禁止生图，重载不清零。"),
+    "daily_limit": ("每日发图上限", "int", "全插件共用，按服务器本地自然日统计确认发送的图片。每张只计一次，未确认发送不扣次；0禁止生图，重载不清零。"),
     "size": ("生成尺寸", "size", "使用服务支持的尺寸，建议分辨率范围512x512~2048x2048；可选自定义宽高。每次只请求1张图片。"),
     "style_prompt": ("画面风格提示词（全局）", "text", "每次生图自动附加在描述之后，用来固定整套出图风格；留空则完全不附加。用户明确要求画风时以用户描述为准，本段作为补充。最多1000字；启用映射默认总长900字，关闭后4000字，只截断风格部分。"),
     "follow_server_time": ("跟随服务器时间", "bool", "开启后每次生图自动把服务器当前时间（年月日、星期、时分）注入描述，让画面跟随现实昼夜、季节和节日；关闭则完全不附加。"),
     "prompt_guard_enabled": ("启用提示词映射", "bool", "开启后发送前应用等义替换、长度规则与成功用词；关闭则沿用原描述。开启后在本页设置映射表路径，修改JSON即可热生效。姿势、场景变化需用户确认。"),
     "prompt_guard_rules_path": ("提示词映射表路径", "string", "在插件数据目录放置image_prompt_rules.json；相对路径从该目录解析，也支持绝对路径。缺失使用内置规则，写坏保留有效规则。支持词语、简单正则、去重补充及调整提醒。"),
-    "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "本页→AI生图设置0~10次，默认2；需在LE开启承诺兑现，实际取此值与LE剩余自动调整次数的较小值。0关闭自动改词，用尽后等待用户。仅对明确内容拒绝或超长描述调整等义用词。工具内部先按原句有限重试：内容拒绝最多追加2次，仍拒才进入改词；普通任务网络类最多追加2次，混合失败总请求最多5次。LE承诺的未知结果不自动重发。本地任务占一次每日额度，上游计费以实际账单为准。"),
+    "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "本页→AI生图设置0~10次，默认2；需在LE开启承诺兑现，实际取此值与LE剩余自动调整次数的较小值。0关闭自动改词，用尽后等待用户。仅对明确内容拒绝或超长描述调整等义用词。工具内部先按原句有限重试：内容拒绝最多追加2次，仍拒才进入改词；普通任务网络类最多追加2次，混合失败总请求最多5次。LE承诺的未知结果不自动重发。每日额度只计确认发送的图片，上游计费以实际账单为准。"),
     "prompt_guard_learn_enabled": ("记录并复用成功用词", "bool", "开启后按实际生图连接、模型及协议记录成功请求中使用的局部替换，后续自动复用；关闭停止记录与复用，保留已有数据。需开启提示词映射，记录保存在插件数据目录image_prompt_mappings.sqlite3。"),
-    "timeout_seconds": ("生图超时（秒）", "int", "10~500秒；普通任务超时、限流、5xx或网络断开时，按原描述最多追加2次请求；混合内容拒绝时总请求最多5次。LE承诺图片遇到超时、5xx或网络断开等未知结果时停止内部重试，等待核对。每个任务预占一次本地额度，超时不表示上游未生成或未收费；原自主回复时效仍生效。"),
+    "timeout_seconds": ("生图超时（秒）", "int", "10~500秒；普通任务超时、限流、5xx或网络断开时，按原描述最多追加2次请求；混合内容拒绝时总请求最多5次。LE承诺图片遇到超时、5xx或网络断开等未知结果时停止内部重试，等待核对。超时未确认发送不扣本地额度，上游仍可能收费；原自主回复时效仍生效。"),
 }
 DEFAULTS = dict(enabled=False, provider_id="", model="", protocol="images",
                 daily_limit=20, size="1024x1024",
@@ -207,6 +241,9 @@ class ImageSettings:
             db.execute("CREATE TABLE IF NOT EXISTS image_receipts "
                        "(request_id TEXT PRIMARY KEY, scope TEXT NOT NULL, status TEXT NOT NULL, "
                        "payload TEXT NOT NULL, updated REAL NOT NULL, settled INTEGER NOT NULL DEFAULT 0)")
+            # Keep old `calls` shape intact so an older binary can still read/write it.
+            db.execute("CREATE TABLE IF NOT EXISTS image_quota_slots "
+                       "(request_id TEXT PRIMARY KEY, lease_until REAL, sent_day TEXT)")
             with db:
                 yield db
         finally:
@@ -214,7 +251,25 @@ class ImageSettings:
 
     def used(self):
         with self._connect() as db:
-            return db.execute("SELECT COUNT(*) FROM calls WHERE day=?", (self.today(),)).fetchone()[0]
+            return db.execute("SELECT COUNT(*) FROM image_quota_slots WHERE sent_day=?",
+                              (self.today(),)).fetchone()[0]
+
+    def _quota_reason(self, db, *, exclude=None):
+        used, active = db.execute(
+            "SELECT count(CASE WHEN sent_day=? THEN 1 END), "
+            "count(CASE WHEN lease_until>? AND request_id!=? THEN 1 END) "
+            "FROM image_quota_slots", (self.today(), time.time(), exclude or "")).fetchone()
+        if used >= self.values["daily_limit"]:
+            return "quota_exhausted"
+        if used + active >= self.values["daily_limit"]:
+            return "quota_busy"
+        return None
+
+    def quota_reason(self):
+        if self.values["daily_limit"] == 0:
+            return "quota_exhausted"
+        with self._connect() as db:
+            return self._quota_reason(db)
 
     def read(self):
         self.refresh()
@@ -387,11 +442,37 @@ class ImageSettings:
         self.attach_receipts(event, req)
         # 面板保存之外的外部改动（直接改 JSON）也要在下一轮生效。
         self.refresh()
-        if self._closed or self.error or not self.values["enabled"] or self.values["daily_limit"] == 0:
+        if self._closed or self.error or not self.values["enabled"]:
             emit(event, "image_tool_attachment", "disabled", reason="image_unavailable")
             return
         if not self.needed(event):
             emit(event, "image_tool_attachment", "skipped", reason="private_no_image_intent")
+            return
+        # Only the private chat changes how it speaks when it cannot accept a new picture.
+        private = (getattr(event, "get_platform_name", lambda: "")() == "aiocqhttp"
+                   and not event.get_group_id() and not event.get_extra("cron_job")
+                   and not event.get_extra("livingemotion:promise_id"))
+        if private:
+            prompt = getattr(req, "system_prompt", "") or ""
+            if QUOTA_MARKER in prompt:
+                for prior in ("quota_exhausted", "quota_busy", "provider_error"):
+                    prompt = prompt.replace("\n" + QUOTA_MARKER + "\n" + image_unavailable_instruction(prior), "")
+                req.system_prompt = prompt
+            try:
+                reason = self.quota_reason()
+            except (sqlite3.Error, OSError, NativeReplyError):
+                reason = "provider_error"
+            if reason:
+                from astrbot.core.agent.tool import ToolSet
+                tools = getattr(req, "func_tool", None)
+                if any(t.name == TOOL_NAME for t in getattr(tools, "tools", ())):
+                    req.func_tool = ToolSet([t for t in tools.tools if t.name != TOOL_NAME])
+                req.system_prompt = prompt + "\n" + QUOTA_MARKER + "\n" + image_unavailable_instruction(reason)
+                event.set_extra("_livinghello_image_tool_attached", False)
+                emit(event, "image_tool_attachment", "skipped", reason=reason)
+                return
+        elif self.values["daily_limit"] == 0:
+            emit(event, "image_tool_attachment", "disabled", reason="quota_exhausted")
             return
         tool = self.ensure_tool()
         if tool is None:
@@ -440,19 +521,72 @@ class ImageSettings:
             return bool(self.plugin._stale_reason(event, self.plugin._group_key(event)))
         return False
 
-    def reserve(self, event, prompt, use_reference):
+    def reserve(self, event, prompt, use_reference, *, prepared=False):
         request_id = self.request_id(event, prompt, use_reference)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM calls WHERE request_id=?", (request_id,)).fetchone():
                 return None
-            used = db.execute("SELECT COUNT(*) FROM calls WHERE day=?", (self.today(),)).fetchone()[0]
-            if used >= self.values["daily_limit"]:
-                raise NativeReplyError("今日生图次数已用完，请勿重复调用", 429)
-            db.execute("INSERT INTO calls VALUES (?, ?, 'reserved', ?)", (request_id, self.today(), time.time()))
+            if reason := self._quota_reason(db):
+                raise ImageQuotaError(reason)
+            now = time.time()
+            db.execute("INSERT INTO calls VALUES (?,?,'reserved',?)",
+                       (request_id, self.today(), now))
+            db.execute("INSERT INTO image_quota_slots VALUES (?, ?, NULL)",
+                       (request_id, now + (245 if prepared else self._generation_lease())))
             cutoff = (datetime.now().date() - timedelta(days=7)).isoformat()
-            db.execute("DELETE FROM calls WHERE day<?", (cutoff,))
+            db.execute("DELETE FROM calls WHERE day<? AND NOT EXISTS "
+                       "(SELECT 1 FROM image_quota_slots AS slot WHERE slot.request_id=calls.request_id "
+                       "AND (slot.sent_day>=? OR slot.lease_until>?))", (cutoff, cutoff, now))
+            db.execute("DELETE FROM image_quota_slots WHERE request_id NOT IN (SELECT request_id FROM calls)")
         return request_id
+
+    def _generation_lease(self):
+        return self.values["timeout_seconds"] * (IMAGE_REQUEST_ATTEMPTS + CONTENT_RETRY_ATTEMPTS) + 650
+
+    def renew_reservation(self, request_id, *, sending=False, retry_rejected=False):
+        """Recheck capacity before crossing a possibly expired lease at an external boundary."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT status FROM calls WHERE request_id=?", (request_id,)).fetchone()
+            if not row or (row[0] != "reserved" and not (retry_rejected and row[0] == "rejected")):
+                return False
+            if reason := self._quota_reason(db, exclude=request_id):
+                raise ImageQuotaError(reason)
+            db.execute("UPDATE calls SET status='reserved' WHERE request_id=?", (request_id,))
+            db.execute("INSERT INTO image_quota_slots VALUES (?, ?, NULL) "
+                       "ON CONFLICT(request_id) DO UPDATE SET lease_until=excluded.lease_until",
+                       (request_id, time.time() + (420 if sending else self._generation_lease())))
+        return True
+
+    def release_reservation(self, job):
+        job.pop("reference", None)
+        job.pop("guarded", None)
+        if rid := job.get("reservation"):
+            self.mark(rid, "cancelled", only_reserved=True)
+
+    def check_immediate_job(self, job):
+        """Before a positive reply, revalidate the hold after any model repair."""
+        if job["status"] != "prepared":
+            return job.get("preflight_reason")
+        self.refresh()
+        try:
+            if self.error or not self.values["enabled"]:
+                reason = "disabled"
+            elif not self.renew_reservation(job["reservation"]):
+                reason = "provider_error"
+            elif job["values"] == self.values:
+                return None
+            else:
+                reason = "provider_error"
+        except ImageQuotaError as exc:
+            reason = exc.kind
+        except (sqlite3.Error, OSError, NativeReplyError):
+            reason = "provider_error"
+        self.release_reservation(job)
+        job.update(status="quota" if reason.startswith("quota_") else "failed",
+                   preflight_reason=reason)
+        return reason
 
     @staticmethod
     def request_id(event, prompt, use_reference):
@@ -492,11 +626,11 @@ class ImageSettings:
         except Exception:
             event.set_extra("_livinghello_image_persona", None)
 
-    def save_receipt(self, event, data, status):
+    def save_receipt(self, event, data, status, *, confirmed=False, settle=True):
         """sent 为不可回退终态；晚到失败不能覆盖已受理的发送。"""
         rid = data.get("request_id")
         if not rid:
-            return
+            return status
         payload = {k: data[k] for k in (
             "request_id", "prompt", "revised", "use_reference", "promise_id", "kind",
             "reason", "adjustment_asked", "original_prompt", "attempted_prompt",
@@ -504,17 +638,25 @@ class ImageSettings:
         payload.update(status=status, delivered_at=time.time() if status == "sent" else None)
         try:
             with self._connect() as db:
-                db.execute(
+                if settle and (confirmed or status in {"unknown", "failed", "cancelled"}):
+                    self._mark(db, rid, status, confirmed=confirmed and status == "sent")
+                result = db.execute(
                     "INSERT INTO image_receipts(request_id,scope,status,payload,updated) VALUES(?,?,?,?,?) "
                     "ON CONFLICT(request_id) DO UPDATE SET status=excluded.status,"
                     "payload=excluded.payload,updated=excluded.updated,settled=0 "
                     "WHERE image_receipts.status!='sent'",
                     (rid, self.receipt_scope(event), status,
                      json.dumps(payload, ensure_ascii=False), time.time()))
+                if not result.rowcount:
+                    old = db.execute("SELECT payload FROM image_receipts WHERE request_id=?",
+                                     (rid,)).fetchone()
+                    if old:
+                        payload = json.loads(old[0])
                 db.execute("DELETE FROM image_receipts WHERE updated<?", (time.time() - 7 * 86400,))
         except (sqlite3.Error, OSError):
             self.plugin.logger.warning("[LH-img] 交付事实未能保存 request=%s", str(rid)[:8])
         event.set_extra("_livinghello_image_result", payload)
+        return payload["status"]
 
     def receipts(self, event):
         scope = self.receipt_scope(event)
@@ -555,9 +697,9 @@ class ImageSettings:
             part = part.mark_as_temp()
         parts.append(part)
 
-    async def finish_image(self, event, data, status):
+    async def finish_image(self, event, data, status, *, confirmed=False):
         self._inflight_images.discard(data.get("request_id"))
-        self.save_receipt(event, data, status)
+        status = self.save_receipt(event, data, status, confirmed=confirmed)
         emit(event, "image_delivery" if status == "sent" else "image_result",
              "success" if status == "sent" else status,
              request_id=data.get("request_id"), source="image_receipt")
@@ -579,7 +721,9 @@ class ImageSettings:
         for row in self.receipts(event):
             if row["status"] in ("generating", "generated") and row["request_id"] not in self._inflight_images:
                 row.update(status="unknown", kind="result_unknown", reason="执行中断，等待核对")
-                self.save_receipt(event, row, "unknown")
+                # May still have an active lease in another instance or a queued cron artifact.
+                # Record uncertainty without releasing its slot or invalidating the artifact.
+                self.save_receipt(event, row, "unknown", settle=False)
             if row.get("settled") or not row.get("promise_id") or row["status"] not in {
                     "sent", "failed", "unknown"}:
                 continue
@@ -588,14 +732,20 @@ class ImageSettings:
             if result and result.get("status") in ("sent", "settled", "duplicate"):
                 self.settle_receipt(row["request_id"])
 
-    def mark(self, request_id, status):
+    def _mark(self, db, request_id, status, *, confirmed=False, only_reserved=False):
+        changed = db.execute("UPDATE calls SET status=? WHERE request_id=? AND status!='sent'"
+                             + (" AND status='reserved'" if only_reserved else ""),
+                             (status, request_id))
+        if changed.rowcount:
+            db.execute("UPDATE image_quota_slots SET lease_until=NULL, sent_day=? WHERE request_id=?",
+                       (self.today() if confirmed else None, request_id))
+
+    def mark(self, request_id, status, *, only_reserved=False):
         try:
             with self._connect() as db:
-                db.execute("UPDATE calls SET status=? WHERE request_id=? AND status!='sent'",
-                           (status, request_id))
+                self._mark(db, request_id, status, only_reserved=only_reserved)
         except (sqlite3.Error, OSError):
-            # 已预占的记录仍计数；完成标记故障不能触发重试或退回额度。
-            self.plugin.logger.warning("[LivingHello] 生图完成状态未能更新，保留预占额度")
+            self.plugin.logger.warning("[LivingHello] 生图完成状态未能更新，临时留位等待过期")
 
     def register_deferred_image(self, artifact):
         """登记可投递资源，绑定请求、会话和路径；独立于收费额度。"""
@@ -626,10 +776,11 @@ class ImageSettings:
                        (request_id,))
             return "claimed"
 
-    def settle_deferred_image(self, request_id, status):
+    def settle_deferred_image(self, request_id, status, *, confirmed=False):
         """受理之后即使落库故障也保留 sending，阻止再次发送。"""
         try:
             with self._connect() as db:
+                self._mark(db, request_id, status, confirmed=confirmed and status == "sent")
                 db.execute("UPDATE deferred_images SET status=? WHERE request_id=? AND status!='sent'",
                            (status, request_id))
                 row = db.execute("SELECT payload FROM image_receipts WHERE request_id=?",
@@ -644,7 +795,6 @@ class ImageSettings:
                 self._inflight_images.discard(request_id)
         except (sqlite3.Error, OSError):
             self.plugin.logger.warning("[LivingHello] 图片投递回执未能保存，禁止自动重发")
-        self.mark(request_id, status)
 
     def claim_deferred_run(self, run_key):
         """一次性 cron 按任务 ID 去重，不因重启或模型改写 prompt 再收费。
@@ -682,22 +832,27 @@ class ImageSettings:
                     or cached.get("promise_id") != event.get_extra("_livinghello_requested_promise")):
                 return "本轮只执行先前准备的那张图片；这次不同画面未执行、未发送。不要声称两张都完成。"
             return cached.get("reply") or "这条生图请求正在确认，请勿重复调用；不要提前承诺。"
-        if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 4000 \
-                or not isinstance(use_reference, bool):
+        if not valid_image_parameters(prompt, use_reference):
             return "生图参数无效。"
-        if self.blocked(event) or self._closed or self.error or not self.values["enabled"]:
+        blocked = self.blocked(event)
+        if blocked or self.error or not self.values["enabled"]:
             self.plugin.logger.warning(
                 "[LH-img] job 拒绝：blocked=%r closed=%r error=%r enabled=%r superseded=%r",
-                self.blocked(event), self._closed, bool(self.error), self.values["enabled"],
+                blocked, self._closed, bool(self.error), self.values["enabled"],
                 event.get_extra("_at_guard_superseded"))
-            return "当前不能生图，请自然回应，不要承诺。"
+            reply = "当前不能生图，请自然回应，不要承诺。"
+            if not blocked and event.get_extra(IMAGE_INTENT):
+                event.set_extra("_livinghello_image_job", dict(
+                    status="failed", preflight_reason="disabled", reply=reply, prompt=prompt.strip(),
+                    use_reference=use_reference, promise_id=None))
+            return reply
         job = dict(status="deciding", prompt=prompt.strip(), use_reference=use_reference,
                    values=copy.deepcopy(self.values), reply="",
                    promise_id=event.get_extra("_livinghello_requested_promise"))
         event.set_extra("_livinghello_image_job", job)
         permission = await image_permission(self.context, event, getattr(self.plugin, "config", None))
         if permission is not None and permission.get("allowed") is not True:
-            job.update(status="refused", reply=(
+            job.update(status="refused", preflight_reason="refused", reply=(
                 "当前关系不接受这次个人生图请求，或关系许可暂时无法核验。"
                 "请自然婉拒，仍正常交流；不要承诺、重试，或用 future_task 绕过。"))
             return job["reply"]
@@ -713,7 +868,7 @@ class ImageSettings:
         draw = random.random() if negative and permission is None else None
         job["draw"] = draw
         if draw is not None and draw < .5:
-            job.update(status="refused", reply=(
+            job.update(status="refused", preflight_reason="refused", reply=(
                 "当前情绪明显负面，这轮决定不生图。请结合当前情绪自然地婉拒，"
                 "仍正常文字回应；不要积极承诺、不要自动重试此工具。当前情绪："
                 + json.dumps(mood, ensure_ascii=False)))
@@ -721,27 +876,54 @@ class ImageSettings:
         if self.blocked(event):
             job.update(status="cancelled", reply="本轮已被新消息顶替，不要再回应或生图。")
             return job["reply"]
-        if use_reference and not self.references(event):
-            job.update(status="failed", reply="需要参考图，请自然地请用户补图，不要承诺已经开画。")
+        refs = self.references(event) if use_reference else []
+        if use_reference and not refs:
+            job.update(status="failed", preflight_reason="reference_missing",
+                       reply="需要参考图，请自然地请用户补图，不要承诺已经开画。")
             return job["reply"]
         try:
-            self.connection(job["values"])
-            if self.used() >= self.values["daily_limit"]:
-                raise NativeReplyError("今日生图次数已用完", 429)
+            if reason := self.quota_reason():
+                raise ImageQuotaError(reason)
+            values = job["values"]
+            if refs and event.get_extra(IMAGE_INTENT):
+                try:
+                    # Validate once and pass the actual reference to generation in memory.
+                    job["reference"] = await asyncio.wait_for(
+                        self._reference_data(refs[0], values),
+                        min(REFERENCE_PREFLIGHT_TIMEOUT, values["timeout_seconds"]))
+                except Exception:
+                    job.update(status="failed", preflight_reason="reference_missing",
+                               reply="没能读取参考图，请自然请对方重新发图。")
+                    return job["reply"]
+                if self.blocked(event):
+                    self.release_reservation(job)
+                    job.update(status="cancelled", reply="本轮已取消，不要再回应或生图。")
+                    return job["reply"]
+            connection = self.connection(values)
+            if event.get_extra(IMAGE_INTENT):
+                job["guarded"] = self._prepare_guarded_prompt(event, values, connection, prompt.strip())
+            if not job["promise_id"]:
+                job["reservation"] = self.reserve(event, prompt.strip(), use_reference, prepared=True)
+                if not job["reservation"]:
+                    job.update(status="cancelled", reply="本轮已处理过这张图，不要重复请求。")
+                    return job["reply"]
         except Exception as exc:
+            self.release_reservation(job)
             self.plugin.logger.warning(
-                "[LH-img] job 预检失败：provider=%r used=%r limit=%r err=%r",
-                job["values"].get("provider_id"), self.used(), self.values["daily_limit"],
-                f"{type(exc).__name__}: {exc}"[:120])
-            # 额度用尽属于每日上限，不是接口故障；必须让模型说人话，
-            # 否则它会把「画不了」解释成「接口没缓过来」，把人带偏去查 provider。
-            if isinstance(exc, NativeReplyError) and getattr(exc, "status", None) == 429:
-                job.update(status="quota", reply=(
-                    "今日生图额度已经用完（每日上限，不是接口故障）。"
-                    "请自然告诉用户今天画满了、明天再画，不要说接口坏了、正在修复或稍后重试。"))
+                "[LH-img] job 预检失败：provider=%r err=%s",
+                job["values"].get("provider_id"), type(exc).__name__)
+            if isinstance(exc, ImageQuotaError):
+                kind = exc.kind
+                job.update(status="quota", preflight_reason=kind,
+                           reply=image_unavailable_instruction(kind))
+            elif isinstance(exc, PromptReviewError):
+                kind = exc.kind
+                job.update(status="failed", preflight_reason=kind,
+                           reply=image_unavailable_instruction(kind))
             else:
-                job.update(status="failed", reply="现在暂时画不了，请自然说明；不要重试此工具。")
-            kind = "quota_exhausted" if job["status"] == "quota" else "provider_error"
+                kind = "provider_error"
+                job.update(status="failed", preflight_reason="provider_error",
+                           reply="现在暂时画不了，请自然说明；不要重试此工具。")
             self._image_failure(event, job, kind)
             return job["reply"]
         prompt_config = event.get_extra("_livinghello_prompt_config")
@@ -752,7 +934,7 @@ class ImageSettings:
             job["reply"] += "当前情绪：" + json.dumps(mood, ensure_ascii=False)
         return job["reply"]
 
-    def start_image_job(self, event):
+    def start_image_job(self, event, *, text_delivery=None):
         job = event.get_extra("_livinghello_image_job")
         if not job or job["status"] != "prepared":
             self.plugin.logger.warning(
@@ -761,33 +943,56 @@ class ImageSettings:
             return
         if self.blocked(event) or job["values"] != self.values:
             job["status"] = "cancelled"
+            self.release_reservation(job)
             self.plugin.logger.warning(
                 "[LH-img] start 取消：blocked=%r values_changed=%r superseded=%r",
                 self.blocked(event), job["values"] != self.values,
                 event.get_extra("_at_guard_superseded"))
             return
         job["status"] = "running"
-        task = asyncio.create_task(self._run_image_job(event, job))
+        task = asyncio.create_task(self._run_image_job(event, job, text_delivery=text_delivery))
         event.set_extra("_livinghello_image_task", task)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
 
-    async def _deliver_image(self, event, path):
+        def finished(task):
+            self._tasks.discard(task)
+            if task.cancelled() and job["status"] == "running":
+                # A task cancelled before its first step cannot run its own cleanup.
+                job["status"] = "cancelled"
+                self.release_reservation(job)
+                self.plugin._clear_reply_turn(event)
+
+        task.add_done_callback(finished)
+
+    def _prepare_guarded_prompt(self, event, values, connection, prompt):
+        guarded = self.prompt_mapping.apply(values, connection, prompt,
+                                            event.get_extra("_livinghello_image_prompt_repair"))
+        guarded["original"] = event.get_extra("_livinghello_image_original_prompt") or prompt
+        guarded["styled_prompt"] = self.prompt_body(values, guarded)
+        return guarded
+
+    async def _deliver_image(self, event, pending, *, retry=True):
         """只在明确拒收时重发原图；异常结果未知，禁止盲目重复投递。"""
         from astrbot.api.message_components import Image
-        for attempt in range(1, DELIVERY_ATTEMPTS + 1):
+        request_id = pending["request_id"]
+        for attempt in range(1, (DELIVERY_ATTEMPTS if retry else 1) + 1):
             if attempt > 1:
                 await asyncio.sleep(DELIVERY_RETRY_SECONDS)
             if self.blocked(event):
                 return False
             try:
-                sent = await event.send(event.chain_result([Image.fromFileSystem(path)]))
-                plan = event.get_extra("_at_guard_delivery_plan") or {}
-                # 宿主 event.send 正常返回 None；显式 False 或发送计划失败不能当成功。
-                if self.blocked(event) or plan.get("failed"):
+                if not self.renew_reservation(request_id, sending=True):
                     return False
-                if sent is not False:
+                sent = await send_event_image(
+                    event, event.chain_result([Image.fromFileSystem(pending["path"])]),
+                    on_confirmed=lambda: self.save_receipt(event, pending, "sent", confirmed=True))
+                plan = event.get_extra("_at_guard_delivery_plan") or {}
+                if sent is True:
                     return True
+                if sent is None or self.blocked(event) or plan.get("failed"):
+                    return False
+            except ImageQuotaError:
+                return False
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -860,6 +1065,12 @@ class ImageSettings:
         plan = event.get_extra("_at_guard_delivery_plan") or {}
         if sent is False or plan.get("failed") or self.blocked(event):
             return
+        await self.confirm_image_failure_notice(event, job, failure, asked=asked, retry=retry)
+
+    async def confirm_image_failure_notice(self, event, job, failure, *, asked=False, retry=False):
+        """Record an already delivered explanation and keep the existing LE handoff."""
+        if failure.get("notified"):
+            return
         failure["notified"] = True
         # 与失败说明同一条发送：LE 能持久区分“已说明失败”和“已问怎样调整”。
         failure["adjustment_asked"] = asked
@@ -875,31 +1086,44 @@ class ImageSettings:
              reason=(receipt or {}).get("task_status", "handoff_unavailable"))
         # 交接只保存后续状态；本轮已说明失败，不再追加一条等待提示。
 
-    async def _run_image_job(self, event, job):
+    async def _record_interrupted_image(self, event, pending, during_send):
+        status = "unknown" if during_send or pending.get("promise_id") else "cancelled"
+        reason = "发送中断，等待核对" if during_send else "发送前取消，未发送"
+        self.mark(pending["request_id"], status)
+        await self.finish_image(event, {
+            **pending, "kind": "delivery_unknown", "reason": reason}, status)
+
+    async def _run_image_job(self, event, job, *, text_delivery=None):
         pending = None
+        sending = False
         try:
             self.plugin.logger.warning("[LH-img] 后台开跑：prompt=%d字", len(job["prompt"]))
             response = await self.generate(
                 event, job["prompt"], job["use_reference"], _execute=True)
-            if self.blocked(event):
-                pending = event.get_extra("_livinghello_pending_image")
-                if pending:
-                    event.set_extra("_livinghello_pending_image", None)
-                    await self.finish_image(event, {
-                        **pending, "kind": "delivery_unknown", "reason": "发送前取消，等待核对"},
-                        "unknown" if pending.get("promise_id") else "cancelled")
-                job["status"] = "cancelled"
-                self.plugin.logger.warning(
-                    "[LH-img] 后台结果被拦：blocked=True resp=%r", str(response)[:80])
-                return
             pending = event.get_extra("_livinghello_pending_image")
             if pending:
                 event.set_extra("_livinghello_pending_image", None)
+            blocked = self.blocked(event)
+            if text_delivery is not None and not blocked:
+                try:
+                    blocked = not await asyncio.wait_for(text_delivery, TEXT_DELIVERY_TIMEOUT)
+                except TimeoutError:
+                    emit(event, "turn_output", "cancelled", reason="onebot_text_receipt_timeout")
+                    blocked = True
+                blocked = blocked or self.blocked(event)
+            if blocked:
+                job["status"] = "cancelled"
+                if pending:
+                    await self._record_interrupted_image(event, pending, during_send=False)
+                self.plugin.logger.warning(
+                    "[LH-img] 后台结果未投递：status=cancelled resp=%r", str(response)[:80])
+                return
+            if pending:
                 request_id = pending["request_id"]
-                if await self._deliver_image(event, pending["path"]):
-                    self.mark(request_id, "sent")
+                sending = True
+                if await self._deliver_image(event, pending):
                     job["status"] = "sent"
-                    await self.finish_image(event, pending, "sent")
+                    await self.finish_image(event, pending, "sent", confirmed=True)
                 else:
                     self.mark(request_id, "unknown")
                     job["status"] = "unknown"
@@ -917,15 +1141,16 @@ class ImageSettings:
                     "[LH-img] 后台无图：status=%s reason=%s", job["status"], failure["kind"])
                 await self._notify_image_failure(event, job, failure)
         except asyncio.CancelledError:
-            job["status"] = "cancelled"
-            if pending:
-                await self.finish_image(event, {
-                    **pending, "kind": "delivery_unknown", "reason": "发送中断，等待核对"}, "unknown")
+            if job["status"] == "running":
+                job["status"] = "cancelled"
+                if pending:
+                    await self._record_interrupted_image(event, pending, during_send=sending)
             raise
         except Exception as exc:
             job["status"] = "unknown"
             self.plugin.logger.warning("[LH-img] 后台失败 type=%s", type(exc).__name__)
         finally:
+            self.release_reservation(job)
             clear = getattr(self.plugin, "_clear_reply_turn", None)
             if clear:
                 clear(event)
@@ -956,7 +1181,7 @@ class ImageSettings:
             emit(event, "image_preflight", status, reason=reason)
             if service:
                 service.end(event, span, status, reason=reason)
-        if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= MAX_PROMPT_CHARS or not isinstance(use_reference, bool):
+        if not valid_image_parameters(prompt, use_reference):
             outcome("failed", "invalid_parameters")
             return "生图参数无效：需要1~4000字的描述及图生图开关。"
         if self._closed or self.error or not self.values["enabled"]:
@@ -975,27 +1200,30 @@ class ImageSettings:
         event.set_extra("_livinghello_prompt_guard", None)
         values = copy.deepcopy(self.values)
         task = asyncio.current_task()
+        already_tracked = task in self._tasks
         self._tasks.add(task)
         token = IMAGE_EVENT.set(event)
         terminal_status, terminal_reason = "failed", "preflight_failed"
         try:
-            connection = self.connection(values)
-            refs = self.references(event) if use_reference else []
-            if use_reference and not refs:
+            job = (event.get_extra("_livinghello_image_job") or {}) if _execute else {}
+            if (job.get("prompt") != prompt.strip() or job.get("use_reference") is not use_reference
+                    or job.get("values") != values):
+                job = {}
+            refs = self.references(event) if use_reference and "reference" not in job else []
+            if use_reference and not refs and "reference" not in job:
                 terminal_reason = "reference_missing"
                 return "图生图需要本次消息或引用中的图片，请用户补充图片。"
             # 上传前读来源；无效图片不计生图额度。
-            reference = await self._reference_data(refs[0], values) if refs else None
+            reference = await self._reference_data(refs[0], values) if refs else job.pop("reference", None)
             async with self.lock:
                 if self.blocked(event) or self.values != values or not self.values["enabled"]:
                     terminal_status, terminal_reason = "cancelled", "reply_or_config_changed"
                     return "回复或生图配置已变化，未请求生图。"
                 # 参考图下载可能跨过模型重载；请求前重新解析当前注册连接。
                 connection = self.connection(values)
-                guarded = self.prompt_mapping.apply(values, connection, prompt.strip(),
-                                                    event.get_extra("_livinghello_image_prompt_repair"))
-                guarded["original"] = event.get_extra("_livinghello_image_original_prompt") or prompt.strip()
-                guarded["styled_prompt"] = self.prompt_body(values, guarded)
+                guarded = job.pop("guarded", None)
+                if not guarded or guarded["scope"] != self.prompt_mapping.scope(values, connection):
+                    guarded = self._prepare_guarded_prompt(event, values, connection, prompt.strip())
                 event.set_extra("_livinghello_prompt_guard", guarded)
                 emit(event, "prompt_guard", "success", before=len(prompt.strip()),
                      after=len(guarded["prompt"]), types=guarded["hits"], model=connection[2],
@@ -1016,7 +1244,11 @@ class ImageSettings:
                                 **binding, "kind": "result_unknown", "reason": "执行归属待核对"}, "unknown")
                         terminal_status, terminal_reason = "rejected", "promise_not_claimed"
                         return "原图片事项未能领取，可能已执行、暂停或来源变化；本次未生图，不要另画或声称完成。"
-                request_id = self.reserve(event, prompt.strip(), use_reference)
+                if (prepared := job.get("reservation")) and (
+                        job["prompt"] == prompt.strip() and job["use_reference"] is use_reference):
+                    request_id = prepared if self.renew_reservation(prepared) else None
+                else:
+                    request_id = self.reserve(event, prompt.strip(), use_reference)
             if not request_id:
                 terminal_status, terminal_reason = "skipped", "duplicate_image_call"
                 return "本条消息已请求过相同生图，结果可能已发送或未知，请勿重复调用。"
@@ -1039,14 +1271,15 @@ class ImageSettings:
                     "unknown" if event.get_extra("_livinghello_requested_promise") else "cancelled")
                 terminal_status, terminal_reason = "cancelled", "reply_cancelled_after_generation"
                 emit(event, "image_delivery", "cancelled", reason=terminal_reason)
-                return "图片已生成但回复已取消，未发送；本次仍计额度。"
+                return "图片已生成但回复已取消，未发送；不扣发送额度。"
             # 不在这里直接发图：先把图挂到本轮事件上，等主回复送出后再单独发一条。
             # 「先承接需求、后给图」的两个气泡，比图先砸过去更像真人说话。
             if event.get_extra("_at_guard_delivery_blocked"):
                 self.mark(request_id, "cancelled")
                 terminal_status, terminal_reason = "cancelled", "reply_cancelled_before_image_send"
                 emit(event, "image_delivery", "cancelled", reason=terminal_reason)
-                return "发送前回复已取消，未发送图片；本次仍计额度。"
+                await self.finish_image(event, {"request_id": request_id, "prompt": prompt.strip()}, "cancelled")
+                return "发送前回复已取消，未发送图片；不扣发送额度。"
             event.set_extra("_livinghello_pending_image", {
                 "path": str(image),
                 "request_id": request_id,
@@ -1081,16 +1314,15 @@ class ImageSettings:
         except Exception as exc:
             terminal_status = "timeout" if isinstance(exc, asyncio.TimeoutError) else "failed"
             terminal_reason = "image_exception"
-            if isinstance(exc, NativeReplyError) and "今日生图次数" in str(exc):
-                terminal_reason = "quota_exhausted"
+            if isinstance(exc, ImageQuotaError):
+                terminal_reason = exc.kind
                 emit(event, "image_quota", "skipped", reason=terminal_reason)
             emit(event, "image_error", terminal_status, reason=terminal_reason, error_type=type(exc).__name__)
             # 目标导向（2026-11-22）：content_rejected 是内容审核的预期内业务失败，
             # 借口文案已发用户、改词循环自动接管——不打扰管理员，避免与借口双发。
             business_expected = (getattr(exc, "kind", "") in {"content_rejected", "result_unknown"}
-                                 or terminal_reason == "quota_exhausted")
-            if (not business_expected and terminal_reason != "quota_exhausted"
-                    and not isinstance(exc, PromptReviewError)):
+                                 or isinstance(exc, ImageQuotaError))
+            if not business_expected and not isinstance(exc, PromptReviewError):
                 report_model_fault(self.plugin, "image_gen", terminal_status,
                                    str(exc)[:80], event)
             if service:
@@ -1103,8 +1335,6 @@ class ImageSettings:
                     "content_rejected", "rate_limited", "provider_error"} else "unknown")
             # 错误只展示受控提示，不将URL、密钥或服务响应正文送给模型。
             kind, reason = describe_failure(exc, requested=bool(request_id))
-            if terminal_reason == "quota_exhausted":
-                kind, reason = "quota_exhausted", REASONS["quota_exhausted"]
             if isinstance(exc, PromptReviewError):
                 event.set_extra("_livinghello_prompt_guard", {"notice": exc.notice})
                 emit(event, "prompt_guard", "review", before=len(prompt.strip()), reason=kind)
@@ -1114,10 +1344,9 @@ class ImageSettings:
                            requested=bool(request_id))
             await self.finish_image(event, failure, "unknown" if kind in {
                 "result_unknown", "delivery_unknown"} else "failed")
-            charged = "本次已请求，仍计额度。" if request_id else "本次未请求生图，不计额度。"
             local_retries = int(event.get_extra("_livinghello_image_local_retries", 0) or 0)
             tried = f"已按原描述在本地重试{local_retries}次，仍未成功。" if local_retries else ""
-            return f"生图未完成：{reason}{charged}{tried}不要在本轮自动重试。"
+            return f"生图未完成：{reason}{tried}没有确认发送，不扣发送额度。不要在本轮自动重试。"
         finally:
             if terminal_status != "success":
                 event.set_extra("_livinghello_deferred_preflight", dict(
@@ -1126,7 +1355,9 @@ class ImageSettings:
             if service:
                 service.end(event, span, terminal_status, reason=terminal_reason)
             IMAGE_EVENT.reset(token)
-            self._tasks.discard(task)
+            # A detached task remains tracked while it waits to send and while it sends.
+            if not already_tracked:
+                self._tasks.discard(task)
 
     @staticmethod
     def _image_bytes(value):

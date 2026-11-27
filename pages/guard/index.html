@@ -1537,8 +1537,8 @@
   function renderImageSettingsStatus(images = imageData) {
     if (!images) return;
     el("imageSettingsStatus").textContent=images.available
-      ? images.scope + "。今日已用 " + images.usage.used + " / " + images.usage.limit
-        + " 次。主模型按需调用，图生图使用本次输入图片。"
+      ? images.scope + "。今日已确认发送 " + images.usage.used + " / " + images.usage.limit
+        + " 张。主模型按需调用，图生图使用本次输入图片。"
       : images.reason;
     if (images.prompt_mapping?.contract) {
       const mapping=images.prompt_mapping;

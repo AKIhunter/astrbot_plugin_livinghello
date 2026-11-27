@@ -67,6 +67,7 @@ REASONS = {
     "result_unknown": "这次还没拿到图片，我先看看有没有做好。",
     "delivery_unknown": "图片已经弄好了，不过我还不确定你有没有收到，先确认一下。",
     "quota_exhausted": "今天的图片数量已经到上限了，这张得等一等。",
+    "quota_busy": "这会儿暂时接不了新图，这张还没开始。",
 }
 
 

@@ -16,9 +16,11 @@ from astrbot.api.message_components import At, Plain, Reply
 try:
     from ..observability.guard_request_trace import emit, TRACE_KEY
     from .guard_reply_health import KEY as HEALTH_KEY, send_accepted
+    from .guard_turn_output import LOCAL_REPLY, reply_body
 except ImportError:
     from observability.guard_request_trace import emit, TRACE_KEY
     from reply.guard_reply_health import KEY as HEALTH_KEY, send_accepted
+    from reply.guard_turn_output import LOCAL_REPLY, reply_body
 try:
     from .guard_thinking_filter import strip_thinking_chain
 except ImportError:
@@ -28,6 +30,30 @@ except ImportError:
 # 回复归属；这是本插件的存量技术标识，保留以兼容已有链路。
 OWNER_KEY = "_at_guard_reply_owner"
 RECALLED_KEY = "_at_guard_source_recalled"
+ONEBOT_SEND_KEY = "_livinghello_onebot_send_message"
+
+
+class _PrivateReceiptBot:
+    def __init__(self, bot, target, text):
+        self.bot, self.target, self.text = bot, target, text
+        self.message_id = None
+
+    def __getattr__(self, name):
+        return getattr(self.bot, name)
+
+    async def send_private_msg(self, *, user_id, message, **kwargs):
+        result = await self.bot.send_private_msg(user_id=user_id, message=message, **kwargs)
+        text = "".join(str(seg.get("data", {}).get("text", "")) for seg in message
+                       if seg.get("type") == "text").strip()
+        if user_id == self.target and text == self.text and isinstance(result, Mapping):
+            message_id = result.get("message_id")
+            # OneBot QQ IDs can be signed. Empty, zero and boolean values are not receipts.
+            if type(message_id) is int and message_id != 0:
+                self.message_id = str(message_id)
+            elif (type(message_id) is str and re.fullmatch(r"-?[0-9]{1,20}", message_id)
+                  and int(message_id) != 0):
+                self.message_id = message_id
+        return result
 
 
 @dataclass
@@ -286,12 +312,75 @@ class ReplyDelivery:
         event.set_extra("_at_guard_sent_has_content", False)
         event.set_extra("_at_guard_sent_text", "")
 
+    @staticmethod
+    def _native_onebot_sender(event, original):
+        if (getattr(event, "get_platform_name", lambda: "")() != "aiocqhttp"
+                or event.get_group_id()):
+            return None
+        try:
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+        except ImportError:
+            return None
+        method = getattr(event, "send_message", None)
+        target = str(event.get_sender_id() or "")
+        if (type(event) is AiocqhttpMessageEvent
+                and getattr(original, "__func__", None) is AiocqhttpMessageEvent.send
+                and "send_message" not in vars(event)
+                and method == AiocqhttpMessageEvent.send_message
+                and target.isascii() and target.isdecimal()
+                and callable(getattr(event.bot, "send_private_msg", None))):
+            return method
+        return None
+
+    @staticmethod
+    def has_onebot_receipts(event):
+        method = event.get_extra(ONEBOT_SEND_KEY)
+        return bool(event.get_extra("_at_guard_send_patched") and method
+                    and method == getattr(event, "send_message", None))
+
+    async def _send_packet(self, event, original, identity, packet, *args, **kwargs):
+        local = event.get_extra(LOCAL_REPLY)
+        health = event.get_extra(HEALTH_KEY)
+        if (not local or not health or not local["rendered"]
+                or getattr(identity, "_livinghello_reply_token", None) is not health["token"]
+                or reply_body(identity.chain) != local["rendered"]):
+            return await original(packet, *args, **kwargs)
+        # Owned packets may have another punctuation pass before serialization.
+        text = reply_body(packet.chain)
+        if not text:
+            return await original(packet, *args, **kwargs)
+        native_send_message = event.get_extra(ONEBOT_SEND_KEY)
+        if not self.has_onebot_receipts(event):
+            return False
+        proxy = _PrivateReceiptBot(event.bot, int(event.get_sender_id()), text)
+        owner = asyncio.current_task()
+
+        async def observe(*send_args, **send_kwargs):
+            if asyncio.current_task() is owner and send_kwargs.get("message_chain") is packet:
+                send_kwargs["bot"] = proxy
+            return await native_send_message(*send_args, **send_kwargs)
+
+        # Native event.send discards the action result. Observe this one packet's action,
+        # including when the adapter sends successfully while returning None to its caller.
+        event.send_message = observe
+        try:
+            result = await original(packet, *args, **kwargs)
+        finally:
+            if getattr(event, "send_message", None) is observe:
+                del event.send_message
+        if proxy.message_id is None or not send_accepted(result):
+            return False
+        local["receipt"] = proxy.message_id
+        emit(event, "turn_output", "success", reason="onebot_text_confirmed")
+        return result
+
     def patch(self, event):
         if event.get_extra("_at_guard_send_patched", False):
             return True
         original = getattr(event, "send", None)
         if not callable(original):
             return False
+        onebot_sender = self._native_onebot_sender(event, original)
         # 事件局部锁也挡住同一回复的并行发送，不产生全局群聊锁。
         lock = asyncio.Lock()
 
@@ -324,6 +413,7 @@ class ReplyDelivery:
                     belongs = bool(plan and getattr(message, "_at_guard_delivery_token", None)
                                    is plan["token"])
                     if not belongs:
+                        identity = message
                         expression = getattr(self, "expression", None)
                         if expression and event.get_extra(OWNER_KEY) == "at_guard":
                             # 失败提示等原生直发也可能带引用；只移除私聊当前消息头。
@@ -334,7 +424,7 @@ class ReplyDelivery:
                         if incoming:
                             event.set_extra("_livinghello_any_send_attempted", True)
                         try:
-                            sent = await original(message, *args, **kwargs)
+                            sent = await self._send_packet(event, original, identity, message, *args, **kwargs)
                         except BaseException as exc:
                             self.health_sent(event, message, False)
                             self.trace_failure(event, exc)
@@ -387,7 +477,8 @@ class ReplyDelivery:
                     if expression:
                         chain = expression.before_send(event, chain, plan)
                     try:
-                        sent = await original(self.derive(message, chain), *args, **kwargs)
+                        sent = await self._send_packet(
+                            event, original, message, self.derive(message, chain), *args, **kwargs)
                     except BaseException as exc:
                         plan["failed"] = True
                         self.health_sent(event, message, False)
@@ -412,6 +503,8 @@ class ReplyDelivery:
         try:
             event.send = wrapped
             event.set_extra("_at_guard_send_patched", True)
+            if onebot_sender is not None:
+                event.set_extra(ONEBOT_SEND_KEY, onebot_sender)
         except (AttributeError, TypeError):
             self.logger.warning("[LivingHello] 当前事件无法包装发送，表达保留宿主行为")
             return False

@@ -27,6 +27,7 @@ try:  # 作为插件包加载时走相对导入
     from .reply.guard_reply_delivery import ReplyDelivery
     from .reply.guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
     from .reply.guard_reply_fallback import ReplyFallback, find_current_runner
+    from .reply.guard_turn_output import IMAGE_INTENT, LOCAL_REPLY, TurnOutput, reply_body
     from .input.guard_history_view import HistoryView
     from .reply.guard_reasoning_retry import ReasoningRetry
     from .input.guard_fragments import FragmentWait
@@ -63,6 +64,7 @@ except ImportError:  # 单文件调试兜底
     from reply.guard_reply_delivery import ReplyDelivery
     from reply.guard_reply_health import ReplyHealth, safe_excerpt, tool_result_delivered
     from reply.guard_reply_fallback import ReplyFallback, find_current_runner
+    from reply.guard_turn_output import IMAGE_INTENT, LOCAL_REPLY, TurnOutput, reply_body
     from input.guard_history_view import HistoryView
     from reply.guard_reasoning_retry import ReasoningRetry
     from input.guard_fragments import FragmentWait
@@ -183,6 +185,11 @@ class Main(Star):
         if not hasattr(self, "reply_fallback"):
             self.reply_fallback = ReplyFallback(self)
         return self.reply_fallback
+
+    def _turn_output(self):
+        if not hasattr(self, "turn_output"):
+            self.turn_output = TurnOutput(self)
+        return self.turn_output
 
     def _history_view(self):
         if not hasattr(self, "history_view"):
@@ -611,6 +618,12 @@ class Main(Star):
 
     async def deliver_deferred_image(self, event, artifact, *, authorize=None):
         """统一图片投递出口；LE 提供自己的实时授权，LH 拥有投递回执。"""
+        try:
+            from .images.guard_image_delivery import send_session_image
+            from .images.guard_image_settings import ImageQuotaError
+        except ImportError:
+            from images.guard_image_delivery import send_session_image
+            from images.guard_image_settings import ImageQuotaError
         request_id = artifact.get("request_id") if isinstance(artifact, dict) else None
 
         def receipt(status, reason="", retryable=False):
@@ -629,8 +642,6 @@ class Main(Star):
             return receipt("rejected", "invalid_artifact")
         service = self._image_generation()
         path = artifact["path"]
-        if not Path(path).is_file():
-            return receipt("unknown", "file_missing")
         if service.blocked(event) or not service.values["enabled"]:
             return receipt("rejected", "delivery_blocked", True)
         if authorize is not None and not await authorize():
@@ -648,9 +659,18 @@ class Main(Star):
             return receipt("rejected", "invalid_artifact")
         if claim != "claimed":
             return receipt("unknown", "already_attempted")
+        if not Path(path).is_file():
+            service.settle_deferred_image(request_id, "unknown")
+            return receipt("unknown", "file_missing")
         try:
-            accepted = await self.context.send_message(
+            if not service.renew_reservation(request_id, sending=True, retry_rejected=True):
+                service.settle_deferred_image(request_id, "unknown")
+                return receipt("unknown", "reservation_missing")
+            accepted = await send_session_image(self.context,
                 session, event.chain_result([Image.fromFileSystem(path)]))
+        except ImageQuotaError as exc:
+            service.settle_deferred_image(request_id, "rejected")
+            return receipt("rejected", exc.kind, True)
         except asyncio.CancelledError:
             # 提交可能已经发生；写入未知后传播取消。
             service.settle_deferred_image(request_id, "unknown")
@@ -659,8 +679,8 @@ class Main(Star):
             service.settle_deferred_image(request_id, "unknown")
             return receipt("unknown", "send_failed")
         if accepted is True:
-            service.settle_deferred_image(request_id, "sent")
-            await service.finish_image(event, artifact, "sent")
+            service.settle_deferred_image(request_id, "sent", confirmed=True)
+            await service.finish_image(event, artifact, "sent", confirmed=True)
             event._has_send_oper = True
             return receipt("sent")
         if accepted is False:
@@ -695,7 +715,7 @@ class Main(Star):
         return {**result, "revised": str(artifact.get("revised") or "")}
 
     def complete_deferred_image(self, request_id, status):
-        """接收执行器的发送结果，仅更新既有额度记录。"""
+        """Legacy handoff has no platform proof; preserve its history without charging quota."""
         if status not in ("sent", "unknown", "cancelled"):
             raise ValueError("invalid_deferred_image_status")
         service = self._image_generation()
@@ -1575,8 +1595,13 @@ class Main(Star):
             return
         service = self._trace(event)
         self._reply_health().watch(event, expected=True)
-        self._history_view().bind(event, find_current_runner(run_context))
+        runner = find_current_runner(run_context)
+        self._history_view().bind(event, runner)
+        output = self._turn_output()
+        bind_output = output.watch(event, runner, run_context)
         self._reply_fallback().bind_current(event, run_context)
+        if bind_output:
+            output.bind(event, runner)
         # 工具循环护栏：相同调用去重，只读工具异常由本地重试。
         bind_tool_loop(event, run_context, self)
         # 宿主已选择本轮provider；只取名称，后备切换的最终归属仍以宿主日志为准。
@@ -1595,8 +1620,13 @@ class Main(Star):
     async def trace_agent_done(self, event, run_context, response):
         if self._is_onebot_poke(event):
             return
+        runner = event.get_extra("_livinghello_turn_output_runner")
+        if runner is not None and runner.run_context is run_context:
+            self._turn_output().release(runner)
+            event.set_extra("_livinghello_turn_output_runner", None)
         self._cancel_early_ack(event)
-        if (response is None or event.get_extra("_at_guard_delivery_blocked")
+        if (response is None or event.get_extra("_livinghello_intentional_silence")
+                or event.get_extra("_at_guard_delivery_blocked")
                 or event.get_extra("_at_guard_superseded")):
             # 失败/已阻断/已顶替的轮次不再需要被顶替；正常完成要留到发送确认。
             self._clear_reply_turn(event)
@@ -2102,6 +2132,9 @@ class Main(Star):
         if turns is not None:
             turns.close()
         fallback = getattr(self, "reply_fallback", None)
+        output = getattr(self, "turn_output", None)
+        if output is not None:
+            output.close()
         history_view = getattr(self, "history_view", None)
         if history_view is not None:
             await history_view.close()
@@ -3282,6 +3315,7 @@ class Main(Star):
         if result is not None and await self._reply_health().suppress_native_error(event, result):
             return
         if result is not None and hasattr(result, "is_llm_result"):
+            local = TurnOutput.decoration_owner(event, result)
             # 差分裁剪必须在分段之前：分段后思考会被切成多条气泡，
             # 每条单独比对都够不到重合阈值。
             try:
@@ -3297,8 +3331,10 @@ class Main(Star):
                              source="reasoning_diff", removed=_removed)
             except Exception as exc:
                 self.logger.warning("[LivingHello] reasoning 差分失败: %r", exc)
-            self.segments.prepare(event, result)
+            self.segments.prepare(event, result, single_bubble=local is not None)
             await self.expression.decorate(event, result)
+            if local is not None:
+                local["rendered"] = reply_body(result.chain)
             emit(event, "expression", "success" if takeover(self.config) else "disabled",
                  count=len(result.chain or []))
             delivery.arm(event, result)
@@ -3359,16 +3395,20 @@ class Main(Star):
 
     @filter.after_message_sent(priority=100)
     async def deliver_pending_image(self, event: AstrMessageEvent):
-        """主回复送出之后再单独发一条图片，让「先说话、后给图」成为两个气泡。
-
-        生图工具只在事件上留下待发路径，不自己发图；顺序交给宿主：
-        文字回复先出去，这里补图，节奏更接近真人。发送失败不重试。
-        """
-        if event.get_extra("_livinghello_image_job"):
+        """主回复确认后放行并行生图的投递，或沿用其他请求的原补图流程。"""
+        local = event.get_extra(LOCAL_REPLY)
+        if local is not None:
+            await self._turn_output().after_sent(event, local)
+            return
+        if event.get_extra(IMAGE_INTENT):
+            return  # The single-image route only starts after its own validated reply.
+        job = event.get_extra("_livinghello_image_job")
+        if job:
             # 试跑异步生图：先确认最后一个文字气泡已投递，再启动后台请求。
             plan = event.get_extra("_at_guard_delivery_plan")
             if plan and plan.get("failed"):
-                event.get_extra("_livinghello_image_job")["status"] = "cancelled"
+                job["status"] = "cancelled"
+                self._image_generation().release_reservation(job)
                 return
             if plan and not plan.get("failed"):
                 chain = getattr(event.get_result(), "chain", None) or []
@@ -3376,7 +3416,6 @@ class Main(Star):
                        id(c) not in plan.get("attempted", {}) for c in chain):
                     return
             failure = event.get_extra("_livinghello_image_failure")
-            job = event.get_extra("_livinghello_image_job")
             if failure and job["status"] in ("failed", "quota"):
                 await self._image_generation()._notify_image_failure(event, job, failure)
                 return
@@ -3416,6 +3455,10 @@ class Main(Star):
                                                 "reason": "已生成文件丢失，未确认发送"}, "unknown")
             emit(event, "image_delivery", "failed", reason="pending_file_missing")
             return
+        if (event.get_extra("_at_guard_delivery_plan") or {}).get("failed"):
+            service.mark(request_id, "cancelled")
+            await service.finish_image(event, pending, "cancelled")
+            return
         if event.get_extra("_at_guard_delivery_blocked") or self._delivery().recalled(event):
             service.mark(request_id, "cancelled")
             await service.finish_image(event, {**pending, "kind": "delivery_unknown",
@@ -3424,14 +3467,17 @@ class Main(Star):
             emit(event, "image_delivery", "cancelled", reason="reply_cancelled_after_text")
             return
         try:
-            accepted = await event.send(event.chain_result([Image.fromFileSystem(path)]))
+            accepted = await service._deliver_image(event, pending, retry=False)
+        except asyncio.CancelledError:
+            await service.finish_image(event, pending, "unknown")
+            raise
         except Exception as exc:
             service.mark(request_id, "unknown")
             emit(event, "image_delivery", "failed", reason="send_exception",
                  error_type=type(exc).__name__)
             self.logger.warning("[LivingHello] 生图发送结果未知 type=%s", type(exc).__name__)
             accepted = False
-        if accepted is False or (event.get_extra("_at_guard_delivery_plan") or {}).get("failed"):
+        if not accepted:
             service.mark(request_id, "unknown")
             await service.finish_image(event, pending, "unknown")
             emit(event, "image_delivery", "unknown", reason="send_not_confirmed")
@@ -3440,8 +3486,7 @@ class Main(Star):
                     event, pending, "delivery_unknown", request_id)
                 await service._notify_image_failure(event, {}, failure)
             return
-        service.mark(request_id, "sent")
-        await service.finish_image(event, pending, "sent")
+        await service.finish_image(event, pending, "sent", confirmed=True)
         emit(event, "image_delivery", "success", source="after_reply")
 
     @filter.after_message_sent()
