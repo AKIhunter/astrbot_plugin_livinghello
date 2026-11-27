@@ -5,7 +5,7 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.10.5-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.10.6-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -127,4 +127,4 @@ QQ撤回保护需收到OneBot撤回通知，并处于碎片等待窗口。
 
 ## 📜 更新日志
 
-**2.10.5** 改用结构化诊断事件，保留慢接口和异常类型，并避免同步模型列表查询阻塞控制台。无需迁移配置。详见[诊断日志](docs/diagnostics.md)和[更新日志](CHANGELOG.md)。
+**2.10.6** 修复 QQ「戳一戳」被聊天闸门拦截的问题，监听该通知的插件可以自行反戳或补话。无需迁移配置。详见[消息名单](docs/message-policy.md)和[更新日志](CHANGELOG.md)。

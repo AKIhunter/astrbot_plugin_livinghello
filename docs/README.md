@@ -1,12 +1,13 @@
 # LivingHello 当前文档
 
-适用2.10.5，2026-11-26核对。README只介绍当前产品；历史变更统一见[更新日志](../CHANGELOG.md)。
+适用2.10.6，2026-11-27核对。README只介绍当前产品；历史变更统一见[更新日志](../CHANGELOG.md)。
 源码变化时同步权威文档，每次提交检查链接、默认值、版本、资产和离线回归。
 
 | 用途 | 权威入口 | 依据 |
 | --- | --- | --- |
 | 快速开始、试跑、模型、人格、分段与排障 | [使用指南](usage.md#打开控制台并保存) | pages/guard、原生桥与投递 |
 | 每项配置默认值、位置、作用与例子 | [配置参考](configuration.md) | schema、页面帮助、保存校验、运行限幅 |
+| QQ 名单规则与「戳一戳」豁免 | [消息名单](message-policy.md) | gate、消息与发送钩子 |
 | 判定与回复历史条数、短流水与正文来源 | [历史上下文](history-context.md#主回复模型的lh短流水) | 独立快照、来源排除、短文本与字符预算 |
 | 技术与判断流程 | [架构](architecture.md)、[判断逻辑](decision-logic.md) | main、gate、input、reply、images |
 | 可离线打开的完整分支图 | [流程HTML](flow/index.html) | 当前规则与集成契约 |

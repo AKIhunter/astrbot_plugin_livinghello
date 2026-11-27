@@ -262,6 +262,8 @@ class Main(Star):
 
     @filter.on_llm_request(priority=10500)
     async def listen_livingemotion(self, event: AstrMessageEvent, req: ProviderRequest):
+        if self._is_onebot_poke(event):
+            return
         touch(event, "livingemotion")
         enabled = coupling_enabled(self.context, self.config, "livingemotion")
         clean_request(req, emotion=enabled, memory=True)
@@ -273,6 +275,8 @@ class Main(Star):
 
     @filter.on_llm_request(priority=10450)
     async def listen_livingmemory(self, event: AstrMessageEvent, req: ProviderRequest):
+        if self._is_onebot_poke(event):
+            return
         touch(event, "livingmemory")
         enabled = coupling_enabled(self.context, self.config, "livingmemory")
         clean_request(req, emotion=True, memory=enabled)
@@ -285,6 +289,13 @@ class Main(Star):
     def message_policy_companion(self):
         """名单在本插件入口及发送前执行，不依赖外部历史过滤声明。"""
         return {"active": False, "supported": True, "contract": HISTORY_CONTRACT}
+
+    @staticmethod
+    def _is_onebot_poke(event: AstrMessageEvent) -> bool:
+        # OneBot 会把通知投给群/私聊监听器；只识别戳一戳，保留撤回等其他事件的行为。
+        raw = ReplyDelivery.raw(event)
+        return (raw.get("post_type") == "notice" and raw.get("notice_type") == "notify"
+                and raw.get("sub_type") == "poke")
 
     def _policy_explicit(self, event):
         if ReplyDelivery.raw(event).get("post_type") == "notice":
@@ -426,6 +437,8 @@ class Main(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 40)
     async def check_incoming_message_policy(self, event: AstrMessageEvent):
+        if self._is_onebot_poke(event):
+            return  # 事件留给戳一戳插件，连发送方法也不挂钩。
         if self._delivery().notice(event):
             return
         result = self._event_policy(event)
@@ -441,6 +454,8 @@ class Main(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize - 105)
     async def stop_readonly_message_policy(self, event: AstrMessageEvent):
+        if self._is_onebot_poke(event):
+            return
         result = self._event_policy(event)
         if not result["reply_allowed"]:
             # 配套插件基础归档已完成；这里只记录规则静默，不伪造参与分数。
@@ -451,6 +466,8 @@ class Main(Star):
 
     @filter.on_llm_request(priority=maxsize + 40)
     async def check_request_message_policy(self, event: AstrMessageEvent, req: ProviderRequest):
+        if self._is_onebot_poke(event):
+            return
         result = self._event_policy(event)
         if not result["reply_allowed"]:
             self._block_message_policy(event, result["reason"])
@@ -1296,6 +1313,8 @@ class Main(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 10)
     async def parse_reply_input(self, event: AstrMessageEvent):
         """由LivingHello展开输入，保留文字、引用来源及媒体理解结果。"""
+        if self._is_onebot_poke(event):
+            return
         result = self._event_policy(event)
         if not result["read_allowed"]:
             return
@@ -1337,6 +1356,8 @@ class Main(Star):
 
     @filter.on_llm_request(priority=maxsize - 105)
     async def understand_reply_input(self, event: AstrMessageEvent, req: ProviderRequest):
+        if self._is_onebot_poke(event):
+            return
         touch(event, "understanding")
         # 输入展开由本插件处理，原生请求只接收本轮理解结果。
         if not self._delivery().recalled(event):
@@ -1345,6 +1366,8 @@ class Main(Star):
 
     @filter.on_llm_request(priority=-maxsize)
     async def attach_reply_contract(self, event: AstrMessageEvent, req: ProviderRequest):
+        if self._is_onebot_poke(event):
+            return
         self.logger.warning("[LH-trace] 契约钩子开始")
         clean_request(req,
                       emotion=coupling_enabled(self.context, self.config, "livingemotion"),
@@ -1463,6 +1486,8 @@ class Main(Star):
 
     @filter.on_llm_tool_respond()
     async def remember_tool_evidence(self, event, tool, tool_args, tool_result):
+        if self._is_onebot_poke(event):
+            return
         service = self._trace(event)
         touch(event, "tool_end")
         spans = event.get_extra("_livinghello_tool_spans", {})
@@ -1512,6 +1537,8 @@ class Main(Star):
 
     @filter.on_using_llm_tool()
     async def trace_tool_start(self, event, tool, tool_args):
+        if self._is_onebot_poke(event):
+            return
         if event.get_extra("_livinghello_classifier_recovery"):
             event.set_extra("_livinghello_recovery_tool_attempted", True)
         # 定时/工具发送走宿主 context.send_message，不经过普通回复分段装饰。
@@ -1531,6 +1558,8 @@ class Main(Star):
 
     @filter.on_agent_begin()
     async def trace_agent_begin(self, event, run_context):
+        if self._is_onebot_poke(event):
+            return
         service = self._trace(event)
         self._reply_health().watch(event, expected=True)
         self._history_view().bind(event, find_current_runner(run_context))
@@ -1551,6 +1580,8 @@ class Main(Star):
 
     @filter.on_agent_done()
     async def trace_agent_done(self, event, run_context, response):
+        if self._is_onebot_poke(event):
+            return
         self._cancel_early_ack(event)
         if (response is None or event.get_extra("_at_guard_delivery_blocked")
                 or event.get_extra("_at_guard_superseded")):
@@ -1764,6 +1795,8 @@ class Main(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 30)
     async def observe_message_fragments(self, event: AstrMessageEvent):
         """在任何等待之前登记原消息；不改正文/组件，让配套插件逐条归档。"""
+        if self._is_onebot_poke(event):
+            return
         result = self._event_policy(event)
         if not result["read_allowed"]:
             return
@@ -1819,6 +1852,8 @@ class Main(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize - 110)
     async def coalesce_message_fragments(self, event: AstrMessageEvent):
         """配套插件的原消息归档之后、作息/爬楼之前，认领本批唯一回复机会。"""
+        if self._is_onebot_poke(event):
+            return
         touch(event, "fragments")
         ticket = event.get_extra("_at_guard_fragment_ticket")
         if event.get_extra("_at_guard_fragments") is not None:
@@ -2032,6 +2067,8 @@ class Main(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 20)
     async def prepare_reply_delivery(self, event: AstrMessageEvent):
         """登记撤回并接管表达，不增加处理前等待，私聊不受门禁范围限制。"""
+        if self._is_onebot_poke(event):
+            return
         if event.get_message_type() not in {MessageType.GROUP_MESSAGE, MessageType.FRIEND_MESSAGE}:
             return
         touch(event, "recall")
@@ -2208,6 +2245,8 @@ class Main(Star):
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=maxsize)
     async def apply_hard_group_rules(self, event: AstrMessageEvent):
         """Record context, handle empty self mentions, and recognize bot names."""
+        if self._is_onebot_poke(event):
+            return
         policy = self._event_policy(event)
         if not policy["read_allowed"]:
             return
@@ -2272,6 +2311,8 @@ class Main(Star):
         event: AstrMessageEvent,
         req: ProviderRequest,
     ) -> None:
+        if self._is_onebot_poke(event):
+            return
         self._note_gate_skip(event, "entered")
         policy = self._event_policy(event)
         if not policy["reply_allowed"] or self._policy_send_reason(event):
@@ -3116,6 +3157,8 @@ class Main(Star):
         event: AstrMessageEvent,
         response: LLMResponse,
     ) -> None:
+        if self._is_onebot_poke(event):
+            return
         touch(event, "response")
         emit(event, "response", "success" if response is not None else "uncollected")
         # 中转偶尔把思考漏进正文；把上游自己声明的 reasoning 留一份，
@@ -3196,12 +3239,16 @@ class Main(Star):
 
     @filter.on_decorating_result(priority=maxsize)
     async def deduplicate_before_decoration(self, event: AstrMessageEvent):
+        if self._is_onebot_poke(event):
+            return
         # 表情等插件会合并相邻 Plain；必须在来源边界消失前比较本轮正文。
         # 这里只去重，分段仍在最终复核处执行，以包含 LE 追加的晚安。
         self.segments.deduplicate(event, event.get_result())
 
     @filter.on_decorating_result(priority=-maxsize)
     async def recheck_before_send(self, event: AstrMessageEvent):
+        if self._is_onebot_poke(event):
+            return
         reason = self._policy_send_reason(event)
         if reason:
             self._block_message_policy(event, reason)
@@ -3385,6 +3432,8 @@ class Main(Star):
 
     @filter.after_message_sent()
     async def track_sent_message(self, event: AstrMessageEvent):
+        if self._is_onebot_poke(event):
+            return
         touch(event, "send")
         # 分段发送中途保留轮次，剩余气泡仍可能被新消息顶替；整轮发完才释放。
         plan = event.get_extra("_at_guard_delivery_plan")

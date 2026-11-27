@@ -1,12 +1,14 @@
 """名单规范化、决策矩阵和配置事务；只使用合成合法 QQ 标识。"""
 import asyncio
 import itertools
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from gate.guard_message_policy import FIELDS, MessagePolicy, validate_policy_config
 from console import guard_webui
 from test_gate import gate_config, plugin
+from test_reply_delivery import Event, recall
 
 
 class PolicyTest(unittest.TestCase):
@@ -78,6 +80,84 @@ class PolicyTest(unittest.TestCase):
         self.assertFalse(policy.check(platform="qq", session_kind="private", sender_id="123")["read_allowed"])
         with self.assertRaises(TypeError):
             policy.values["message_blacklist_qq"] = ()
+
+
+class PokePolicyTest(unittest.IsolatedAsyncioTestCase):
+    poke = {"post_type": "notice", "notice_type": "notify", "sub_type": "poke"}
+
+    @staticmethod
+    def event(group, raw):
+        event = Event(group=group, notice=dict(raw))
+        event.get_platform_name = lambda: "aiocqhttp"
+        event.message_str = ""
+        event.is_at_or_wake_command = False
+        return event
+
+    async def test_group_and_private_poke_leave_peer_listener_and_reply_untouched(self):
+        for group in ("1001", ""):
+            for policy in ({}, {"message_blacklist_qq": ["123"]},
+                           {"message_graylist_qq": ["123"]}, {"message_whitelist_qq": ["456"]}):
+                with self.subTest(group=bool(group), policy=policy):
+                    guard = plugin(gate_config(apply_to_private=True, expression_takeover_enabled=True, **policy))
+                    event = self.event(group, self.poke)
+                    original_send = event.send
+                    for hook in (guard.check_incoming_message_policy, guard.observe_message_fragments,
+                                 guard.prepare_reply_delivery, guard.parse_reply_input):
+                        await hook(event)
+                        self.assertFalse(event.stopped)
+                    if group:
+                        self.assertEqual([r async for r in guard.apply_hard_group_rules(event)], [])
+                    await guard.stop_readonly_message_policy(event)
+                    self.assertFalse(event.stopped)
+                    self.assertEqual([r async for r in guard.coalesce_message_fragments(event)], [])
+
+                    # 后续插件可以反戳，并显式提交自己的补话请求。
+                    direct_reply = event.result.derive(event.result.chain)
+                    await event.send(direct_reply)
+                    req = SimpleNamespace(prompt="戳一戳插件自己的提示", extra_user_content_parts=[])
+                    response = SimpleNamespace(completion_text="戳一戳插件自己的回复")
+                    original_chain = list(event.result.chain)
+                    with patch.object(guard.engine, "decide", new_callable=AsyncMock) as judge:
+                        for hook in (guard.check_request_message_policy, guard.understand_reply_input,
+                                     guard.listen_livingemotion, guard.listen_livingmemory,
+                                     guard.guard_llm_request, guard.attach_reply_contract):
+                            await hook(event, req)
+                            self.assertFalse(event.stopped)
+                        judge.assert_not_awaited()
+                    await guard.trace_agent_begin(event, None)
+                    tool_args = {"text": "插件自己的工具参数"}
+                    await guard.trace_tool_start(event, None, tool_args)
+                    await guard.remember_tool_evidence(event, None, tool_args, "工具完成")
+                    await guard.suppress_no_reply_and_track(event, response)
+                    await guard.trace_agent_done(event, None, response)
+                    await guard.deduplicate_before_decoration(event)
+                    await guard.recheck_before_send(event)
+                    self.assertFalse(event.stopped)
+                    await event.send(event.result)
+                    await guard.track_sent_message(event)
+                    self.assertEqual(event.send, original_send)
+                    self.assertEqual(event.sent, [direct_reply, event.result])
+                    self.assertEqual(event.result.chain, original_chain)
+                    self.assertEqual(vars(req), {"prompt": "戳一戳插件自己的提示", "extra_user_content_parts": []})
+                    self.assertEqual(tool_args, {"text": "插件自己的工具参数"})
+                    self.assertEqual(response.completion_text, "戳一戳插件自己的回复")
+                    self.assertEqual(event.extra, {})
+                    self.assertEqual(dict(guard.recent_messages), {})
+
+    async def test_poke_exemption_does_not_expand_to_chat_other_notices_or_recall(self):
+        for group in ("1001", ""):
+            guard = plugin(gate_config(message_blacklist_qq=["123"]))
+            for raw in ({"post_type": "message"}, {**self.poke, "post_type": "message"},
+                        {**self.poke, "notice_type": "other"}, {**self.poke, "sub_type": "honor"}):
+                with self.subTest(group=bool(group), raw=raw):
+                    event = self.event(group, raw)
+                    await guard.check_incoming_message_policy(event)
+                    self.assertTrue(event.stopped)
+                    self.assertEqual(event.get_extra("_at_guard_delivery_blocked"), "blacklist")
+            event = recall(self.event(group, self.poke))
+            await guard.check_incoming_message_policy(event)
+            self.assertTrue(event.stopped)
+            self.assertIsNone(event.get_extra("_at_guard_delivery_blocked"))
 
 
 class SavePolicyTest(unittest.IsolatedAsyncioTestCase):
