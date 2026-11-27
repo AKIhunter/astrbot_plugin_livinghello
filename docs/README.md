@@ -1,6 +1,6 @@
 # LivingHello 当前文档
 
-适用2.10.8，2026-11-28核对。README只介绍当前产品；历史变更统一见[更新日志](../CHANGELOG.md)。
+适用2.11.0，2026-11-28核对。README只介绍当前产品；历史变更统一见[更新日志](../CHANGELOG.md)。
 源码变化时同步权威文档，每次提交检查链接、默认值、版本、资产和离线回归。
 
 | 用途 | 权威入口 | 依据 |
@@ -12,7 +12,7 @@
 | 技术与判断流程 | [架构](architecture.md)、[判断逻辑](decision-logic.md) | main、gate、input、reply、images |
 | 可离线打开的完整分支图 | [流程HTML](flow/index.html) | 当前规则与集成契约 |
 | 独立、记忆、情绪、双接入 | [集成组合](integrations-and-flow.md) | 各方公开契约 |
-| 生图映射、长度与学习 | [提示词映射](image-prompt-mapping.md) | ImagePromptMapping、LE修复契约 |
+| 生图映射、改词模型与额度、成功用词 | [提示词映射](image-prompt-mapping.md) | LH 生图执行、LE 承诺契约 |
 | 映射加载、校验与生效状态交互示例 | [映射HTML](image-mapping-flow/index.html) | 离线夹具；六种加载状态与六种替换案例 |
 | QQ 私聊即时单图 | [工具回复与生图](tool-turn-output.md) | 预检、承接语补写、先发文字再发图 |
 | 生图回执与原事项结算 | [发送回执](image-delivery-receipts.md) | SQLite回执、image-result.v1 |

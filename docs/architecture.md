@@ -1,6 +1,6 @@
 # 流程与集成说明
 
-面向希望理解执行链路的使用者和配套开发者。当前实现依据 [main.py](../main.py)、[gate/guard_engine.py](../gate/guard_engine.py) 及各 `guard_*` 模块。生图和回执部分于 2026-11-28 按 2.10.8 核对。完整白话分支见 [HTML 图解](flow/index.html)，四种接入组合见 [集成说明](integrations-and-flow.md)，历史反例见 [更新日志](../CHANGELOG.md)。钩子、缓存、超时或配套约定改变时更新；以下图不能代替部署状态验证。
+面向希望理解执行链路的使用者和配套开发者。当前实现依据 [main.py](../main.py)、[gate/guard_engine.py](../gate/guard_engine.py) 及各 `guard_*` 模块。生图和回执部分于 2026-11-28 按 2.11.0 核对。完整白话分支见 [HTML 图解](flow/index.html)，四种接入组合见 [集成说明](integrations-and-flow.md)，历史反例见 [更新日志](../CHANGELOG.md)。钩子、缓存、超时或配套约定改变时更新；以下图不能代替部署状态验证。
 
 本地回复兜底每次调用读取LH的 `reply_primary_timeout_seconds`，缺项默认15秒，整数夹取至1–60秒。主模型在此时限内无有效输出时取消请求，复核既有保护后直接进入配置的回退模型；流式空心跳不延长等待，有效内容后保留从调用开始计算的60秒完成预算。回退模型维持60秒预算，工具步骤共享重试额度，已输出内容和已尝试发送不重放。[完整兜底链路](reply_fallback.md)。
 
