@@ -13,7 +13,7 @@
 
 让机器人先理解话题，在合适的时候接话。LivingHello先判断参与是否合适，
 再交给AstrBot主模型和人格回复；支持连续消息合并、图片理解、分段、引用、语音和独立生图。
-开发者：[AKIhunter](https://github.com/AKIhunter)；反馈QQ群：991350637。
+开发者：[AKIhunter](https://github.com/AKIhunter)；反馈QQ群：991350637，验证内容：实现AGI。
 
 输入理解、人设隔离和断线补答由LH独立实现；人格与发送沿用AstrBot原生链路。
 恢复补答的有效期和未知发送边界见[独立实现说明](docs/independent-runtime.md)。
