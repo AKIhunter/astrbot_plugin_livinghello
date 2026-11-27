@@ -418,7 +418,8 @@ async def _build_providers(plugin: Any) -> list[dict[str, Any]]:
             if not connection and provider_type != "multi_api_router":
                 display_name = _native_model_display(config, model, display_name)
 
-            kind = "provider"
+            kind = ("router_upstream" if pinned_slot else
+                    "router" if provider_type == "multi_api_router" else "provider")
             names: list[str] = []
             # 路由上游的 (label, model) 对，用于生成「锁定具体模型」的虚拟项。
             upstream_pairs: list[tuple[str, str]] = []
@@ -442,7 +443,9 @@ async def _build_providers(plugin: Any) -> list[dict[str, Any]]:
                         names.append(label or upstream_model)
                     # multi_api_router 已注册真实的指定上游 Provider，不再生成
                     # provider::model 虚拟项，避免选择器出现重复和内部前缀。
-                    if upstream_model and provider_type != "multi_api_router":
+                    api_type = getattr(item, "api_type", None)
+                    if (upstream_model and provider_type != "multi_api_router"
+                            and (api_type is None or str(api_type).strip().lower() in CHAT_TYPES)):
                         upstream_pairs.append((label, upstream_model))
 
             if not names and not PROVIDER_LIST_FAST:
@@ -1129,6 +1132,12 @@ def _fragment_age_warning(plugin: Any) -> str:
     return ""
 
 
+def _shared_vision_option(item: dict[str, Any]) -> bool:
+    # 自动路由没有手选具体上游，仍需至少有一路声明支持图片。
+    return item.get("role") == "chat" and (
+        item.get("kind") != "router" or item.get("supports_images") is True)
+
+
 async def handle_config(plugin: Any):
     try:
         body = await request.json(default={})
@@ -1165,9 +1174,11 @@ async def handle_config(plugin: Any):
         provider_id = updates.get(key)
         if provider_id and provider_id not in known:
             return _failure(f"模型 {provider_id} 不在可用列表中")
-        if key in {"vision_shared_provider_id", "understand_video_provider_id"} and provider_id and not any(
-            item["id"] == provider_id and item.get("supports_images") for item in providers
-        ):
+        if key == "vision_shared_provider_id" and provider_id and not any(
+                item["id"] == provider_id and _shared_vision_option(item) for item in providers):
+            return _failure("视觉模型需要已启用的对话模型；自动路由需有支持图片的上游")
+        if key == "understand_video_provider_id" and provider_id and not any(
+                item["id"] == provider_id and item.get("supports_images") for item in providers):
             return _failure(f"模型 {provider_id} 无法确认支持图片，请选择视觉模型")
         if key == "understand_voice_provider_id" and provider_id and not any(
                 item["id"] == provider_id and item.get("supports_audio") for item in providers):
@@ -1631,7 +1642,7 @@ async def _refresh_provider_schema(plugin: Any) -> None:
         if attempt < 5:
             await asyncio.sleep(3.0)
     _write_schema_options(plugin, last_options,
-                          [item["id"] for item in providers if item.get("supports_images")])
+                          [item["id"] for item in providers if _shared_vision_option(item)])
 
 
 def _write_schema_options(plugin: Any, options: list[str], vision_options: list[str] | None = None) -> None:

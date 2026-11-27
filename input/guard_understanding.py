@@ -715,7 +715,7 @@ class Understanding:
                     selected = self.config.get("understand_voice_provider_id", "")
                 provider, kwargs = await self.resolve(selected, event, "vision" if visual else role)
                 if visual:
-                    target = image_target(provider, selected)
+                    target = image_target(provider, selected, allow_unconfirmed=role == "vision")
                     provider = target.provider
                     kwargs["model"] = target.model
                     if role == "video":

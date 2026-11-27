@@ -372,6 +372,36 @@ class UnderstandingTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("人物正在走路", observation.prompt)
                 self.assertGreater(event.get_extra("_at_guard_understand_seconds", 0), 0)
 
+    async def test_manual_image_sends_picture_but_video_and_follow_session_stay_strict(self):
+        provider = SimpleNamespace(
+            provider_config={"id": "ds", "modalities": ["text"]},
+            get_model=lambda: "deepseek-v4.1-flash",
+            text_chat=AsyncMock(return_value=SimpleNamespace(completion_text="图中有猫")),
+        )
+        self.guard.context = SimpleNamespace(
+            get_provider_by_id=lambda _: provider,
+            get_using_provider_async=AsyncMock(return_value=provider),
+        )
+        for model in ("ds", ""):
+            self.event = Event()
+            provider.text_chat.reset_mock()
+            observation = await self.parse(
+                [Image(url="image.png"), component("Video", url="clip.mp4")],
+                vision_shared_provider_id=model, understand_image_enabled=True, understand_video_enabled=True,
+            )
+            with patch("images.guard_image_evidence.prepare_image",
+                       AsyncMock(return_value=("original.png", "", None))), \
+                    patch("images.guard_video.frames_from_video", AsyncMock()) as extract:
+                await self.reader.enrich(self.event, observation)
+            extract.assert_not_awaited()
+            if model:
+                provider.text_chat.assert_awaited_once()
+                self.assertEqual(provider.text_chat.await_args.kwargs["image_urls"], ["original.png"])
+                self.assertIn("图中有猫", observation.vision_summary)
+            else:
+                provider.text_chat.assert_not_awaited()
+                self.assertTrue(observation.vision_unresolved)
+
     async def test_video_and_image_use_their_own_locked_router_upstreams(self):
         clients = {
             name: SimpleNamespace(

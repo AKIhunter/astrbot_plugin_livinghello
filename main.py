@@ -3085,7 +3085,7 @@ class Main(Star):
         provider_id = label.split("::", 1)[0].strip()
         if not provider_id:
             return None
-        return image_target(self.context.get_provider_by_id(provider_id), label)
+        return image_target(self.context.get_provider_by_id(provider_id), label, allow_unconfirmed=True)
 
     def _understanding_image_summaries(self, event) -> list:
         """把本轮理解阶段看过的图摘要交给判定复用；整体摘要只作画面证据。"""

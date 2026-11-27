@@ -1,10 +1,12 @@
-"""图片判定模型选择：尊重宿主能力声明，路由始终锁定一个视觉上游。"""
+"""图片模型选择：自动按能力筛选，手选具体对话模型允许尝试。"""
 import re
 
 try:
     from ..gate.guard_engine import GateFailure, GateProvider
+    from ..integrations.guard_router_connections import CHAT_TYPES
 except ImportError:
     from gate.guard_engine import GateFailure, GateProvider
+    from integrations.guard_router_connections import CHAT_TYPES
 
 
 VISION_ROUTER_API_TYPES = frozenset({"image_to_text", "multimodal"})
@@ -48,40 +50,73 @@ class StrictVisionProvider:
             kwargs["prompt"], kwargs.get("image_urls"), None, [],
             kwargs["system_prompt"], None, model=kwargs.get("model"),
         )
-        payload["max_tokens"] = kwargs.get("max_tokens", 900)
+        config = getattr(self.provider, "provider_config", {}) or {}
+        limit_key = ("max_output_tokens" if config.get("type") == "openai_responses"
+                     else "max_tokens")
+        payload[limit_key] = kwargs.get("max_tokens", 900)
         return await self.provider._query(
             payload, None, request_max_retries=kwargs.get("request_max_retries", 1))
 
 
-def image_target(provider, label="", *, api_type=None):
+def _strict_provider(provider, *, include_responses=False):
+    config = getattr(provider, "provider_config", {}) or {}
+    kind = config.get("type")
+    if ((kind == "openai_chat_completion" or (include_responses and kind == "openai_responses"))
+            and callable(getattr(provider, "_prepare_chat_payload", None))
+            and callable(getattr(provider, "_query", None))):
+        return StrictVisionProvider(provider)
+    return provider
+
+
+def image_target(provider, label="", *, api_type=None, allow_unconfirmed=False):
     if provider is None:
         raise GateFailure("no_vision_provider")
     config = getattr(provider, "provider_config", {}) or {}
     provider_id = str(config.get("id", "") or type(provider).__name__)
     pinned = label.split("::", 1)[1].strip() if "::" in label else ""
+    manual = bool(allow_unconfirmed and label)
+    failure = "no_vision_provider" if label else "main_no_vision"
+    if manual and (config.get("enable") is False or not callable(getattr(provider, "text_chat", None))):
+        raise GateFailure(failure)
     upstreams = getattr(provider, "upstreams", None)
     if isinstance(upstreams, (list, tuple)):
         # 不把图片交给未锁定的混合路由，绕开“找不到pin就走全部上游”的行为。
+        lock = config.get("upstream_slot")
         choices = []
+        unconfirmed = None
+        model_counts = {}
         for upstream in upstreams:
             client = getattr(upstream, "client", None)
             if client is None:
                 continue
             model = str(client.get_model() or "")
-            if pinned and pinned != model:
+            if not model or (pinned and pinned != model):
                 continue
-            if supports_images(client, model, api_type=getattr(upstream, "api_type", None)):
-                choices.append(model)
-        if not choices:
-            raise GateFailure("main_no_vision" if not label else "no_vision_provider")
-        model = choices[0]
+            declaration = getattr(upstream, "api_type", None)
+            model_counts[model] = model_counts.get(model, 0) + 1
+            if supports_images(client, model, api_type=declaration):
+                choices.append((model, client))
+            elif (manual and unconfirmed is None
+                  and (pinned or (lock and len(upstreams) == 1))
+                  and (declaration is None or str(declaration).strip().lower() in CHAT_TYPES)):
+                unconfirmed = (model, client)
+        if choices:
+            model, client = choices[0]
+            # 选了自动路由或旧模型别名时，同名上游不等于同一条线路。
+            if manual and model_counts[model] > 1:
+                provider = _strict_provider(client, include_responses=True)
+        elif unconfirmed:
+            model, client = unconfirmed
+            # 手选无能力声明的上游只发给这一条线，避免路由重选或宿主删图重试。
+            provider = _strict_provider(client, include_responses=True)
+        else:
+            raise GateFailure(failure)
     else:
-        model = pinned or str(provider.get_model() or "")
-        if not supports_images(provider, model, api_type=api_type):
-            raise GateFailure("main_no_vision" if not label else "no_vision_provider")
-        # 不改变共享provider；此局部适配器仅用于图片参与分类。
-        if (getattr(provider, "provider_config", {}).get("type") == "openai_chat_completion"
-                and callable(getattr(provider, "_prepare_chat_payload", None))
-                and callable(getattr(provider, "_query", None))):
-            provider = StrictVisionProvider(provider)
+        configured = str(provider.get_model() or "")
+        model = pinned or configured
+        # 存量的原生 provider::model 仍可按能力走；手选放开仅针对已配置的型号。
+        try_configured = manual and (not pinned or pinned == configured)
+        if not supports_images(provider, model, api_type=api_type) and not try_configured:
+            raise GateFailure(failure)
+        provider = _strict_provider(provider, include_responses=manual)
     return GateProvider(provider, model, f"{provider_id}::{model}")

@@ -2,9 +2,14 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from console import guard_webui
+from gate.guard_engine import GateFailure
 from images.guard_media import image_target
+from test_context_policy import output
+from test_gate import GateEvent, gate_config, plugin
+from test_multimodal import IMAGE, NEED_IMAGE, Provider
 
 
 class FakeProvider:
@@ -101,6 +106,106 @@ class RouterVisionDeclarationTest(unittest.TestCase):
                          FakeProvider("native-qwen-vl", "qwen3-vl-plus")])
         self.assertFalse(items["native-gpt6"]["supports_images"])
         self.assertTrue(items["native-qwen-vl"]["supports_images"])
+
+
+class ManualVisionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_save_and_gate_send_image_to_selected_slot_despite_same_model(self):
+        model = "deepseek-v4.1-flash"
+        chat, visual = [
+            RouterVisionDeclarationTest.route(model, kind) for kind in ("chat", "multimodal")]
+        chat_id = chat.provider_config["id"]
+        visual.provider_config.update(id="multi_api_router:upstream_16", upstream_slot=16)
+        chat.upstreams[0].client.text_chat = AsyncMock(
+            return_value=SimpleNamespace(completion_text=output()))
+        visual.upstreams[0].client.text_chat = AsyncMock()
+        chat.text_chat = visual.text_chat = AsyncMock()
+        aggregate = FakeProvider("auto-text", "automatic")
+        aggregate.upstreams = chat.upstreams
+        disabled = FakeProvider("disabled", model)
+        disabled.provider_config["enable"] = False
+        speech = FakeProvider("stt", "whisper")
+        providers = {p.provider_config["id"]: p for p in (chat, visual, aggregate, disabled)}
+        guard = plugin(gate_config())
+
+        class Config(dict):
+            pass
+
+        guard.config = guard.engine.config = Config(guard.config)
+        writes = []
+        guard.config.save_config = lambda: writes.append(dict(guard.config))
+        guard.context = SimpleNamespace(
+            get_all_providers=lambda: list(providers.values()),
+            get_all_stt_providers=lambda: [speech],
+            get_provider_by_id=providers.get,
+            get_using_provider_async=AsyncMock(return_value=chat),
+        )
+
+        async def save(**values):
+            with patch.object(guard_webui.request, "json", AsyncMock(return_value=values), create=True):
+                return await guard_webui.handle_config(guard)
+
+        field = "vision_shared_provider_id"
+        for key, bad in (
+            (field, "missing"), (field, "disabled"), (field, "stt"), (field, "auto-text"),
+            ("understand_video_provider_id", chat_id),
+        ):
+            with self.subTest(key=key, bad=bad):
+                self.assertEqual((await save(**{key: bad}))["status"], "error")
+        self.assertFalse(writes)
+        result = await save(**{field: chat_id})
+        self.assertEqual(result["data"]["config"], {field: chat_id})
+        self.assertEqual(writes[0][field], chat_id)
+
+        decision = await guard.engine.decide(
+            group_key="test", current_text="看看这张图", context_lines=[], bot_line="",
+            is_private=False,
+            resolve_provider=AsyncMock(return_value=Provider(NEED_IMAGE)),
+            resolve_vision_provider=guard._resolve_vision_provider,
+            resolve_main_provider=AsyncMock(),
+            resolve_images=AsyncMock(return_value=[IMAGE]),
+            message_meta={"has_images": True},
+        )
+        self.assertEqual((decision.stage, decision.action), ("vision", "reply"))
+        call = chat.upstreams[0].client.text_chat
+        call.assert_awaited_once()
+        self.assertEqual(call.await_args.kwargs["image_urls"], [IMAGE["url"]])
+        visual.upstreams[0].client.text_chat.assert_not_awaited()
+        chat.text_chat.assert_not_awaited()
+
+        with self.assertRaisesRegex(GateFailure, "main_no_vision"):
+            await guard._resolve_main_vision_provider(GateEvent())
+        self.assertEqual((await save(**{field: ""}))["data"]["config"], {field: ""})
+        self.assertIsNone(await guard._resolve_vision_provider())
+
+    async def test_manual_native_responses_sends_picture_and_does_not_retry_without_it(self):
+        native = FakeProvider("native-responses", "deepseek-v4.1-flash")
+        native.provider_config["type"] = "openai_responses"
+        native._prepare_chat_payload = AsyncMock(return_value=({"input": []}, []))
+        native._query = AsyncMock(side_effect=RuntimeError("fixture rejects pictures"))
+        native.text_chat = AsyncMock()
+        target = image_target(native, "native-responses", allow_unconfirmed=True)
+        with self.assertRaisesRegex(RuntimeError, "rejects pictures"):
+            await target.provider.text_chat(
+                prompt="描述图片", system_prompt="规则", image_urls=[IMAGE["url"]], max_tokens=512)
+        self.assertEqual(native._prepare_chat_payload.await_args.args[1], [IMAGE["url"]])
+        native._query.assert_awaited_once()
+        self.assertEqual(native._query.await_args.args[0]["max_output_tokens"], 512)
+        native.text_chat.assert_not_awaited()
+
+    async def test_manual_router_keeps_declared_capability_for_same_name_in_auto_route(self):
+        text = SimpleNamespace(client=FakeProvider("text", "deepseek-v4.1-flash"), api_type="chat")
+        vision = SimpleNamespace(client=FakeProvider("vision", "deepseek-v4.1-flash"), api_type="multimodal")
+        router = FakeProvider("router", "automatic")
+        router.text_chat = AsyncMock()
+        router.upstreams = [text, vision]
+        self.assertIs(image_target(router, "router", allow_unconfirmed=True).provider, vision.client)
+        with self.assertRaises(GateFailure):
+            image_target(router, "router::removed-model", allow_unconfirmed=True)
+        router.upstreams.pop()
+        with self.assertRaises(GateFailure):
+            image_target(router, "router", allow_unconfirmed=True)
+        self.assertIs(image_target(router, "router::deepseek-v4.1-flash",
+                                   allow_unconfirmed=True).provider, text.client)
 
 
 if __name__ == "__main__":

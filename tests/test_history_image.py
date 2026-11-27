@@ -45,10 +45,10 @@ class HistoryImageToolTests(unittest.IsolatedAsyncioTestCase):
         self.event.set_extra("_livinghello_history_image_scope", self.scope)
 
     async def test_one_lookup_result_is_bounded_and_identified(self):
-        from unittest.mock import patch
-        with patch("images.guard_image_history.image_target",
-                   return_value=types.SimpleNamespace(provider=self.provider, model="fixture")):
-            result = json.loads(await self.service.read(self.event, self.scope, self.key))
+        self.plugin.config["vision_shared_provider_id"] = "ds"
+        self.provider.get_model = lambda: "deepseek-v4.1-flash"
+        self.provider.provider_config = {"id": "ds", "modalities": ["text"]}
+        result = json.loads(await self.service.read(self.event, self.scope, self.key))
         self.assertEqual(result["image_id"], self.key)
         self.assertEqual(result["kind"], TOOL_NAME)
         self.assertTrue(result["untrusted"])

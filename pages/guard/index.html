@@ -2245,7 +2245,7 @@
     classifier_provider_id: { desc: "负责先判断是否接话的文字小模型，不负责写回复。留空会跟随会话主模型。", ex: "选择「Qwen/Qwen3-8B（锁定上游）」：日常文字判断固定用它。" },
     classifier_timeout_seconds: { desc: "只限制一次文字判定的等待时间（1–15 秒），超时则静默。", ex: "设 10 秒：文字模型超过 10 秒还没返回，本次不主动回复。" },
     gate_min_length: { desc: "归一化后的文字太短就跳过判断；有可用图片的消息除外。设 0 关闭长度过滤。", ex: "设 2 字：「嗯」会被过滤，「怎么打」可以进入判断；纯图片仍可走看图流程。" },
-    vision_shared_provider_id: { desc: "判定看图和图片理解统一用这个模型，图片侧没有单独的覆盖项。留空时两项各自跟随会话当前模型（判定看图仍按主模型兜底开关处理）。视频理解是独立的一项，不受这里影响。", ex: "选 qwen3-vl-plus：判定和图片理解都用它；不确定就留空，跟随会话当前模型。" },
+    vision_shared_provider_id: { desc: "判定看图、图片理解和旧图补读共用。手选已启用的对话模型时，「图片能力未确认」只作提示，保存后会向所选线路提交图片。留空跟随支持图片的会话模型（判定看图仍受主模型兜底开关控制）。自动路由和视频仍检查图片能力。", ex: "上游未声明图片能力但确认能读图：选它对应的线路并保存。视频可另选支持图片的模型。" },
     gate_image_cache_ttl_seconds: { desc: "同完整会话、同视觉配置的相同图片，可短时复用已有观察；每条新消息仍重新判断是否参与。0关闭。", ex: "设300秒：5分钟内再次聊到已识别的图，文字模型直接参考缓存摘要；命中不续期，改模型或重载后重新识别。" },
     vision_timeout_seconds: { desc: "只限制一次多模态判断（1–20 秒）；超时或调用失败时，才尝试已开启的主模型兜底。实际等待仍受整条判定时限截断。", ex: "设 15 秒：看图模型超过 15 秒未返回，再检查能否用会话主模型兜底。" },
     gate_main_fallback_enabled: { desc: "多模态模型异常时，让当前会话主模型再判断一次；主模型必须支持图片。", ex: "开启：多模态接口报错 → 主模型兜底；多模态正常说「不该回」就到此结束。" },
@@ -2368,7 +2368,7 @@
     classifier_provider_id: "留空：不同会话会跟随各自主模型，成本和评分尺度可能随会话变化。",
     classifier_timeout_seconds: "设 1 秒：网络稍慢就会静默，适合低延迟优先但可能漏掉正常消息。",
     gate_min_length: "设 0：关闭短句过滤，「嗯」「好」也会进入模型判断，但不代表一定回复。",
-    vision_shared_provider_id: "留空：判定看图和图片理解各自跟随会话当前模型；判定看图仍受主模型兜底开关控制。",
+    vision_shared_provider_id: "留空：跟随支持图片的会话当前模型；判定看图仍受主模型兜底开关控制。",
     gate_image_cache_ttl_seconds: "设 0：相同图片每次都重新识别，模型调用更多，但不会复用旧摘要。",
     vision_timeout_seconds: "设 10 秒：给看图模型更多时间，代价是图片消息的判定等待更长。",
     gate_main_fallback_enabled: "关闭：多模态调用失败后直接静默，不再让会话主模型重复看图。",
@@ -2611,6 +2611,7 @@
       });
       cell.appendChild(select);
     } else if (field.type === "provider") {
+      const sharedVision = field.key === "vision_shared_provider_id";
       const select = document.createElement("select");
       const follow = document.createElement("option");
       follow.value = "";
@@ -2623,7 +2624,8 @@
       const candidates = (state.data.providers || []).filter(p =>
         field.role === "tts" ? p.role === "tts"
         : field.role === "speech" ? p.supports_audio === true
-        : field.role === "vision" || field.key === "vision_shared_provider_id" ? p.supports_images === true
+        : sharedVision ? p.role === "chat" && (p.kind !== "router" || p.supports_images === true)
+        : field.role === "vision" ? p.supports_images === true
         : !p.role || p.role === "chat");
       // 显示用户自己给上游起的名字（name），不暴露 provider:upstream_N 这种内部标识；
       // 原生 provider 与路由上游分组展示，两类都能直接选。
@@ -2642,6 +2644,7 @@
           if (count) text += p.kind === "router"
             ? " · 路由 " + count + " 个上游"
             : " · " + count + " 个可选模型";
+          if (sharedVision && p.supports_images !== true) text += "（图片能力未确认）";
           opt.textContent = text;
           opt.title = text;
           host.appendChild(opt);
@@ -2687,17 +2690,17 @@
       const initial = value || "";
       const paint = () => {
         tip.textContent = select.value ? "当前选择：" + select.options[select.selectedIndex]?.textContent
-          : field.key === "vision_shared_provider_id" ? "未选；判定看图和图片理解跟随会话当前模型。"
+          : sharedVision ? "未选；跟随支持图片的会话当前模型。"
           : field.key === "understand_video_provider_id"
-            ? "未选；跟随视觉模型，视觉模型也为空时跟随会话模型。"
+            ? "未选；跟随视觉模型，仍需支持图片。视觉模型也为空时跟随会话模型。"
           : providerHint("");
-        if (select.value !== initial) {
+        const unconfirmed = sharedVision && candidates.some(p => p.id === select.value && p.supports_images !== true);
+        if (unconfirmed) tip.textContent += "；保存后会尝试读取图片。";
+        if (field.key === "classifier_provider_id" && select.value !== initial) {
           // 分数尺度是跟模型走的，换模型不重标定等于沿用别人的阈值。
           tip.textContent += "；模型已更换，保存后请重新观察分数尺度。";
-          tip.classList.add("warn");
-        } else {
-          tip.classList.remove("warn");
         }
+        tip.classList.toggle("warn", unconfirmed || (field.key === "classifier_provider_id" && select.value !== initial));
       };
       paint();
       select.addEventListener("change", () => {
@@ -4247,7 +4250,7 @@
       title: "按需配置图片、语音与转发",
       lead: "按聊天里实际会收到的内容开功能。语音理解是把收到的语音转成文字；想用语音回消息，到「原生配置」开启语音回复。",
       links: [
-        ["图片判定与主模型兜底", "选支持图片的视觉模型，供看图判定和图片理解共用；需要视觉判定失败后再交给主模型时，打开兜底。", "vision"],
+        ["图片判定与主模型兜底", "看图判定和图片理解共用视觉模型。手选时「图片能力未确认」只作提示；需要失败后再交给支持图片的主模型时，打开兜底。", "vision"],
         ["内容理解", "按需开启转发、卡片、图片、动图、视频和语音理解。独立使用时在这里设置视频模型或语音转文字模型。", "understanding"],
         ["AI 生图", "开启后才让主模型按需调用生图工具；选择支持生图的模型、接口、尺寸和每日额度。", "imageGeneration"],
       ],

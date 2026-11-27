@@ -75,16 +75,18 @@ class SaveReceiptTest(unittest.IsolatedAsyncioTestCase):
             result = await self.save({"understand_video_provider_id": "video-vl"})
         self.assertEqual(result["data"]["config"], {"understand_video_provider_id": "video-vl"})
 
-    async def test_nonempty_model_still_checks_availability_and_capability(self):
-        models = AsyncMock(return_value=[{"id": "text", "supports_images": False}])
+    async def test_nonempty_model_checks_availability_and_only_video_requires_declared_images(self):
+        models = AsyncMock(return_value=[{"id": "text", "role": "chat", "supports_images": False}])
         with patch.object(guard_webui, "_providers", models):
             result = await self.save({"classifier_provider_id": "missing"})
             self.assertIn("不在可用列表", result["message"])
             result = await self.save({"vision_shared_provider_id": "text"})
+            self.assertEqual(result["data"]["config"], {"vision_shared_provider_id": "text"})
+            result = await self.save({"understand_video_provider_id": "text"})
             self.assertIn("无法确认支持图片", result["message"])
             result = await self.save({"classifier_provider_id": "text"})
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(models.await_count, 3)
+        self.assertEqual(models.await_count, 4)
 
     async def test_shared_vision_field_is_editable_and_can_be_cleared(self):
         # 不走 handle_config：宿主版本差异会让响应类型不再是 dict，这里只验证白名单与取值。
