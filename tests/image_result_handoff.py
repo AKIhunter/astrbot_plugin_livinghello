@@ -128,13 +128,18 @@ class ImageResultHandoffTests(unittest.IsolatedAsyncioTestCase):
 
     def deferred_peer(self):
         fixtures.ImageGenerationTests.deferred_plugin(self)
+        self.plugin.generate_promise_image = lambda *args, **kwargs: fixtures.Main.generate_promise_image(
+            self.plugin, *args, **kwargs)
+        self.plugin.get_promise_image_receipt = lambda *args: fixtures.Main.get_promise_image_receipt(
+            self.plugin, *args)
         self.plugin.get_image_prompt_mapping_contract = lambda: (
             fixtures.Main.get_image_prompt_mapping_contract(self.plugin))
         self.plugin.prepare_image_prompt_repair = lambda prompt, proposal, **kwargs: (
             fixtures.Main.prepare_image_prompt_repair(self.plugin, prompt, proposal, **kwargs))
         self.app.bridge.discover = lambda _: self.plugin
-        self.app.purpose_model = AsyncMock(return_value=json.dumps({
+        self.service.prompt_text.complete = AsyncMock(return_value=json.dumps({
             "changes_scene": False, "substitutions": [{"from": "blouse", "to": "shirt"}]}))
+        self.app.purpose_model = AsyncMock(return_value="这张暂时还没弄好。")
         self.service.values["daily_limit"] = 10
         self.clock = [self.app.store.clock()]
         self.app.store.clock = lambda: self.clock[0]
@@ -179,7 +184,8 @@ class ImageResultHandoffTests(unittest.IsolatedAsyncioTestCase):
         # 即时失败只说明一次；重试的图片走统一延迟投递出口。
         self.event.send.assert_awaited_once()
         self.assertTrue(self.event.send.await_args.args[0].chain[0].text)
-        self.assertEqual(self.app.purpose_model.await_count, 1)
+        self.service.prompt_text.complete.assert_awaited_once()
+        self.app.purpose_model.assert_not_awaited()
         connection = self.service.connection(self.service.values)
         mapped = self.service.prompt_mapping.apply(self.service.values, connection, "red blouse")
         self.assertEqual(mapped["prompt"], "red shirt")
@@ -191,7 +197,7 @@ class ImageResultHandoffTests(unittest.IsolatedAsyncioTestCase):
         self.deferred_peer()
         self.service._request.side_effect = http_failure(
             400, '{"error":{"code":"content_policy_violation"}}')
-        self.app.purpose_model.side_effect = [
+        self.service.prompt_text.complete.side_effect = [
             json.dumps({"changes_scene": False, "substitutions": [{"from": "blouse", "to": "shirt"}]}),
             json.dumps({"changes_scene": False, "substitutions": [{"from": "blue", "to": "azure"}]})]
         pid = await self.promise()
@@ -203,14 +209,14 @@ class ImageResultHandoffTests(unittest.IsolatedAsyncioTestCase):
         row = await self.app._promises().promises.get(pid)
         self.assertEqual((row["status"], row["action_state"]), ("waiting", "held"))
         self.assertEqual(json.loads(row["action_result_json"])["prompt_retry_count"], 2)
-        # 每个明确内容拒绝先原句重发两次；三个画面尝试共九个请求。
-        self.assertEqual(self.service._request.await_count, 9)
+        # 即时链原有三次请求；转为承诺后改两次，各请求一次。
+        self.assertEqual(self.service._request.await_count, 5)
         self.app.send_promise_notice.assert_awaited_once()
         self.context.send_message.assert_not_awaited()
         self.clock[0] += 3600
         restarted = PromiseService(self.app.store, self.app)
         self.assertEqual(await restarted.run_due(), 0)
-        self.assertEqual(self.service._request.await_count, 9)
+        self.assertEqual(self.service._request.await_count, 5)
         self.assertEqual([r["promise_id"] for r in await restarted.promises.active()], [pid])
 
     async def test_rewrite_loses_authorization_before_second_request(self):
@@ -226,7 +232,7 @@ class ImageResultHandoffTests(unittest.IsolatedAsyncioTestCase):
             self.app._preparation_guard.return_value = False
             return json.dumps({"changes_scene": False,
                                "substitutions": [{"from": "blouse", "to": "shirt"}]})
-        self.app.purpose_model.side_effect = revoked
+        self.service.prompt_text.complete.side_effect = revoked
         with patch.object(ImagePromiseAction, "make_event", side_effect=self.deferred_event):
             self.assertEqual(await self.app._promises().run_due(), 0)
         self.assertEqual(self.service._request.await_count, 3)

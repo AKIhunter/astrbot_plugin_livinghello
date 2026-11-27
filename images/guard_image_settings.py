@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta
 import hashlib
@@ -30,7 +30,9 @@ try:
     from ..integrations.guard_livingemotion import image_permission, image_followup, image_prompt_retry_ready, image_result
     from .guard_image_failure import describe_failure, http_failure, payload_failure, REASONS
     from .guard_image_delivery import send_event_image
-    from .guard_image_prompt import ImagePromptMapping, PromptReviewError
+    from .guard_image_prompt import (MAX_PROMPT_CHARS, ImagePromptMapping, PromptReviewError,
+                                     prompt_fingerprint, valid_image_parameters)
+    from .guard_image_text import ImagePromptText, LEGACY, MAX_DAILY_LIMIT
 except ImportError:
     from reply.guard_native_reply import NativeReplyError, revision
     from reply.guard_prompt_injection import preset_text, request_config
@@ -40,19 +42,15 @@ except ImportError:
     from integrations.guard_livingemotion import image_permission, image_followup, image_prompt_retry_ready, image_result
     from images.guard_image_failure import describe_failure, http_failure, payload_failure, REASONS
     from images.guard_image_delivery import send_event_image
-    from images.guard_image_prompt import ImagePromptMapping, PromptReviewError
+    from images.guard_image_prompt import (MAX_PROMPT_CHARS, ImagePromptMapping, PromptReviewError,
+                                          prompt_fingerprint, valid_image_parameters)
+    from images.guard_image_text import ImagePromptText, LEGACY, MAX_DAILY_LIMIT
 
 TOOL_NAME = "livinghello_generate_image"
 IMAGE_INTENT = "_livinghello_immediate_image"
 QUOTA_MARKER = "<!--livinghello:image-availability-->"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
-MAX_PROMPT_CHARS = 4000
 STYLE_MAX_CHARS = 1000
-
-
-def valid_image_parameters(prompt, use_reference):
-    return (isinstance(prompt, str) and 1 <= len(prompt.strip()) <= MAX_PROMPT_CHARS
-            and type(use_reference) is bool)
 
 
 class ImageQuotaError(NativeReplyError):
@@ -100,6 +98,8 @@ FIELDS = {
     "prompt_guard_enabled": ("启用提示词映射", "bool", "开启后发送前应用等义替换、长度规则与成功用词；关闭则沿用原描述。开启后在本页设置映射表路径，修改JSON即可热生效。姿势、场景变化需用户确认。"),
     "prompt_guard_rules_path": ("提示词映射表路径", "string", "在插件数据目录放置image_prompt_rules.json；相对路径从该目录解析，也支持绝对路径。缺失使用内置规则，写坏保留有效规则。支持词语、简单正则、去重补充及调整提醒。"),
     "prompt_guard_retry_limit": ("提示词自动调整次数", "int", "本页→AI生图设置0~10次，默认2；需在LE开启承诺兑现，实际取此值与LE剩余自动调整次数的较小值。0关闭自动改词，用尽后等待用户。仅对明确内容拒绝或超长描述调整等义用词。工具内部先按原句有限重试：内容拒绝最多追加2次，仍拒才进入改词；普通任务网络类最多追加2次，混合失败总请求最多5次。LE承诺的未知结果不自动重发。每日额度只计确认发送的图片，上游计费以实际账单为准。"),
+    "prompt_text_provider_id": ("提示词调整模型", "image_text_provider", "用于承诺生图的画面描述起稿与自动改词。选择 AstrBot 注册的兼容聊天模型；使用会话模型时跟随当时的 AstrBot 会话。迁移模式只读取一次 LE 的旧模型设置。"),
+    "prompt_text_daily_limit": ("每日提示词模型调用上限", "int", "0~1000 次。留空使用迁移时的上限，未迁移默认 48；0 停止新起稿与改词调用。按服务器自然日统计已预留的请求，与发图额度和 LE 模型额度分别计算。"),
     "prompt_guard_learn_enabled": ("记录并复用成功用词", "bool", "开启后按实际生图连接、模型及协议记录成功请求中使用的局部替换，后续自动复用；关闭停止记录与复用，保留已有数据。需开启提示词映射，记录保存在插件数据目录image_prompt_mappings.sqlite3。"),
     "timeout_seconds": ("生图超时（秒）", "int", "10~500秒；普通任务超时、限流、5xx或网络断开时，按原描述最多追加2次请求；混合内容拒绝时总请求最多5次。LE承诺图片遇到超时、5xx或网络断开等未知结果时停止内部重试，等待核对。超时未确认发送不扣本地额度，上游仍可能收费；原自主回复时效仍生效。"),
 }
@@ -108,10 +108,12 @@ DEFAULTS = dict(enabled=False, provider_id="", model="", protocol="images",
                 style_prompt="", follow_server_time=False,
                 prompt_guard_enabled=True, prompt_guard_rules_path="image_prompt_rules.json",
                 prompt_guard_retry_limit=2, prompt_guard_learn_enabled=True,
+                prompt_text_provider_id="", prompt_text_daily_limit=None,
                 timeout_seconds=90)
 # 旧版磁盘配置缺少这些键时按默认值迁移，读取与保存共用。
 OPTIONAL_KEYS = {"style_prompt", "follow_server_time", "prompt_guard_enabled",
-                 "prompt_guard_rules_path", "prompt_guard_retry_limit", "prompt_guard_learn_enabled"}
+                 "prompt_guard_rules_path", "prompt_guard_retry_limit", "prompt_guard_learn_enabled",
+                 "prompt_text_provider_id", "prompt_text_daily_limit"}
 WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 
 
@@ -137,6 +139,7 @@ class ImageSettings:
         self._closed = False
         self._tasks = set()
         self._inflight_images = set()
+        self.prompt_text = ImagePromptText(self)
         self.prompt_mapping = ImagePromptMapping(
             self.directory, prompt_overhead=lambda values:
             len(self.timed_prompt("", values.get("follow_server_time", False))),
@@ -186,6 +189,7 @@ class ImageSettings:
         if (not isinstance(loaded, dict) or set(loaded) - set(DEFAULTS)
                 or set(DEFAULTS) - OPTIONAL_KEYS - set(loaded)):
             raise ValueError("invalid settings")
+        loaded.setdefault("prompt_text_provider_id", LEGACY)
         for key in OPTIONAL_KEYS:
             loaded.setdefault(key, DEFAULTS[key])
         cls._validate(loaded)
@@ -279,12 +283,17 @@ class ImageSettings:
             quota_error = ""
         except Exception:
             used, quota_error = 0, "无法读取持久额度，暂时禁止生图。"
+        try:
+            text_usage = self.prompt_text.usage()
+        except (NativeReplyError, sqlite3.Error, ValueError, OSError):
+            text_usage = {"error": "无法读取提示词模型额度，暂时不发起提示词模型请求。"}
         return dict(available=self.directory is not None and not self.error and not quota_error,
                     scope="LivingHello独立能力；全插件共用每日额度",
                     reason=self.error or quota_error, values=copy.deepcopy(self.values),
                     fields=[dict(key=k, title=v[0], kind=v[1], help=v[2]) for k, v in FIELDS.items()],
                     providers=providers, revision=revision(self.values),
                     usage=dict(day=self.today(), used=used, limit=self.values["daily_limit"]),
+                    prompt_text_providers=self.prompt_text.targets(), prompt_text_usage=text_usage,
                     tool_name=TOOL_NAME, tool_ready=self._tool is not None,
                     prompt_mapping=self.prompt_policy())
 
@@ -296,7 +305,7 @@ class ImageSettings:
             return {"available": False, "reason": "选择生图模型后显示成功用词统计。"}
 
     def learned_pairs(self):
-        """学习库 successes>failures 的高频对（≤8条），供 LE 改词 LLM 参考。"""
+        """学习库 successes>failures 的高频对（≤8条），供提示词调整模型参考。"""
         self.refresh()
         try:
             connection = self.connection(self.values)
@@ -330,6 +339,8 @@ class ImageSettings:
                 valid = isinstance(value, bool)
             elif key == "prompt_guard_retry_limit":
                 valid = type(value) is int and 0 <= value <= 10
+            elif key == "prompt_text_daily_limit":
+                valid = value is None or (type(value) is int and 0 <= value <= MAX_DAILY_LIMIT)
             elif key in {"daily_limit", "timeout_seconds"}:
                 low, high = (0, 1000) if key == "daily_limit" else (10, 500)
                 valid = isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
@@ -368,6 +379,10 @@ class ImageSettings:
                 raise NativeReplyError("只能保存独立生图公开字段")
             values = {**self.values, **patch}
             self._validate(values)
+            text_model = values["prompt_text_provider_id"]
+            if ("prompt_text_provider_id" in patch and text_model not in ("", LEGACY)
+                    and not any(target["id"] == text_model for target in self.prompt_text.targets())):
+                raise NativeReplyError("提示词调整模型当前不可用，请选择支持的聊天模型")
             if values["provider_id"] and values["provider_id"] not in self.targets():
                 raise NativeReplyError("生图模型当前不可用，请选择已注册模型或路由上游")
             if values["enabled"]:
@@ -634,7 +649,7 @@ class ImageSettings:
         payload = {k: data[k] for k in (
             "request_id", "prompt", "revised", "use_reference", "promise_id", "kind",
             "reason", "adjustment_asked", "original_prompt", "attempted_prompt",
-            "prompt_retry_count", "notice", "auto_prompt_retry") if k in data}
+            "prompt_retry_count", "notice", "auto_prompt_retry", "deferred_promise_id") if k in data}
         payload.update(status=status, delivered_at=time.time() if status == "sent" else None)
         try:
             with self._connect() as db:
@@ -757,7 +772,7 @@ class ImageSettings:
             db.execute("INSERT OR IGNORE INTO deferred_images VALUES (?,?,?,'generated')",
                        (artifact["request_id"], artifact["session"], artifact["path"]))
 
-    def claim_deferred_image(self, request_id, session, path):
+    def claim_deferred_image(self, request_id, session, path, *, promise_id, scope):
         """发送前写盘；未知结果不重发，明确拒收才重新领取原图。"""
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -769,6 +784,11 @@ class ImageSettings:
                 "SELECT session,path,status FROM deferred_images WHERE request_id=?",
                 (request_id,)).fetchone() if exists else None)
             if not row or row[:2] != (session, path):
+                return "invalid"
+            evidence = db.execute("SELECT scope,payload FROM image_receipts WHERE request_id=?",
+                                  (request_id,)).fetchone()
+            bound_promise = json.loads(evidence[1]).get("deferred_promise_id") if evidence else None
+            if bound_promise != promise_id or (promise_id and (not scope or evidence[0] != scope)):
                 return "invalid"
             if row[2] not in ("generated", "rejected"):
                 return row[2]
@@ -808,6 +828,42 @@ class ImageSettings:
             changed = db.execute(
                 "INSERT OR IGNORE INTO deferred_runs VALUES (?,?)", (run_key, time.time()))
             return changed.rowcount == 1
+
+    def deferred_run_claimed(self, run_key):
+        """Avoid rerunning draft work after a replay of an already submitted attempt."""
+        if not self.ledger or not self.ledger.is_file():
+            return False
+        with closing(sqlite3.connect(self.ledger.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE name='deferred_runs'").fetchone():
+                return False
+            return db.execute("SELECT 1 FROM deferred_runs WHERE run_key=?", (run_key,)).fetchone() is not None
+
+    def promise_image_receipt(self, event, artifact):
+        """Proof requires the same promise, target, request, and confirmed quota row."""
+        rid = artifact.get("request_id") if isinstance(artifact, dict) else None
+        pid = event.get_extra("livingemotion:promise_id")
+        scope = self.receipt_scope(event)
+        session = str(event.unified_msg_origin)
+        if (not self.ledger or not scope or not isinstance(pid, str) or not pid
+                or not isinstance(rid, str) or not 1 <= len(rid) <= 128
+                or artifact.get("deferred_promise_id") != pid or artifact.get("session") != session):
+            return None
+        try:
+            with closing(sqlite3.connect(self.ledger.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+                row = db.execute(
+                    "SELECT r.payload FROM image_receipts r "
+                    "JOIN deferred_images d ON d.request_id=r.request_id "
+                    "JOIN image_quota_slots q ON q.request_id=r.request_id "
+                    "WHERE r.request_id=? AND r.scope=? AND d.session=? AND d.path=? "
+                    "AND r.status='sent' AND d.status='sent' AND q.sent_day IS NOT NULL",
+                    (rid, scope, session, artifact.get("path"))).fetchone()
+                payload = json.loads(row[0]) if row else {}
+                if payload.get("deferred_promise_id") != pid:
+                    return None
+                return {"contract": "livinghello.deferred-image-delivery.v1",
+                        "request_id": rid, "promise_id": pid, "status": "sent"}
+        except (sqlite3.Error, OSError, ValueError, AttributeError, TypeError):
+            return None
 
     @staticmethod
     def references(event):
@@ -967,6 +1023,9 @@ class ImageSettings:
     def _prepare_guarded_prompt(self, event, values, connection, prompt):
         guarded = self.prompt_mapping.apply(values, connection, prompt,
                                             event.get_extra("_livinghello_image_prompt_repair"))
+        rejected = event.get_extra("_livinghello_promise_rejected_prompts") or ()
+        if prompt_fingerprint(guarded["prompt"]) in rejected:
+            raise PromptReviewError("prompt_adjustment_required", "调整后仍是被拒绝过的描述。")
         guarded["original"] = event.get_extra("_livinghello_image_original_prompt") or prompt
         guarded["styled_prompt"] = self.prompt_body(values, guarded)
         return guarded
@@ -1155,7 +1214,7 @@ class ImageSettings:
             if clear:
                 clear(event)
 
-    async def generate(self, event, prompt, use_reference=False, *, _execute=False):
+    async def generate(self, event, prompt, use_reference=False, *, _execute=False, _authorize=None):
         if not self.receipt_scope(event):
             await self.prepare_receipt_context(event)
         pending = event.get_extra("_livinghello_pending_image")
@@ -1244,6 +1303,10 @@ class ImageSettings:
                                 **binding, "kind": "result_unknown", "reason": "执行归属待核对"}, "unknown")
                         terminal_status, terminal_reason = "rejected", "promise_not_claimed"
                         return "原图片事项未能领取，可能已执行、暂停或来源变化；本次未生图，不要另画或声称完成。"
+                if _authorize is not None:
+                    if not await _authorize() or self.blocked(event) or self.values != values:
+                        terminal_status, terminal_reason = "rejected", "source_authorization_denied"
+                        return "预约已撤回或授权已变化，未请求生图。"
                 if (prepared := job.get("reservation")) and (
                         job["prompt"] == prompt.strip() and job["use_reference"] is use_reference):
                     request_id = prepared if self.renew_reservation(prepared) else None
@@ -1292,6 +1355,9 @@ class ImageSettings:
                 "effective_prompt": guarded["prompt"],
                 "prompt_scope": guarded["scope"],
             })
+            if event.get_extra("_livinghello_promise_image_owned"):
+                event.get_extra("_livinghello_pending_image")["deferred_promise_id"] = (
+                    event.get_extra("livingemotion:promise_id"))
             self.save_receipt(event, event.get_extra("_livinghello_pending_image"), "generated")
             terminal_status, terminal_reason = "success", "image_queued"
             # count 记录回传画法的字符数，0 表示上游没给 revised_prompt。
@@ -1518,6 +1584,10 @@ class ImageSettings:
                 if (event and event.get_extra("livingemotion:promise_id")
                         and describe_failure(exc, requested=True)[0] in {
                             "result_unknown", "delivery_unknown"}):
+                    raise
+                if (event and event.get_extra("_livinghello_promise_image_owned")
+                        and reason in {"content_rejected", "rate_limited"}):
+                    # LH may prepare a new candidate; LE schedules an explicit rate limit.
                     raise
                 if reason == "content_rejected":
                     if content_retried < CONTENT_RETRY_ATTEMPTS and attempt < total_attempts:

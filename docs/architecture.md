@@ -79,11 +79,12 @@ flowchart TD
 
 `guard_image_failure` 提供受控类别，`guard_livingemotion.image_followup` 通过版本契约交接。
 `guard_image_prompt` 在扣额度前执行映射与长度校验，成功返回图片后记录局部词对。
-LH 2.9.1 / LE 0.6.0 通过 `livinghello.image-prompt-mapping.v1` 和
-`livingemotion.image-prompt-retry.v1` 核对实际模型范围与接手许可；LE 使用自身收尾模型，
-同一图片承诺最多自动调整两次。准备候选可恢复，生成或发送未知不重发。
+即时失败的接手仍通过 `livinghello.image-prompt-mapping.v1` 和
+`livingemotion.image-prompt-retry.v1` 核对模型范围与接手许可。到期后的提示词由
+`livinghello.promise-image.v2` 交给 LH 起稿和改词；`guard_image_text` 管理模型与独立额度，
+`guard_promise_image` 保存并复用候选。LE 管承诺状态，生成或发送未知不重发。
 未接手或调整耗尽时，内容拒绝的说明与调整问句共用一次发送；已问回执持久交给 LE。
-LH 2.9.3 将手工表、LE候选和历史成功词对统一交给 `equivalent_scene`，
+手工表、模型候选和历史成功词对统一交给 `equivalent_scene`，
 比较完整描述的受保护要点；历史记录不通过时跳过复用而不删除。
 加载诊断按文件状态变化输出，页面自动读回规则数和来源，并保留编辑草稿。
 规则、记录与[加载及校验逻辑图](image-prompt-mapping.md#加载与校验逻辑)见映射说明；

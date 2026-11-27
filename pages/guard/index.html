@@ -1385,6 +1385,8 @@
       off:"停止记录与复用，保留历史。",setup:"本页 → AI生图；同时开启提示词映射。数据在插件数据目录image_prompt_mappings.sqlite3。"},
     prompt_guard_retry_limit: {setup:"本页 → AI生图，填0~10；需在LE开启承诺兑现，实际取此值与LE剩余自动重试次数的较小值。"},
     prompt_guard_rules_path: {setup:"在插件数据目录放置image_prompt_rules.json；格式见docs/image-prompt-mapping.md。"},
+    prompt_text_provider_id: {setup:"本页 → AI生图。保存后生效；模型连接在 AstrBot 的模型管理中配置。"},
+    prompt_text_daily_limit: {setup:"本页 → AI生图。保存后立即生效。"},
   };
   function nativeFieldHelp(field, prefix) {
     const setup = prefix === "image-" ? "本页 → AI生图；保存更新后生效。"
@@ -1457,12 +1459,17 @@
       };
       paint();row.append(title,cell);return row;
     }
-    const select = ["provider","vision","tts","persona","strategy","protocol","size"].includes(kind);
+    const select = ["provider","image_text_provider","vision","tts","persona","strategy","protocol","size"].includes(kind);
     const input = document.createElement(select ? "select" : kind === "text" ? "textarea" : "input");
     input.id = prefix + key;
     if (select) {
       let options = [];
-      if (["provider","providers","vision","tts"].includes(kind)) {
+      if (kind === "image_text_provider") {
+        options = [["", "使用 AstrBot 当前会话聊天模型"], ...(data.prompt_text_providers || []).map(p =>
+          [p.id, (p.display || p.id) + (p.model && p.model !== p.display ? " · " + p.model : "")])];
+        if (data.values?.[key] === "@legacy")
+          options.unshift(["@legacy", "沿用升级前的模型选择"]);
+      } else if (["provider","providers","vision","tts"].includes(kind)) {
         options = (data.providers || []).filter(p =>
           kind === "tts" ? p.role === "tts"
           : prefix === "image-" ? true
@@ -1490,6 +1497,9 @@
       input.max = key === "request_max_retries" ? "10" : "100000";
     }
     if (key==="daily_limit") {input.min="0";input.max="1000";}
+    if (key==="prompt_text_daily_limit") {
+      input.min="0";input.max="1000";input.placeholder=String(data.prompt_text_usage?.limit ?? 48);
+    }
     if (key==="timeout_seconds") {input.min="10";input.max="500";}
     if (key==="prompt_guard_retry_limit") {input.min="0";input.max="10";}
     if (key==="prompt_guard_rules_path") input.maxLength=200;
@@ -1528,7 +1538,9 @@
       sync();
     }
     input.addEventListener(select || kind === "bool" ? "change" : "input", () => {
+      if (input.validity.badInput) return;
       const next = kind === "bool" ? input.checked
+        : key === "prompt_text_daily_limit" && input.value === "" ? null
         : ["int","float"].includes(kind) ? Number(input.value) : input.value;
       if (kind !== "size") changed(next);
     });
@@ -1548,6 +1560,18 @@
           + (source ? "（" + source + "）" : "") + "；当前模型成功用词 " + mapping.learned_count + " 条。"
         : " 提示词映射已关闭，生效规则 0 条。";
       el("imageSettingsStatus").textContent += mapping.warning || "";
+    }
+    const text = images.prompt_text_usage;
+    if (images.available && text) {
+      el("imageSettingsStatus").textContent += text.error ? " " + text.error
+        : " 今日提示词模型已用 " + text.used + " / " + text.limit + " 次。"
+          + (text.migration_pending ? " 首次需要起稿或改词时迁移旧模型设置。" : "");
+      if (!text.migration_pending && images.values?.prompt_text_provider_id === "@legacy") {
+        const first = text.legacy_providers?.[0];
+        const label = images.prompt_text_providers?.find(p => p.id === first)?.display || first;
+        if (text.follows_session || label)
+          el("imageSettingsStatus").textContent += " 迁移首选：" + (text.follows_session ? "当前会话模型" : label) + "。";
+      }
     }
   }
   function renderNativeSettings() {
@@ -1830,13 +1854,15 @@
       if (nativeLoading || nativeSaving || state.saving || nativeData.config_id !== configId || versions() !== startedVersions ||
           document.querySelector(".modal-mask.show")) return;
       const mappingChanged = JSON.stringify(images.prompt_mapping) !== JSON.stringify(imageData?.prompt_mapping);
+      const usageChanged = JSON.stringify([images.usage, images.prompt_text_usage]) !==
+        JSON.stringify([imageData?.usage, imageData?.prompt_text_usage]);
+      const textProvidersChanged = JSON.stringify(images.prompt_text_providers) !== JSON.stringify(imageData?.prompt_text_providers);
       const changed = segments.revision !== nativeData.revision || settings.revision !== settingsData?.revision ||
-        images.revision !== imageData?.revision || JSON.stringify(images.usage) !== JSON.stringify(imageData?.usage)
-        || mappingChanged;
+        images.revision !== imageData?.revision || usageChanged || mappingChanged || textProvidersChanged;
       // 自动读回不替换编辑中的 DOM，也不推进草稿的保存版本；外部冲突仍由后端拦截。
       if (nativeDirty() || el("nativeSegments").contains(document.activeElement)) {
         // 映射表热更新不改变配置revision；只更新状态文字，保留编辑DOM和原保存版本。
-        if (mappingChanged || JSON.stringify(images.usage) !== JSON.stringify(imageData?.usage)) {
+        if (mappingChanged || usageChanged) {
           renderImageSettingsStatus(images);
         }
         if (changed) el("nativeStatus").textContent = "检测到原生配置更新，保留你的编辑；保存时会核验版本。";
@@ -4092,7 +4118,7 @@
           desc: "单次生图请求的等待上限，范围 10–500 秒；超时不自动重试或切换上游，避免重复收费。",
           examples: ["设 90：等待 90 秒仍未返回就按失败处理。",
                      "设 300：给较慢的生图服务更多时间，但用户等待也更久。"] },
-        ...(imageData?.fields || []).filter(field=>field.key.startsWith("prompt_guard_"))
+        ...(imageData?.fields || []).filter(field=>field.key.startsWith("prompt_guard_") || field.key.startsWith("prompt_text_"))
           .map(field=>({key:field.key,name:field.title,...nativeFieldHelp(field,"image-")})),
       ],
     },

@@ -17,10 +17,22 @@ except ImportError:
     from reply.guard_native_reply import NativeReplyError
 
 CONTRACT = "livinghello.image-prompt-mapping.v1"
+MAX_PROMPT_CHARS = 4000
 LIMITS = {"desc_soft": 400, "desc_hard": 500, "total_hard": 900}
 BUILTIN = {"version": 1, "limits": LIMITS, "blocklist": [], "rules": [
     {"id": "collar", "type": "token", "from": "neckline", "to": "collar"},
 ]}
+
+
+def prompt_fingerprint(prompt):
+    return hashlib.sha256(prompt.strip().encode()).hexdigest()
+
+
+def valid_image_parameters(prompt, use_reference):
+    return (isinstance(prompt, str) and 1 <= len(prompt.strip()) <= MAX_PROMPT_CHARS
+            and type(use_reference) is bool)
+
+
 # 三种来源使用同一校验；词表只能识别明显变化，不能证明任意文本语义等价。
 SCENE_WORDS = re.compile(
     r"\b(?:symmetr\w*|asymmetr\w*|poses?|standing|sitting|lying|kneel(?:ing)?|reclin(?:e|ing)|"

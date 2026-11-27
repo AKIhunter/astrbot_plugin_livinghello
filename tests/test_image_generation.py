@@ -13,8 +13,10 @@ from unittest.mock import AsyncMock, patch
 
 from astrbot.api.message_components import Image, Plain
 from main import Main
+from images.guard_image_failure import ImageRequestError
 from images.guard_image_settings import (DEFAULTS, MAX_PROMPT_CHARS, STYLE_MAX_CHARS,
                                          ImageQuotaError, ImageSettings, MAX_IMAGE_BYTES)
+from images.guard_promise_image import REPAIR_INSTRUCTION
 from reply.guard_native_reply import NativeReplyError
 
 
@@ -129,8 +131,8 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
 
     def deferred_plugin(self):
         self.plugin.get_deferred_image_contract = lambda: Main.get_deferred_image_contract(self.plugin)
-        self.plugin.generate_deferred_image = lambda event, prompt: Main.generate_deferred_image(
-            self.plugin, event, prompt)
+        self.plugin.generate_deferred_image = lambda event, prompt, **kwargs: Main.generate_deferred_image(
+            self.plugin, event, prompt, **kwargs)
         self.plugin.complete_deferred_image = lambda rid, status: Main.complete_deferred_image(
             self.plugin, rid, status)
         self.plugin.execute_deferred_image = lambda event, prompt: Main.execute_deferred_image(
@@ -138,6 +140,134 @@ class ImageGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.plugin.deliver_deferred_image = lambda event, artifact, **kwargs: Main.deliver_deferred_image(
             self.plugin, event, artifact, **kwargs)
         self.context.send_message = AsyncMock(return_value=True)
+
+    def promise_image_plugin(self):
+        self.deferred_plugin()
+        self.plugin.generate_promise_image = lambda *args, **kwargs: Main.generate_promise_image(
+            self.plugin, *args, **kwargs)
+        self.plugin.get_promise_image_receipt = lambda *args: Main.get_promise_image_receipt(
+            self.plugin, *args)
+
+    def promise_event(self):
+        event = Event("promise:fixed:0")
+        event.set_extra("livingemotion:promise_id", "fixed")
+        event.set_extra("livingemotion:context", {"bot_id": "bot", "persona_id": "persona"})
+        return event
+
+    async def generate_promise(self, event, model, *, retry_budget=2, authorize=None,
+                               resume=None, checkpoint=None, attempt=0):
+        self.promise_image_plugin()
+        async def complete(_event, _key, instruction, data, **_):
+            return await model("repair" if instruction == REPAIR_INSTRUCTION else "draft", instruction, data)
+        self.plugin._image_generation().prompt_text.complete = complete
+        return await self.plugin.generate_promise_image(
+            event, {"promise_id": "fixed", "attempt": attempt, "retry_budget": retry_budget,
+                    "description": "蓝衣猫自拍", "detail": "", "context": "", "persona": ""},
+            resume=resume or {}, authorize=authorize or AsyncMock(return_value=True),
+            checkpoint=checkpoint or AsyncMock(return_value=True))
+
+    async def test_promise_only_retries_with_different_effective_prompt(self):
+        self.service._request.side_effect = [ImageRequestError(451, "content_rejected"),
+                                             (self.output, "")]
+        model = AsyncMock(side_effect=[
+            "cat in a blue blouse",
+            '{"changes_scene":false,"substitutions":[{"from":"blouse","to":"shirt"}]}',
+        ])
+        event = self.promise_event()
+        outcome = await self.generate_promise(event, model)
+        self.assertEqual(outcome["status"], "generated")
+        self.assertEqual(outcome["artifact"]["effective_prompt"], "cat in a blue shirt")
+        self.assertEqual(outcome["artifact"]["prompt_retry_count"], 1)
+        self.assertEqual(self.service._request.await_count, 2)
+        self.assertEqual([call.args[0] for call in model.await_args_list], ["draft", "repair"])
+        self.assertEqual(event.message_obj.message_id, "promise:fixed:0")
+        self.context.send_message.assert_not_awaited()
+
+    async def test_promise_candidate_that_maps_back_to_refused_prompt_never_requests(self):
+        self.service._request.side_effect = ImageRequestError(451, "content_rejected")
+        model = AsyncMock(side_effect=[
+            "cat in a coat with a collar",
+            '{"changes_scene":false,"substitutions":[{"from":"collar","to":"neckline"}]}',
+        ])
+        outcome = await self.generate_promise(self.promise_event(), model, retry_budget=1)
+        self.assertEqual(outcome["status"], "waiting")
+        self.assertEqual(outcome["failure"]["kind"], "prompt_adjustment_required")
+        self.assertFalse(outcome["failure"]["requested"])
+        self.assertEqual(outcome["failure"]["prompt_retry_count"], 1)
+        self.service._request.assert_awaited_once()
+
+    async def test_promise_reuses_saved_draft_after_explicit_rate_limit(self):
+        self.service._request.side_effect = [ImageRequestError(429, "rate_limited"), (self.output, "")]
+        model = AsyncMock(return_value="橙色猫的自拍")
+        checkpoint = AsyncMock(return_value=True)
+        outcome = await self.generate_promise(self.promise_event(), model, checkpoint=checkpoint)
+        self.assertEqual((outcome["status"], outcome["reason"]), ("rejected", "rate_limited"))
+        self.service._request.assert_awaited_once()
+        self.assertEqual(checkpoint.await_args.args[0], "retry_ready")
+        outcome = await self.generate_promise(
+            self.promise_event(), model, resume=checkpoint.await_args.args[1], attempt=1)
+        self.assertEqual(outcome["status"], "generated")
+        self.assertEqual([call.args[2] for call in self.service._request.await_args_list],
+                         ["橙色猫的自拍", "橙色猫的自拍"])
+        model.assert_awaited_once()
+
+    async def test_promise_replay_does_not_redraft_or_request_after_unknown(self):
+        self.service._request.side_effect = TimeoutError()
+        model = AsyncMock(return_value="橙色猫的自拍")
+        outcome = await self.generate_promise(self.promise_event(), model)
+        self.assertEqual((outcome["status"], outcome["failure"]["kind"]), ("unknown", "result_unknown"))
+        restored = ImageSettings(self.plugin)
+        restored.values.update(self.service.values)
+        self.plugin._image_generation = lambda: restored
+        replay_model = AsyncMock(return_value="换一只猫")
+        replay = await self.generate_promise(self.promise_event(), replay_model)
+        self.assertEqual((replay["status"], replay["reason"]), ("unknown", "attempt_already_claimed"))
+        model.assert_awaited_once()
+        replay_model.assert_not_awaited()
+        self.service._request.assert_awaited_once()
+        self.context.send_message.assert_not_awaited()
+
+    async def test_promise_delivery_and_receipt_reject_other_bindings(self):
+        event = self.promise_event()
+        outcome = await self.generate_promise(event, AsyncMock(return_value="橙色猫的自拍"))
+        artifact = outcome["artifact"]
+        allow = AsyncMock(return_value=True)
+        self.assertIsNone(Main.get_promise_image_receipt(self.plugin, event, artifact))
+        wrong_sender = self.promise_event()
+        wrong_sender.get_sender_id = lambda: "other"
+        refused = await self.plugin.deliver_deferred_image(wrong_sender, artifact, authorize=allow)
+        self.assertEqual(refused["status"], "rejected")
+        unrelated = {k: v for k, v in artifact.items() if k != "deferred_promise_id"}
+        self.assertEqual((await self.plugin.deliver_deferred_image(event, unrelated))["status"], "rejected")
+        self.context.send_message.assert_not_awaited()
+        self.assertEqual((await self.plugin.deliver_deferred_image(event, artifact, authorize=allow))["status"], "sent")
+        restored = ImageSettings(self.plugin)
+        self.plugin._image_generation = lambda: restored
+        receipt = Main.get_promise_image_receipt(self.plugin, event, artifact)
+        self.assertEqual((receipt["status"], receipt["promise_id"]), ("sent", "fixed"))
+        self.assertIsNone(Main.get_promise_image_receipt(self.plugin, wrong_sender, artifact))
+        for key in ("request_id", "deferred_promise_id", "session", "path"):
+            with self.subTest(key=key):
+                self.assertIsNone(Main.get_promise_image_receipt(
+                    self.plugin, event, {**artifact, key: "other"}))
+        self.context.send_message.assert_awaited_once()
+
+    async def test_promise_checks_authorization_after_image_permission(self):
+        authorized = True
+
+        async def allowed():
+            return authorized
+
+        async def revoke(*_):
+            nonlocal authorized
+            authorized = False
+            return {"allowed": True}
+
+        with patch("images.guard_image_settings.image_permission", side_effect=revoke):
+            outcome = await self.generate_promise(
+                self.promise_event(), AsyncMock(return_value="橙色猫的自拍"), authorize=allowed)
+        self.assertEqual(outcome["failure"]["reason_code"], "source_authorization_denied")
+        self.service._request.assert_not_awaited()
 
     async def generated_resource(self):
         self.deferred_plugin()

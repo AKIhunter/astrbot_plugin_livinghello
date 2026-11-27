@@ -545,11 +545,16 @@ class Main(Star):
 
     def get_deferred_image_contract(self):
         """供承诺执行器使用；连接、额度与开关仍由本插件拥有。"""
+        try:
+            from .images.guard_promise_image import PROMISE_IMAGE_CONTRACT
+        except ImportError:
+            from images.guard_promise_image import PROMISE_IMAGE_CONTRACT
         service = self._image_generation()
         service.refresh()
         return {
             "contract": "livinghello.deferred-image.v1",
             "delivery_contract": "livinghello.deferred-image-delivery.v1",
+            "promise_contract": PROMISE_IMAGE_CONTRACT,
             "available": bool(
                 not service._closed and not service.error
                 and service.values["enabled"] and service.values["daily_limit"] > 0),
@@ -563,10 +568,24 @@ class Main(Star):
         return self._image_generation().prepare_prompt_repair(prompt, proposal, expected_scope)
 
     def get_image_prompt_learned(self):
-        """LE 改词循环引用实测过审对；学习库为空或禁用时返回空表。"""
+        """旧版 LE 的兼容入口；学习库为空或禁用时返回空表。"""
         return self._image_generation().learned_pairs()
 
-    async def generate_deferred_image(self, event, prompt):
+    async def generate_promise_image(self, event, intent, *, resume, authorize,
+                                     checkpoint, read_legacy=None):
+        try:
+            from .images.guard_promise_image import generate_promise_image
+        except ImportError:
+            from images.guard_promise_image import generate_promise_image
+        return await generate_promise_image(
+            self, event, intent, resume=resume, authorize=authorize,
+            checkpoint=checkpoint, read_legacy=read_legacy)
+
+    def get_promise_image_receipt(self, event, artifact):
+        """Read back an already confirmed send; never claim or submit an image."""
+        return self._image_generation().promise_image_receipt(event, artifact)
+
+    async def generate_deferred_image(self, event, prompt, *, authorize=None):
         """只生成并交出待发图片，不触发普通回复的 after-sent 补图。
 
         调用方必须持久化生成/发送阶段；失败或未知不能自动重新收费。
@@ -587,7 +606,11 @@ class Main(Star):
         # 同一事件复用时不能把上一尝试的失败原因当作本次权限拒绝。
         event.set_extra("_livinghello_image_failure", None)
         event.set_extra("_livinghello_deferred_preflight", None)
-        await service.generate(event, prompt, use_reference=False, _execute=True)
+        if authorize is None:
+            await service.generate(event, prompt, use_reference=False, _execute=True)
+        else:
+            await service.generate(event, prompt, use_reference=False, _execute=True,
+                                   _authorize=authorize)
         pending = event.get_extra("_livinghello_pending_image")
         event.set_extra("_livinghello_pending_image", None)
         if not isinstance(pending, dict) or not pending.get("path"):
@@ -632,6 +655,9 @@ class Main(Star):
                     "retryable": retryable}
 
         session = str(event.unified_msg_origin)
+        pid = artifact.get("deferred_promise_id") if isinstance(artifact, dict) else None
+        if pid and (pid != event.get_extra("livingemotion:promise_id") or authorize is None):
+            return receipt("rejected", "invalid_promise_binding")
         if (not isinstance(artifact, dict) or not isinstance(request_id, str)
                 or not 1 <= len(request_id) <= 128 or artifact.get("session") != session
                 or not isinstance(artifact.get("path"), str)):
@@ -650,7 +676,8 @@ class Main(Star):
         if service.blocked(event) or not service.values["enabled"]:
             return receipt("rejected", "delivery_blocked", True)
         try:
-            claim = service.claim_deferred_image(request_id, session, path)
+            claim = service.claim_deferred_image(
+                request_id, session, path, promise_id=pid, scope=service.receipt_scope(event) if pid else "")
         except Exception:
             return receipt("unknown", "claim_failed")
         if claim == "sent":
