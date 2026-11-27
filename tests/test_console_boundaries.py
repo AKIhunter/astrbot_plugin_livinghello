@@ -57,6 +57,36 @@ class ConsoleBoundaryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["status"], "error")
             self.assertEqual(guard.config, before)
 
+    async def test_gate_timeouts_save_and_apply_60_seconds(self):
+        class Config(dict):
+            save_config = Mock()
+
+        config = Config(gate_config())
+        guard = plugin(config)
+        schema = api._load_schema_subset()
+        fields = {
+            "classifier_timeout_seconds": guard.engine.timeout,
+            "vision_timeout_seconds": guard.engine.vision_timeout,
+            "gate_main_fallback_timeout_seconds": guard.engine.main_timeout,
+            "gate_upstream_try_timeout_seconds": guard.engine.upstream_try_timeout,
+            "gate_memory_timeout_seconds": guard.engine.memory_timeout,
+        }
+        payload = dict.fromkeys(fields, 60)
+        with patch.object(api.request, "json", AsyncMock(return_value=payload), create=True):
+            result = await api.handle_config(guard)
+        self.assertEqual(result["data"]["config"], payload)
+        config.save_config.assert_called_once()
+        config.save_config.reset_mock()
+        for key, runtime in fields.items():
+            with self.subTest(key=key):
+                self.assertEqual(schema[key]["slider"]["max"], 60)
+                self.assertEqual(runtime(), 60)
+                with patch.object(api.request, "json",
+                                  AsyncMock(return_value={key: 60.1}), create=True):
+                    self.assertEqual((await api.handle_config(guard))["status"], "error")
+                self.assertEqual(config[key], 60)
+        config.save_config.assert_not_called()
+
     async def test_search_rejects_unknown_category_and_bounds_query(self):
         guard = plugin(gate_config())
         with patch.object(api.request, "query", {"category": "admin"}, create=True), \

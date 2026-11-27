@@ -4,6 +4,7 @@ import json
 import time
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from astrbot.api.message_components import Image, Reply
 from gate.guard_engine import GateEngine, GateProvider
@@ -90,6 +91,47 @@ class MultimodalTest(unittest.TestCase):
         self.assertEqual(vision.requests[0]["image_urls"], [IMAGE["url"]])
         self.assertEqual(len(main.requests), 0)
         self.assertNotIn(IMAGE["url"], d.context)
+
+    def test_slow_judges_can_use_new_limits_but_share_total_deadline(self):
+        elapsed = wait_limit = 0
+
+        async def wait_for(awaitable, timeout):
+            nonlocal wait_limit
+            wait_limit = timeout
+            return await awaitable
+
+        class SlowProvider(Provider):
+            def __init__(self, seconds, response, *, model="qwen3-vl-plus"):
+                super().__init__(response, model=model)
+                self.seconds = seconds
+
+            async def text_chat(self, **kwargs):
+                nonlocal elapsed
+                elapsed += min(self.seconds, wait_limit)
+                if self.seconds > wait_limit:
+                    raise asyncio.TimeoutError
+                return await super().text_chat(**kwargs)
+
+        for total in (18, 60):
+            elapsed = 0
+            with self.subTest(total=total), \
+                    patch("gate.guard_engine.time", SimpleNamespace(monotonic=lambda: elapsed)), \
+                    patch("gate.guard_engine.asyncio.wait_for", new=wait_for):
+                _, d, *_ = self.run_case(
+                    text=SlowProvider(30, NEED_IMAGE),
+                    vision=SlowProvider(22, RuntimeError("synthetic vision error")),
+                    main=SlowProvider(12, output(), model="gemini-2.5-flash"),
+                    classifier_timeout_seconds=60, vision_timeout_seconds=60,
+                    gate_main_fallback_timeout_seconds=60, gate_total_timeout_seconds=total,
+                    dry_run=True,
+                )
+                self.assertEqual(elapsed, total)
+                if total == 60:
+                    self.assertEqual([(a["stage"], a["status"], a["ms"]) for a in d.attempts],
+                                     [("text", "ok", 30000), ("vision", "error", 22000),
+                                      ("main_fallback", "timeout", 8000)])
+                else:
+                    self.assertEqual((d.stage, d.reason, d.model_calls), ("text", "timeout", 1))
 
     def test_pure_image_is_not_blocked_by_text_rules(self):
         _, d, text, _, _ = self.run_case(current="")

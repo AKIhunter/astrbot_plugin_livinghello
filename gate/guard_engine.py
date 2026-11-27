@@ -628,15 +628,15 @@ class GateEngine:
     def timeout(self) -> float:
         # 实测：热态 p50≈1.3s、p90≈1.9s，但冷启动/空闲后首包会摸到 2.5s 以上
         # （连接重建 + 服务端排队）。给到 3.5s 才不会把正常消息 fail-closed 掉。
-        # 范围与 schema、控制台保存校验、页面输入框保持一致：1-15 秒。
-        return self._float("classifier_timeout_seconds", 3.5, 1, 15)
+        # 单层上限和整条判定上限都是 60 秒，但各层共用整条判定的剩余时间。
+        return self._float("classifier_timeout_seconds", 3.5, 1, 60)
 
     def upstream_fanout_enabled(self) -> bool:
         """判定是否按上游逐个短超时轮转（仅对自动路由 provider 生效）。"""
         return self._raw("gate_upstream_fanout_enabled", True) is True
 
     def upstream_try_timeout(self) -> float:
-        return self._float("gate_upstream_try_timeout_seconds", 3.0, 0.5, 8.0)
+        return self._float("gate_upstream_try_timeout_seconds", 3.0, 0.5, 60)
 
     def context_messages(self) -> int:
         """送给小模型的流水条数（与送给主模型的条数分开配置，避免多花 token）。"""
@@ -684,7 +684,7 @@ class GateEngine:
         return value if value in {"off", "whitelist_empty", "all"} else "whitelist_empty"
 
     def memory_timeout(self) -> float:
-        return self._float("gate_memory_timeout_seconds", 1.5, 0.2, 5)
+        return self._float("gate_memory_timeout_seconds", 1.5, 0.2, 60)
 
     def hourly_budget(self) -> int:
         return self._int("gate_hourly_budget", 60, 0, 600)
@@ -757,19 +757,16 @@ class GateEngine:
         return effective_vision_for(self.config, "gate")
 
     def vision_timeout(self) -> float:
-        # 上限与页面/schema 同步放宽到 20 秒，避免保存后被这里静默夹回。
-        return self._float("vision_timeout_seconds", 6, 1, 20)
+        return self._float("vision_timeout_seconds", 6, 1, 60)
 
     def image_cache_ttl(self) -> int:
         return self._int("gate_image_cache_ttl_seconds", 300, 0, 1800)
 
     def main_timeout(self) -> float:
-        # 上限与页面/schema 同步放宽到 20 秒；仍受 total_timeout() 剩余预算截断。
-        return self._float("gate_main_fallback_timeout_seconds", 6, 1, 20)
+        return self._float("gate_main_fallback_timeout_seconds", 6, 1, 60)
 
     def total_timeout(self) -> float:
-        # 上限与 schema、控制台保存校验、页面输入框同步放宽到 60 秒：
-        # 文字15 + 多模态20 + 兜底20 = 55，再加取模型/取图开销才有余量。
+        # 文字、取图、视觉、兜底和记忆检索共用这个期限。
         return self._float("gate_total_timeout_seconds", 18, 1, 60)
 
     def main_fallback_enabled(self) -> bool:
