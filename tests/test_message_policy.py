@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from astrbot.api.message_components import At
 from gate.guard_message_policy import FIELDS, MessagePolicy, validate_policy_config
 from console import guard_webui
 from test_gate import gate_config, plugin
@@ -158,6 +159,36 @@ class PokePolicyTest(unittest.IsolatedAsyncioTestCase):
             await guard.check_incoming_message_policy(event)
             self.assertTrue(event.stopped)
             self.assertIsNone(event.get_extra("_at_guard_delivery_blocked"))
+
+
+class ReadonlyArchivePolicyTest(unittest.IsolatedAsyncioTestCase):
+    async def test_readonly_message_reaches_archive_before_silent_stop(self):
+        for group in ("1001", ""):
+            cases = (
+                ({"message_graylist_qq": ["123"]}, False, True, False),
+                ({"message_whitelist_qq": ["456"]}, False, True, False),
+                ({"message_graylist_qq": ["123"]}, True, False, False),
+                ({"message_blacklist_qq": ["123"]}, False, False, True),
+            )
+            for config, wake, readonly, blocked in cases:
+                with self.subTest(group=bool(group), config=config, wake=wake):
+                    guard = plugin(gate_config(apply_to_private=True, expression_takeover_enabled=True, **config))
+                    event = Event(group=group)
+                    event.get_platform_name = lambda: "aiocqhttp"
+                    event.get_self_id = lambda: "999"
+                    event._mentions = [At(qq="999")] if wake else []
+                    await guard.check_incoming_message_policy(event)
+                    self.assertEqual(event.stopped, blocked)
+                    if blocked:
+                        self.assertEqual(event.get_extra("_at_guard_delivery_blocked"), "blacklist")
+                        continue
+                    self.assertEqual(event.get_extra("_livinghello_policy_readonly"), readonly)
+                    await guard.prepare_reply_delivery(event)
+                    # 归档监听器在两个 LH 钩子之间，事件在到达前不能被停止。
+                    self.assertFalse(event.stopped)
+                    self.assertEqual(event.get_extra("_at_guard_delivery_prepared", False), not readonly)
+                    await guard.stop_readonly_message_policy(event)
+                    self.assertEqual(event.stopped, readonly)
 
 
 class SavePolicyTest(unittest.IsolatedAsyncioTestCase):

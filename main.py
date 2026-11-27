@@ -2071,6 +2071,9 @@ class Main(Star):
             return
         if event.get_message_type() not in {MessageType.GROUP_MESSAGE, MessageType.FRIEND_MESSAGE}:
             return
+        # 只读消息先走原生归档，避免发送准备的权限检查提前截停。
+        if event.get_extra("_livinghello_policy_readonly", False):
+            return
         touch(event, "recall")
         await self._delivery().prepare(event)
 

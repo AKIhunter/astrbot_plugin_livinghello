@@ -5,7 +5,7 @@
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.10.6-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.10.7-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -115,4 +115,4 @@ Developer: [AKIhunter](https://github.com/AKIhunter). Feedback QQ group: 9913506
 
 ## 📜 Release notes
 
-**2.10.6** lets plugins that listen for QQ poke notifications handle their own poke backs and replies without interference from the chat gate. No configuration migration is needed. See the [message policy](docs/message-policy.md) and [changelog](CHANGELOG.md).
+**2.10.7** fixes a chat history gap: read-only messages reach the archive before LivingHello stops the reply. The QQ poke exemption remains in effect. No configuration migration is needed. See the [message policy](docs/message-policy.md) and [changelog](CHANGELOG.md).
