@@ -10,8 +10,10 @@ import sqlite3
 import time
 
 try:
+    from ..integrations.guard_native_settings import route_main_provider_id
     from ..integrations.guard_router_connections import CHAT_TYPES
 except ImportError:
+    from integrations.guard_native_settings import route_main_provider_id
     from integrations.guard_router_connections import CHAT_TYPES
 
 LEGACY = "@legacy"
@@ -160,11 +162,17 @@ class ImagePromptText:
                     migration_pending=selector == LEGACY and legacy is None,
                     legacy_providers=[legacy[k] for k in ("closing", "general", "fallback")
                                       if legacy[k]] if selector == LEGACY and legacy else [],
-                    follows_session=selector == "" or (selector == LEGACY and legacy is not None
+                    follows_session=(selector == LEGACY and legacy is not None
                                     and not (legacy["closing"] or legacy["general"])))
 
     async def _candidate(self, route, selector, legacy):
         ids = [selector] if selector != LEGACY else [legacy["closing"], legacy["general"]]
+        if selector == "":
+            try:
+                ids = [route_main_provider_id(self.context, route)]
+            except Exception:
+                # 配置读取失败不等于主模型留空，不能换用会话模型。
+                raise PromptTextUnavailable("prompt_text_model_unavailable") from None
         if not any(ids):
             getter = getattr(self.context, "get_current_chat_provider_id", None)
             if callable(getter):

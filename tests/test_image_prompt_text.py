@@ -45,16 +45,22 @@ class ImagePromptTextTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.dict(sys.modules, {owner: native}))
         self.providers = {key: ProviderOpenAIOfficial(key)
                           for key in ("closing", "general", "fallback", "session")}
+        self.event = SimpleNamespace(unified_msg_origin="test:group:room")
+        self.profiles = {self.event.unified_msg_origin: self.profile("")}
         self.context = SimpleNamespace(
+            get_config=Mock(side_effect=self.profiles.__getitem__),
             get_provider_by_id=Mock(side_effect=self.providers.get),
             get_current_chat_provider_id=AsyncMock(return_value="session"),
             provider_manager=SimpleNamespace(inst_map=self.providers))
         self.plugin = SimpleNamespace(context=self.context, data_dir=Path(directory.name))
         self.settings = ImageSettings(self.plugin)
-        self.event = SimpleNamespace(unified_msg_origin="test:group:room")
         self.old = Mock(return_value={"closing": "closing", "general": "general", "fallback": "fallback",
                                       "daily_limit": 4})
         self.allow = AsyncMock(return_value=True)
+
+    @staticmethod
+    def profile(provider_id):
+        return {"agent_runner": {"runner_type": "local", "config": {"model": {"provider_id": provider_id}}}}
 
     def old_config(self):
         self.settings.path.write_text(json.dumps({k: v for k, v in DEFAULTS.items()
@@ -87,20 +93,60 @@ class ImagePromptTextTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(PromptTextUnavailable, "prompt_text_quota_exhausted"):
             await self.complete("fifth")
 
-    async def test_legacy_empty_models_and_explicit_selected_model(self):
+    async def test_legacy_empty_models_still_use_session_then_migrated_fallback(self):
         self.old_config()
+        self.profiles[self.event.unified_msg_origin] = self.profile("general")
         self.old.return_value = {"closing": "", "general": "", "fallback": "fallback", "daily_limit": 6}
         self.assertEqual(await self.complete("first"), "session")
         self.context.get_current_chat_provider_id.return_value = "missing"
         self.assertEqual(await self.complete("second"), "fallback")
         self.assertEqual(self.context.get_current_chat_provider_id.await_count, 2)
+        self.context.get_config.assert_not_called()
+
+    async def test_blank_selector_uses_each_target_profile_before_session_override(self):
+        first = self.event.unified_msg_origin
+        second = "test:friend:user"
+        self.profiles.update({first: self.profile("general"), second: self.profile("closing")})
+        self.assertEqual(await self.complete("first"), "general")
+        self.event.unified_msg_origin = second
+        self.assertEqual(await self.complete("second"), "closing")
+        self.context.get_current_chat_provider_id.assert_not_awaited()
+
+        self.profiles[second] = self.profile("")
+        self.assertEqual(await self.complete("third"), "session")
+        self.context.get_current_chat_provider_id.assert_awaited_once_with(second)
+        self.profiles[second] = {"agent_runner": {"runner_type": "dify", "config": {}}}
+        self.assertEqual(await self.complete("fourth"), "session")
+
+    async def test_explicit_model_ignores_native_profile_and_session(self):
+        self.profiles[self.event.unified_msg_origin] = self.profile("general")
+        self.settings.values["prompt_text_provider_id"] = "closing"
+        self.assertEqual(await self.complete("first"), "closing")
         self.settings.values["prompt_text_provider_id"] = "missing"
         with self.assertRaisesRegex(PromptTextUnavailable, "prompt_text_model_unavailable"):
-            await self.complete("third")
-        self.context.get_current_chat_provider_id.return_value = "session"
-        self.settings.values["prompt_text_provider_id"] = ""
-        self.assertEqual(await self.complete("third"), "session")  # failure before dispatch claimed nothing
-        self.assertEqual(self.providers["fallback"].reply.await_count, 1)
+            await self.complete("second")
+        self.context.get_config.assert_not_called()
+        self.context.get_current_chat_provider_id.assert_not_awaited()
+        self.assertEqual(self.settings.prompt_text.usage()["used"], 1)
+
+    async def test_unavailable_main_model_does_not_use_session_or_claim_quota(self):
+        route = self.event.unified_msg_origin
+        self.providers["general"].provider_config["enable"] = False
+        self.providers["closing"].provider_config["api_type"] = "image_generation"
+        for provider_id in ("missing", "general", "closing"):
+            with self.subTest(provider=provider_id):
+                self.profiles[route] = self.profile(provider_id)
+                with self.assertRaisesRegex(PromptTextUnavailable, "prompt_text_model_unavailable"):
+                    await self.complete("same-slot")
+        with patch.object(self.context, "get_config", side_effect=RuntimeError("profile read failed")):
+            with self.assertRaisesRegex(PromptTextUnavailable, "prompt_text_model_unavailable"):
+                await self.complete("same-slot")
+        self.context.get_current_chat_provider_id.assert_not_awaited()
+        self.providers["session"].reply.assert_not_awaited()
+        self.assertEqual(self.settings.prompt_text.usage()["used"], 0)
+
+        self.profiles[route] = self.profile("")
+        self.assertEqual(await self.complete("same-slot"), "session")
 
     async def test_choosing_pinned_chat_limits_wire_options_without_touching_live_provider(self):
         pinned = MultiApiRouterProvider(self.providers["session"])

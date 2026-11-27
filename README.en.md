@@ -5,7 +5,7 @@
 ![LivingHello pixel robot and message decisions](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.11.0-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.11.1-3a8060)](CHANGELOG.md)
 
 [简体中文](README.md) · **English**
 
@@ -115,4 +115,4 @@ Developer: [AKIhunter](https://github.com/AKIhunter). Feedback QQ group: 9913506
 
 ## 📜 Release notes
 
-**2.11.0** works with LivingEmotion 0.12.0 to draft and revise prompts for promised images in LivingHello. AI Image Generation has its own prompt model and daily call limit. See [image prompt settings](docs/image-prompt-mapping.md) and the [changelog](CHANGELOG.md).
+**2.11.1** uses the main chat model from the target conversation’s AstrBot profile when no prompt model is selected for promised images. The option to keep model settings from before the upgrade is unchanged. See [image prompt settings](docs/image-prompt-mapping.md) and the [changelog](CHANGELOG.md).

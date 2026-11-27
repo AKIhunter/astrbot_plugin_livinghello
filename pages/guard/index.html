@@ -1385,7 +1385,7 @@
       off:"停止记录与复用，保留历史。",setup:"本页 → AI生图；同时开启提示词映射。数据在插件数据目录image_prompt_mappings.sqlite3。"},
     prompt_guard_retry_limit: {setup:"本页 → AI生图，填0~10；需在LE开启承诺兑现，实际取此值与LE剩余自动重试次数的较小值。"},
     prompt_guard_rules_path: {setup:"在插件数据目录放置image_prompt_rules.json；格式见docs/image-prompt-mapping.md。"},
-    prompt_text_provider_id: {setup:"本页 → AI生图。保存后生效；模型连接在 AstrBot 的模型管理中配置。"},
+    prompt_text_provider_id: {setup:"本页 → AI生图。主对话模型在本页 → 模型中设置，请选目标会话所属的 AstrBot 配置。"},
     prompt_text_daily_limit: {setup:"本页 → AI生图。保存后立即生效。"},
   };
   function nativeFieldHelp(field, prefix) {
@@ -1465,7 +1465,7 @@
     if (select) {
       let options = [];
       if (kind === "image_text_provider") {
-        options = [["", "使用 AstrBot 当前会话聊天模型"], ...(data.prompt_text_providers || []).map(p =>
+        options = [["", "使用主对话模型（按会话所属配置）"], ...(data.prompt_text_providers || []).map(p =>
           [p.id, (p.display || p.id) + (p.model && p.model !== p.display ? " · " + p.model : "")])];
         if (data.values?.[key] === "@legacy")
           options.unshift(["@legacy", "沿用升级前的模型选择"]);

@@ -50,6 +50,17 @@ def get_path(config, path):
     return copy.deepcopy(node)
 
 
+def route_main_provider_id(context, umo):
+    """读取目标会话生效的主对话模型，不使用控制台当前选中的配置。"""
+    config = context.get_config(umo)
+    if config["agent_runner"]["runner_type"] != "local":
+        return ""  # 其他运行器没有「主对话模型」这一设置。
+    value = get_path(config, FIELDS["provider_id"][0])
+    if not isinstance(value, str):
+        raise ValueError("invalid native main provider id")
+    return value if value.strip() else ""
+
+
 def put_path(config, path, value):
     keys = path.split(".")
     node = config
