@@ -99,10 +99,9 @@ PLUGIN_NAME = "astrbot_plugin_LivingHello"
 BOT_LINE_PREFIX = "[我]: "
 RECOVERY_CONTRACT = "livinghello.classifier-recovery.v1"
 FACE_COMPONENT_NAMES = frozenset({"face", "mface"})
-# 保留旧文案的标点只用于识别存量默认配置，不作为发送内容。
-# 自定义文案仍按原配置使用。
+# 保留旧默认句库原样，用来识别存量配置；自定义文案仍按原配置使用。
 LEGACY_EARLY_ACK_TEXTS = ("稍等，我想一下。", "我看一下，马上说。", "等一下，我确认下。")
-EARLY_ACK_TEXTS = (
+LEGACY_EARLY_ACK_TEXTS_12 = (
     "我看看",
     "嗯我想想",
     "等我一下",
@@ -116,6 +115,20 @@ EARLY_ACK_TEXTS = (
     "我看一下马上说",
     "等一下我确认下",
 )
+EARLY_ACK_TEXTS = (
+    *LEGACY_EARLY_ACK_TEXTS_12,
+    "我来瞅瞅",
+    "我理一下思路",
+    "我先过一遍",
+    "我想一下再说",
+    "我在看啦",
+    "嗯我看下哈",
+    "容我想想",
+    "我先看看怎么说",
+)
+EARLY_ACK_DEFAULT_CONFIGS = {
+    (), ("我看看",), LEGACY_EARLY_ACK_TEXTS, LEGACY_EARLY_ACK_TEXTS_12,
+}
 
 
 class Main(Star):
@@ -1632,11 +1645,9 @@ class Main(Star):
 
     def _early_ack_text(self, group_key: str = "") -> str:
         raw = self.config.get("reply_early_ack_texts")
-        if isinstance(raw, (list, tuple)):
-            items = [str(item).strip() for item in raw if str(item).strip()]
-        else:
-            items = [part.strip() for part in str(raw or "").split("|") if part.strip()]
-        if not items or tuple(items) == LEGACY_EARLY_ACK_TEXTS:
+        parts = raw if isinstance(raw, (list, tuple)) else str(raw or "").split("|")
+        items = tuple(text for part in parts if (text := str(part).strip()))
+        if items in EARLY_ACK_DEFAULT_CONFIGS:
             items = EARLY_ACK_TEXTS
         if not hasattr(self, "early_ack_positions"):
             self.early_ack_positions = {}

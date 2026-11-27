@@ -1049,6 +1049,10 @@ def _coerce(key: str, value: Any) -> Any:
         if len(phrases) > 30:
             raise ValueError("口头禅最多 30 条")
         return phrases
+    if key == "reply_early_ack_texts":
+        # 垫场句允许留空恢复默认，且不受机器人称呼的 8 项上限约束。
+        parts = value if isinstance(value, (list, tuple)) else re.split(r"[|\n]", str(value or ""))
+        return [text for part in parts if (text := str(part).strip())]
     if key in LIST_FIELDS:
         if isinstance(value, (list, tuple)):
             parts = [str(item) for item in value]
