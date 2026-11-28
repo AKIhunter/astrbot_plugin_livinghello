@@ -87,6 +87,7 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 | 一键导出近3天的脱敏诊断包 | [诊断日志](docs/diagnostics.md) |
 | 判断详情、自动刷新、原样复制与判定规则 | [详情与复验](docs/decision-details.md) |
 | 开发、测试与接口 | [开发维护](docs/development.md) |
+| 功能边界、依赖与插件重叠 | [边界与重叠](docs/feature-boundaries.md) |
 | 全部当前文档 | [文档索引](docs/README.md) |
 | 历史变更 | [更新日志](CHANGELOG.md) |
 
@@ -103,6 +104,7 @@ LH改词次数支持0–10，实际受LE剩余自动重试预算限制；挂起�
 ## 🧩 兼容性
 
 需要AstrBot≥4.29.1；LivingEmotion、LivingMemory均为可选接入。生图承诺修复配套LE≥0.6.1。
+装多个主动发送、记忆或回复闸门插件前，先看[功能边界与插件重叠](docs/feature-boundaries.md)。
 
 | 平台 | AstrBot适配器 | 支持范围 |
 | --- | --- | --- |

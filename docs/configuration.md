@@ -2,6 +2,8 @@
 
 面向使用者与维护者：查参数、默认值及保存范围。插件默认值以 [_conf_schema.json](../_conf_schema.json) 为唯一来源；原生字段来自 [integrations/guard_native_settings.py](../integrations/guard_native_settings.py)、[reply/guard_native_reply.py](../reply/guard_native_reply.py)，独立生图默认值来自 [images/guard_image_settings.py](../images/guard_image_settings.py) 的 `DEFAULTS`。已核对源码：2026-11-13；字段变化时同步更新并运行校验。
 
+功能归属、依赖与插件重叠见[功能边界](feature-boundaries.md)；本页只列字段、默认值和保存范围。
+
 主模型失败后的重试、管理员提醒和停止条件见[主模型失败兜底](reply_fallback.md)。该开关默认关闭，与文字判定断线恢复独立。
 
 ## 配置保存在哪里

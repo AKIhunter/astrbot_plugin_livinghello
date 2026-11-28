@@ -12,6 +12,7 @@
 | 技术与判断流程 | [架构](architecture.md)、[判断逻辑](decision-logic.md) | main、gate、input、reply、images |
 | 可离线打开的完整分支图 | [流程HTML](flow/index.html) | 当前规则与集成契约 |
 | 独立、记忆、情绪、双接入 | [集成组合](integrations-and-flow.md) | 各方公开契约 |
+| 功能归属、依赖与插件重叠 | [功能边界](feature-boundaries.md) | 各开关职责、主动/记忆/情绪插件取舍 |
 | 生图映射、改词模型与额度、成功用词 | [提示词映射](image-prompt-mapping.md) | LH 生图执行、LE 承诺契约 |
 | 映射加载、校验与生效状态交互示例 | [映射HTML](image-mapping-flow/index.html) | 离线夹具；六种加载状态与六种替换案例 |
 | QQ 私聊即时单图 | [工具回复与生图](tool-turn-output.md) | 预检、承接语补写、先发文字再发图 |
