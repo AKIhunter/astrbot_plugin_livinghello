@@ -384,6 +384,7 @@ class Decision:
     image_cache_hits: int = 0
     available_image_count: int = 0
     failure_category: str = ""
+    rule_input: dict[str, int | bool] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -1157,9 +1158,10 @@ class GateEngine:
                 "image_cache_hits": decision.image_cache_hits,
                 "available_image_count": decision.available_image_count,
                 "failure_category": decision.failure_category,
+                **decision.rule_input,
                 **decision_identity({"gid": group_key, "chat_data": decision.chat_data}),
                 **{key: value for key, value in (identity or {}).items()
-                   if key in {"request_id", "message_id"}},
+                   if key in {"request_id", "message_id", "flow_id", "host_trace_id"}},
             }
         )
 
@@ -1203,11 +1205,16 @@ class GateEngine:
                 "current_message": {"text": (current_text or "")[:text_limit], **(message_meta or {})},
                 "not_sent": True,
             }
+            decision.rule_input = {
+                "input_length": len(current_text or ""), "normalized_length": len(normalized),
+                "min_length": min_length, "has_images": has_images,
+            }
             record(decision)
 
         normalized = normalize_text(current_text)
         has_images = bool((message_meta or {}).get("has_images"))
-        if len(normalized) < self.min_length() and not has_images:
+        min_length = self.min_length()
+        if len(normalized) < min_length and not has_images:
             decision = self._decision(
                 started, threshold, "silence", "too_short", "rule"
             )

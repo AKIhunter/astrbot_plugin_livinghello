@@ -12,6 +12,11 @@ import uuid
 from collections import OrderedDict
 from pathlib import Path
 
+try:
+    from ..diagnostic_event import event_metadata
+except ImportError:
+    from diagnostic_event import event_metadata
+
 ID_KEY = "_livinghello_request_id"
 TRACE_KEY = "_livinghello_trace"
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -42,7 +47,8 @@ META_KEYS = {"reason", "model", "calls", "ms", "span_id", "tool", "count", "befo
              "merged_into", "api_calls", "packets", "error_type", "role",
              # 仅投递失败时写入脱敏后的工具错误原文，用于定位宿主拒绝原因。
              "detail",
-             "parse_reason", "parse_format", "format_retry"}
+             "parse_reason", "parse_format", "format_retry",
+             "min_length", "normalized_length", "input_length", "has_images"}
 
 
 def emit(event, feature, status, **metadata):
@@ -113,11 +119,14 @@ class RequestTrace:
             self._coverage = registry_coverage(self.plugin)
             self._coverage_at = time.monotonic()
         config = getattr(self.plugin, "config", {})
+        engine = getattr(self.plugin, "engine", None)
         return {"instance_id": self.instance_id, "coverage": copy.deepcopy(self._coverage),
                 "last_seen": dict(self.last_seen), "health": dict(self.health),
                 "pending": len(self.pending), "active": sum(r["state"] not in TERMINAL for r in self.rows.values()),
                 "features": {"detached_reply_enabled": bool(getattr(
                     self.plugin, "_livinghello_detached_enabled", False)),
+                    "apply_to_private": bool(config.get("apply_to_private", False)),
+                    "effective_gate_min_length": engine.min_length() if engine else None,
                     "image_text_first_enabled": bool(getattr(
                         self.plugin, "_livinghello_detached_enabled", False)),
                     **{key: config.get(key) for key in (
@@ -133,6 +142,11 @@ class RequestTrace:
         event.set_extra(TRACE_KEY, self)
         if request_id in self.rows or self.closed:
             return request_id
+        envelope = event_metadata(event)
+        recorder = getattr(self.plugin, "diagnostics", None)
+        if recorder is not None:
+            recorder.remember_host_event(envelope)
+        correlation = {key: envelope.pop(key) for key in ("flow_id", "host_trace_id") if key in envelope}
         if len(self.rows) >= self.MAX_REQUESTS:
             ended = next((key for key, row in self.rows.items() if row["state"] in TERMINAL), None)
             if ended:
@@ -144,6 +158,7 @@ class RequestTrace:
         stamp = time.time()
         self.rows[request_id] = {
             "schema_version": 1, "request_id": request_id,
+            **correlation, "envelope": envelope,
             "session_id": str(getattr(event, "unified_msg_origin", "") or "")[:1024],
             "message_id": str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")[:256],
             "started_at": stamp, "updated_at": stamp, "instance_id": self.instance_id,
@@ -155,11 +170,26 @@ class RequestTrace:
             "truncated": False,
         }
         self.record(event, "receive", "success")
+        self._checkpoint(self.rows[request_id], "receive", "observed")
         return request_id
+
+    def _checkpoint(self, row, stage, status, reason=None):
+        """Retain a compact trail even when the detailed request ring has rotated."""
+        recorder = getattr(self.plugin, "diagnostics", None)
+        if recorder is None:
+            return
+        fields = {key: row[key] for key in ("flow_id", "host_trace_id", "request_id",
+                                            "session_id", "message_id", "merged_into") if key in row}
+        if stage == "receive":
+            fields.update(row.get("envelope", {}))
+        if reason:
+            fields["reason_code"] = reason
+        recorder.record("native_step", {**fields, "stage": stage, "status": status})
 
     def identity(self, event):
         rid = self.begin(event)
-        return {"request_id": rid,
+        return {"request_id": rid, **{key: self.rows[rid][key] for key in ("flow_id", "host_trace_id")
+                                    if rid in self.rows and key in self.rows[rid]},
                 "message_id": str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")[:256]}
 
     @staticmethod
@@ -295,6 +325,7 @@ class RequestTrace:
                 self.record(event, key, settled["status"],
                             **{k: v for k, v in settled.items() if k != "status"})
         self.record(event, "lifecycle", state, reason=reason)
+        self._checkpoint(row, "request_complete", state, reason)
 
     def merge(self, event, sources):
         canonical = self.begin(event)
@@ -308,6 +339,7 @@ class RequestTrace:
                 previous["state"] = "merged"
                 previous["merged_into"] = canonical
                 self.record(source, "fragments", "merged", merged_into=canonical)
+                self._checkpoint(previous, "request_complete", "merged", "fragments_coalesced")
                 if row:
                     # 有界保留早期输入证据；不持有来源event。
                     row["events"].extend(previous["events"][:8])

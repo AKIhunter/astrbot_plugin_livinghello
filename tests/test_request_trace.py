@@ -15,8 +15,12 @@ import typing
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
+import zipfile
 
 from astrbot.api.message_components import Plain, Image, Reply
+from diagnostic_bundle import DiagnosticRecorder, Redactor
+from diagnostic_event import FLOW_KEY
+from observability.guard_diagnostics import prepare
 from observability.guard_request_trace import ID_KEY, TRACE_KEY, RequestTrace, registry_coverage, emit
 from reply.guard_reply_delivery import ReplyDelivery
 from images.guard_image_settings import ImageSettings
@@ -26,6 +30,14 @@ from test_reply_delivery import Event, Chain
 import test_image_generation as image_fixture
 
 SOURCE = Path(os.environ.get("ASTRBOT_NATIVE_SOURCE", "/nonexistent"))
+
+
+class DiagnosticAliasTests(unittest.TestCase):
+    def test_numeric_alias_survives_a_second_redaction(self):
+        redactor = Redactor("00000000000000000000000000000008")
+        alias = redactor.alias("123456789")
+        self.assertEqual(alias, "account-720390289237")
+        self.assertEqual(redactor.text(redactor.text("QQ 123456789")), "QQ " + alias)
 
 
 class TraceTests(unittest.IsolatedAsyncioTestCase):
@@ -53,6 +65,49 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(row["session_id"], event.unified_msg_origin)
             self.assertEqual(row["summary"]["tool_calls"], 1)
             self.assertEqual(row["features"]["tools"]["tool"], f"tool-{index}")
+
+    async def test_short_rule_export_carries_exact_lengths_and_shared_flow(self):
+        self.guard.config["gate_min_length"] = 5
+        recorder = DiagnosticRecorder(self.guard.data_dir, "LH", self.guard.data_dir,
+                                      clock=lambda: time.time() + .01)
+        self.guard.diagnostics = recorder
+        event = Event(group="123456789", mid="opaque-native-id-sentinel")
+        event.message_str = "早上好"
+        event.is_at_or_wake_command = False
+        event.message_obj.message = [Plain("早上好")]
+        event.message_obj.raw_message = {"post_type": "message", "message_type": "group",
+                                         "raw_message": "private-raw-body"}
+        # A peer may have assigned the ID first; LH must keep it unchanged.
+        flow = "flow-" + "e" * 32
+        event.set_extra(FLOW_KEY, flow)
+        provider = AsyncMock(side_effect=AssertionError("short rule must not call a provider"))
+        self.guard._resolve_classifier_provider = provider
+        try:
+            await self.guard.guard_llm_request(event, SimpleNamespace(extra_user_content_parts=[], image_urls=[]))
+            provider.assert_not_awaited()
+            decision = self.guard.engine.log.recent(1)[0]
+            self.assertEqual(decision["reason"], "too_short")
+            self.assertEqual((decision["normalized_length"], decision["min_length"]), (3, 5))
+            self.assertEqual(decision["flow_id"], flow)
+            args = prepare(self.guard)
+            bundle = recorder.export(args[1], args[2])
+            try:
+                with zipfile.ZipFile(bundle.path) as archive:
+                    text = archive.read("requests.jsonl").decode()
+                    trail = archive.read("runtime.jsonl").decode()
+                request = json.loads(text)
+                self.assertEqual(request["flow_id"], flow)
+                self.assertEqual(request["envelope"]["native_post_type"], "message")
+                self.assertEqual(request["features"]["decision"]["normalized_length"], 3)
+                self.assertEqual(request["features"]["decision"]["min_length"], 5)
+                self.assertEqual(request["features"]["lifecycle"]["reason"], "too_short")
+                self.assertIn(flow, trail)
+                for private in ("早上好", "opaque-native-id-sentinel", "private-raw-body", "123456789"):
+                    self.assertNotIn(private, text + trail)
+            finally:
+                bundle.close()
+        finally:
+            recorder.close()
 
     async def test_fragment_aliases_survive_reload_and_children_use_canonical(self):
         first, owner = Event(mid="first"), Event(mid="last")

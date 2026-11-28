@@ -5,7 +5,7 @@
 ![LivingHello 像素机器人与消息判断](.github/img/Banner.png)
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.29.1-3a8060)](https://docs.astrbot.app/)
-[![Version](https://img.shields.io/badge/version-2.11.1-3a8060)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.11.2-3a8060)](CHANGELOG.md)
 
 **简体中文** · [English](README.en.md)
 
@@ -127,4 +127,4 @@ QQ撤回保护需收到OneBot撤回通知，并处于碎片等待窗口。
 
 ## 📜 更新日志
 
-**2.11.1** 修正承诺生图的提示词模型选择：留空时先用目标会话所属配置的主对话模型。沿用升级前的模型设置不受影响。详见[提示词设置](docs/image-prompt-mapping.md)和[更新日志](CHANGELOG.md)。
+**2.11.2** 补齐无回复时的请求阶段、停止原因和判定门槛。与 LivingEmotion 0.12.1 搭配时，可按同一事件编号对照两份诊断包。详见[诊断日志](docs/diagnostics.md)和[更新日志](CHANGELOG.md)。

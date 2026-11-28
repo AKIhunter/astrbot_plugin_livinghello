@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import asyncio
+from collections import OrderedDict
 import json
 import math
 import os
@@ -21,6 +22,11 @@ import time
 import zipfile
 from pathlib import Path
 
+try:
+    from .diagnostic_event import DiagnosticLogHandler
+except ImportError:
+    from diagnostic_event import DiagnosticLogHandler
+
 WINDOW = 72 * 3600
 DISK_LIMIT = 32 * 1024 * 1024
 EXPORT_LIMIT = 64 * 1024 * 1024
@@ -32,11 +38,11 @@ PRIVATE_FIELDS = frozenset((
     "recent_messages_old_to_new", "image_sources", "image_summaries",
 ))
 SECRET_KEY = re.compile(r"api.?key|authorization|cookie|password|secret|jwt|access.?token|refresh.?token", re.I)
-ACCOUNT_KEY = re.compile(r"^(?:session_id|unified_msg_origin|account_id|actor_id|qq|group_id|target_id|context_id|persona_id|owner_key|conversation_id|scope_key|source_scope_key)$", re.I)
+ACCOUNT_KEY = re.compile(r"^(?:session_id|unified_msg_origin|account_id|actor_id|qq|group_id|target_id|context_id|persona_id|owner_key|conversation_id|scope_key|source_scope_key|message_id|event_id|reply_id)$", re.I)
 TOKEN = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{6,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b")
 AUTH = re.compile(r"(?i)\b(?:authorization|cookie|api[_-]?key|password|jwt[_-]?secret|access[_-]?token)\b[\"']?\s*[:=]\s*(?:[\"'][^\"'\n]*[\"']|[^\n,;}]+)")
 URL = re.compile(r"https?://[^\s<>\"']+")
-NUMBER = re.compile(r"(?<![\w])\d{5,12}(?![\w])")
+NUMBER = re.compile(r"(?<!\w)(account-[0-9a-f]{12}|\d{5,12})(?!\w)")
 
 
 class DiagnosticBusy(RuntimeError):
@@ -71,6 +77,13 @@ def json_lines(paths, line_limit=LINE_LIMIT):
                     yield row if isinstance(row, dict) else None
                 except (ValueError, UnicodeError):
                     yield None
+
+
+def runtime_lines(paths):
+    for row in json_lines(paths):
+        if row is not None and row.get("operation") == "runtime":
+            row.pop("detail", None)
+        yield row
 
 
 def sqlite_rows(path, query, parameters):
@@ -125,6 +138,7 @@ class Redactor:
         value = TOKEN.sub("[secret]", value)
         value = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "[credential]", value)
         value = AUTH.sub("[credential]", value)
+        # Export cleans stored rows again; alias() keeps an existing alias intact.
         value = NUMBER.sub(lambda match: self.alias(match.group()), value)
         return value[:8192]
 
@@ -212,8 +226,11 @@ def runtime_environment(host, plugin_version, settings):
     except ImportError:
         host_version = None
     providers = []
+    trace_enabled = None
     try:
         config = host.get_config()
+        value = config.get("trace_enable")
+        trace_enabled = value if type(value) is bool else None
         for provider in config.get("provider", []):
             if isinstance(provider, dict):
                 providers.append({key: provider.get(key) for key in ("id", "type", "api_type", "enable")})
@@ -221,6 +238,7 @@ def runtime_environment(host, plugin_version, settings):
         pass
     settings["providers"] = providers
     return {"host_version": host_version, "plugin_version": plugin_version,
+            "host_trace_enabled": trace_enabled,
             "snapshot_kind": "current runtime, not historical state"}
 
 
@@ -311,6 +329,9 @@ class DiagnosticRecorder:
         self._io_lock = threading.Lock()
         self._bundles = set()
         self._bundle_lock = threading.Lock()
+        self._handlers = []
+        self._host_flows = OrderedDict()
+        self._host_flow_lock = threading.Lock()
         self._worker = None
         self._active = None
         self._active_hour = None
@@ -362,6 +383,30 @@ class DiagnosticRecorder:
                 target=self._run, name=f"{plugin_name}-diagnostics", daemon=True)
             self._worker.start()
 
+    def install(self, sink, *, host_pipeline=None):
+        if self._stop.is_set() or any(registered is sink for registered, _ in self._handlers):
+            return
+        handler = DiagnosticLogHandler(self, host_pipeline)
+        try:
+            sink.addHandler(handler)
+            self._handlers.append((sink, handler))
+        except (AttributeError, TypeError):
+            handler.close()
+            self.dropped += 1
+
+    def remember_host_event(self, metadata):
+        trace, flow = metadata.get("host_trace_id"), metadata.get("flow_id")
+        if trace and flow:
+            with self._host_flow_lock:
+                self._host_flows[trace] = flow
+                self._host_flows.move_to_end(trace)
+                if len(self._host_flows) > 2048:
+                    self._host_flows.popitem(last=False)
+
+    def flow_for_host_trace(self, trace):
+        with self._host_flow_lock:
+            return self._host_flows.get(trace)
+
     def record(self, operation, value):
         if self._stop.is_set():
             return
@@ -383,7 +428,9 @@ class DiagnosticRecorder:
                 "pending": self._queue.unfinished_tasks, "dropped": self.dropped,
                 "write_errors": self.write_errors, "pruned_files": self.pruned_files,
                 "window_seconds": WINDOW, "disk_limit_bytes": self.disk_limit,
-                "closed": self._stop.is_set()}
+                "closed": self._stop.is_set(), "log_sinks": len(self._handlers),
+                "host_pipeline_capture": any(handler.host_pipeline is not None
+                                             for _, handler in self._handlers)}
 
     def _prune(self, *, reserve=0, startup=False):
         now = self.clock()
@@ -518,6 +565,9 @@ class DiagnosticRecorder:
                     earliest = latest = None
                     digest = hashlib.sha256()
                     truncated = False
+                    # RequestTrace bounds its own snapshots at 64 KiB. Leave
+                    # room for aliases added on export without dropping a whole trace.
+                    line_limit = 128 * 1024 if name == "requests.jsonl" else LINE_LIMIT
                     with archive.open(name, "w") as output:
                         try:
                             for row in records:
@@ -534,7 +584,7 @@ class DiagnosticRecorder:
                                         continue
                                 clean = self.redactor.clean(row)
                                 data = (json.dumps(clean, ensure_ascii=False, allow_nan=False) + "\n").encode()
-                                if len(data) > LINE_LIMIT:
+                                if len(data) > line_limit:
                                     invalid += 1
                                     continue
                                 if len(data) > budget:
@@ -566,7 +616,7 @@ class DiagnosticRecorder:
                 write("environment.json", [environment], history=False)
                 write("settings.json", [snapshot.get("settings", {})], history=False)
                 paths = sorted(self.directory.glob("records-*.jsonl"), reverse=True)
-                write("runtime.jsonl", json_lines(paths))
+                write("runtime.jsonl", runtime_lines(paths))
                 for filename, source in sources.items():
                     if re.fullmatch(r"[a-z_]+\.jsonl", filename) is None:
                         raise ValueError("invalid diagnostic member name")
@@ -598,6 +648,10 @@ class DiagnosticRecorder:
     def close(self):
         if self._stop.is_set():
             return
+        for sink, handler in self._handlers:
+            sink.removeHandler(handler)
+            handler.close()
+        self._handlers.clear()
         with self._bundle_lock:
             self._stop.set()
             bundles = list(self._bundles)

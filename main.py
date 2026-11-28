@@ -56,6 +56,7 @@ try:  # 作为插件包加载时走相对导入
     from .reply.guard_history_prompt import age_label, history_row, message_row, scene_line, topic_text
     from .integrations.guard_evidence import EvidenceMemory
     from .observability.guard_request_trace import RequestTrace, emit, touch
+    from .observability.guard_diagnostics import record_boundary
 except ImportError:  # 单文件调试兜底
     from gate.guard_message_policy import MessagePolicy, event_source, HISTORY_CONTRACT
     from gate.guard_engine import Decision, GateEngine, POLICY_VERSION
@@ -93,6 +94,7 @@ except ImportError:  # 单文件调试兜底
     from reply.guard_history_prompt import age_label, history_row, message_row, scene_line, topic_text
     from integrations.guard_evidence import EvidenceMemory
     from observability.guard_request_trace import RequestTrace, emit, touch
+    from observability.guard_diagnostics import record_boundary
 
 
 NO_REPLY_TOKEN = "[[ASTRBOT_NO_REPLY]]"
@@ -446,6 +448,7 @@ class Main(Star):
                 self.request_trace.finish(event, "silent", reason)
         except Exception:
             pass
+        record_boundary(self, event, "message_policy", "stopped", reason)
         result = event.get_result() if callable(getattr(event, "get_result", None)) else None
         if result is not None:
             result.chain = []
@@ -458,8 +461,10 @@ class Main(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize + 40)
     async def check_incoming_message_policy(self, event: AstrMessageEvent):
         if self._is_onebot_poke(event):
+            record_boundary(self, event, "receive", "skipped", "onebot_poke")
             return  # 事件留给戳一戳插件，连发送方法也不挂钩。
         if self._delivery().notice(event):
+            record_boundary(self, event, "receive", "stopped", "recall_notice")
             return
         result = self._event_policy(event)
         if not result["read_allowed"]:
@@ -1528,6 +1533,7 @@ class Main(Star):
         重置了 req.func_tool，模型会看不见它却不会有任何报错。这里只读不写，
         结果写进请求轨迹的 image_tool_verify 事件。
         """
+        emit(event, "request_hooks", "ready")
         if not event.get_extra("_livinghello_image_tool_attached"):
             return
         try:
@@ -2359,6 +2365,10 @@ class Main(Star):
 
     def _note_gate_skip(self, event, reason) -> None:
         """LLM 阶段提前返回时留下原因，避免面板里什么都看不到。"""
+        status = "entered" if reason == "entered" else "skipped"
+        recorded = emit(event, "gate_hook", status, reason=reason)
+        if recorded is None and reason != "entered":
+            record_boundary(self, event, "gate_hook", status, reason)
         try:
             group_key = self._group_key(event)
         except Exception:
@@ -2404,6 +2414,7 @@ class Main(Star):
         emit(event, "llm_request", "success")
         if not await self._delivery().prepare(event):
             self._note_gate_skip(event, "delivery_prepare_failed")
+            self._trace().finish(event, "cancelled", "delivery_prepare_failed")
             event.stop_event()
             return
         if self._delivery().recalled(event):
@@ -2412,6 +2423,7 @@ class Main(Star):
             return
         if event.get_extra("_at_guard_fragment_blocked"):
             self._note_gate_skip(event, "fragment_blocked")
+            self._trace().finish(event, "cancelled", "fragment_blocked")
             event.stop_event()
             return
         self._attach_fragments(event, req)
@@ -2602,7 +2614,7 @@ class Main(Star):
                 pass
             self._trace().judged_input(event, self._judged_snapshot(event))
             self._trace().end(event, span, "failed" if result.source == "error" else "success",
-                              reason=result.reason)
+                              reason=result.reason, **result.rule_input)
             self._trace().metrics(event, result.timings)
             for attempt in result.attempts:
                 emit(event, "decision_attempt", "success" if attempt.get("status") == "ok" else "failed",
