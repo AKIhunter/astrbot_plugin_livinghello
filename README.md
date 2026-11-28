@@ -128,3 +128,7 @@ QQ撤回保护需收到OneBot撤回通知，并处于碎片等待窗口。
 ## 📜 更新日志
 
 **2.11.2** 补齐无回复时的请求阶段、停止原因和判定门槛。与 LivingEmotion 0.12.1 搭配时，可按同一事件编号对照两份诊断包。详见[诊断日志](docs/diagnostics.md)和[更新日志](CHANGELOG.md)。
+
+## 交流群
+LivingEmotion & LivingHello 插件鱼群（QQ 群 991350637），扫码加入：
+<img src="assets/qq-group-991350637.png" alt="LivingEmotion & LivingHello 插件鱼群 QQ 群二维码" width="140">
